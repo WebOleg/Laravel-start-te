@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tether-laravel
+    restart: unless-stopped
+    working_dir: /var/www
+    volumes:
+      - ./:/var/www
+    networks:
+      - tether
+    depends_on:
+      - db
+
+  db:
+    image: postgres:15-alpine
+    container_name: tether-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: tether
+      POSTGRES_USER: tether
+      POSTGRES_PASSWORD: secret
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - tether
+
+  nginx:
+    image: nginx:alpine
+    container_name: tether-nginx
+    restart: unless-stopped
+    ports:
+      - "8000:80"
+    volumes:
+      - ./:/var/www
+      - ./docker/nginx:/etc/nginx/conf.d
+    networks:
+      - tether
+    depends_on:
+      - app
+
+volumes:
+  pgdata:
+
+networks:
+  tether:
+    driver: bridge
+

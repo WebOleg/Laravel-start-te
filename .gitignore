@@ -25,3 +25,4 @@ Thumbs.db
 .env
 .env.backup
 storage/*.log
+docker-compose.override.yml
