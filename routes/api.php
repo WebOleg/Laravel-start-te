@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\ClientController;
 use App\Http\Controllers\Api\UploadController;
+use App\Http\Controllers\Admin\DashboardController as AdminDashboardController;
 use App\Http\Controllers\Admin\DebtorController as AdminDebtorController;
 use App\Http\Controllers\Admin\VopLogController as AdminVopLogController;
 use App\Http\Controllers\Admin\BillingAttemptController as AdminBillingAttemptController;
@@ -26,6 +27,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Admin routes
     Route::prefix('admin')->group(function () {
+        Route::get('dashboard', [AdminDashboardController::class, 'index']);
         Route::get('uploads/{upload}/status', [AdminUploadController::class, 'status']);
         Route::apiResource('uploads', AdminUploadController::class)->only(['index', 'show', 'store']);
         Route::apiResource('debtors', AdminDebtorController::class)->only(['index', 'show']);
