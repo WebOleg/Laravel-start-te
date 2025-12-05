@@ -1,53 +1,70 @@
-version: '3.8'
-
 services:
   app:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: tether-laravel
+    container_name: tether_app
     restart: unless-stopped
     working_dir: /var/www
     volumes:
       - ./:/var/www
+      - ./storage:/var/www/storage
     networks:
-      - tether
+      - tether_network
     depends_on:
       - db
-
-  db:
-    image: postgres:15-alpine
-    container_name: tether-postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: tether
-      POSTGRES_USER: tether
-      POSTGRES_PASSWORD: secret
-    ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    networks:
-      - tether
+      - redis
 
   nginx:
     image: nginx:alpine
-    container_name: tether-nginx
+    container_name: tether_nginx
     restart: unless-stopped
     ports:
       - "8000:80"
     volumes:
       - ./:/var/www
-      - ./docker/nginx:/etc/nginx/conf.d
+      - ./docker/nginx/conf.d:/etc/nginx/conf.d
     networks:
-      - tether
+      - tether_network
     depends_on:
       - app
 
-volumes:
-  pgdata:
+  db:
+    image: postgres:15-alpine
+    container_name: tether_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-tether}
+      POSTGRES_USER: ${DB_USERNAME:-tether}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-secret}
+    volumes:
+      - tether_db_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - tether_network
+
+  redis:
+    image: redis:7-alpine
+    container_name: tether_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - tether_redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - tether_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 networks:
-  tether:
+  tether_network:
     driver: bridge
 
+volumes:
+  tether_db_data:
+  tether_redis_data:

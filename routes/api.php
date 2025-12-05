@@ -26,6 +26,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Admin routes
     Route::prefix('admin')->group(function () {
+        Route::get('uploads/{upload}/status', [AdminUploadController::class, 'status']);
         Route::apiResource('uploads', AdminUploadController::class)->only(['index', 'show', 'store']);
         Route::apiResource('debtors', AdminDebtorController::class)->only(['index', 'show']);
         Route::apiResource('vop-logs', AdminVopLogController::class)->only(['index', 'show']);

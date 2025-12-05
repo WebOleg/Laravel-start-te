@@ -376,3 +376,116 @@ Orchestrates file upload processing: parse, validate, create debtors.
 $result = $uploadService->process($file, $userId);
 // Returns: ['upload' => Upload, 'created' => 10, 'failed' => 2, 'errors' => [...]]
 ```
+
+## Queue Jobs
+
+### ProcessUploadJob
+
+Location: `app/Jobs/ProcessUploadJob.php`
+
+Background job for processing uploaded CSV/XLSX files.
+
+**Configuration:**
+
+| Property | Value | Description |
+|----------|-------|-------------|
+| `$tries` | 3 | Max retry attempts |
+| `$timeout` | 300 | Max execution time (seconds) |
+| `$backoff` | [30, 60, 120] | Delay between retries |
+
+**Flow:**
+```
+1. Job dispatched with Upload model
+2. Update status → processing
+3. Parse file (CSV/XLSX)
+4. Validate each row (IBAN, required fields)
+5. Create Debtor records
+6. Update status → completed/failed
+```
+
+**Usage:**
+```php
+// Async (queued)
+ProcessUploadJob::dispatch($upload, $columnMapping);
+
+// Sync (immediate)
+ProcessUploadJob::dispatchSync($upload, $columnMapping);
+```
+
+**Error Handling:**
+- Invalid rows logged to `upload.meta.errors`
+- Job failure updates upload status to `failed`
+- Exception message stored in `upload.meta.error`
+
+## Queue System (Redis + Horizon)
+
+### Architecture
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     LARAVEL HORIZON                          │
+│                   Dashboard: /horizon                        │
+└─────────────────────────────────────────────────────────────┘
+                            │
+         ┌──────────────────┼──────────────────┐
+         ▼                  ▼                  ▼
+   ┌──────────┐      ┌──────────┐      ┌──────────┐
+   │ critical │      │   high   │      │ default  │
+   │          │      │          │      │          │
+   │ Payments │      │   VOP    │      │ Uploads  │
+   │ Webhooks │      │  Alerts  │      │ Reports  │
+   │          │      │          │      │          │
+   │ 5 workers│      │ 3 workers│      │ 3 workers│
+   └──────────┘      └──────────┘      └──────────┘
+```
+
+### Queue Priorities
+
+| Queue | Purpose | Workers | Timeout | Retries |
+|-------|---------|---------|---------|---------|
+| `critical` | Payments, webhooks | 5-10 | 60s | 5 |
+| `high` | VOP, alerts | 3-5 | 120s | 3 |
+| `default` | File processing | 3-5 | 300s | 3 |
+| `low` | Reports, cleanup | 2-3 | 600s | 1 |
+
+### Job Batching
+
+Large files (>100 rows) are split into chunks of 500 rows:
+```php
+// Small file: direct processing
+ProcessUploadJob → processes all rows
+
+// Large file: batch processing
+ProcessUploadJob → dispatches batch:
+  ├── ProcessUploadChunkJob (rows 1-500)
+  ├── ProcessUploadChunkJob (rows 501-1000)
+  └── ProcessUploadChunkJob (rows 1001-1500)
+```
+
+### Commands
+```bash
+# Start Horizon (development)
+php artisan horizon
+
+# Check status
+php artisan horizon:status
+
+# Pause/Continue
+php artisan horizon:pause
+php artisan horizon:continue
+
+# Terminate gracefully
+php artisan horizon:terminate
+```
+
+### Production (Supervisor)
+```ini
+[program:horizon]
+process_name=%(program_name)s
+command=php /var/www/artisan horizon
+autostart=true
+autorestart=true
+user=www-data
+redirect_stderr=true
+stdout_logfile=/var/www/storage/logs/horizon.log
+stopwaitsecs=3600
+```

@@ -9,6 +9,7 @@
         "php": "^8.2",
         "jschaedl/iban-validation": "^2.7",
         "laravel/framework": "^12.0",
+        "laravel/horizon": "^5.40",
         "laravel/sanctum": "^4.2",
         "laravel/tinker": "^2.10.1",
         "league/csv": "^9.27",
