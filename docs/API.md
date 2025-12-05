@@ -11,8 +11,8 @@ All API requests must include the `Authorization` header:
 Authorization: Bearer {token}
 ```
 
-### Obtaining a Token
-```bash
+### Login
+```
 POST /api/login
 Content-Type: application/json
 
@@ -32,6 +32,18 @@ Content-Type: application/json
         "email": "admin@tether.test"
     }
 }
+```
+
+### Logout
+```
+POST /api/logout
+Authorization: Bearer {token}
+```
+
+### Get Current User
+```
+GET /api/user
+Authorization: Bearer {token}
 ```
 
 ## Response Format
@@ -135,7 +147,7 @@ GET /api/admin/debtors
 |-----------|------|-------------|
 | `upload_id` | integer | Filter by upload ID |
 | `status` | string | Filter: `pending`, `processing`, `recovered`, `failed` |
-| `country` | string | Filter by country code (DE, AT, CH, NL) |
+| `country` | string | Filter by country code (ES, DE, FR, NL, IT) |
 | `risk_class` | string | Filter: `low`, `medium`, `high` |
 
 **Response:**
@@ -145,22 +157,44 @@ GET /api/admin/debtors
         {
             "id": 101,
             "upload_id": 1,
-            "iban_masked": "DE89****3000",
-            "first_name": "Hans",
-            "last_name": "Mueller",
-            "full_name": "Hans Mueller",
-            "email": "hans@example.com",
-            "phone": "+4915112345678",
-            "address": "Berliner Str. 15",
-            "zip_code": "10115",
-            "city": "Berlin",
-            "country": "DE",
+            
+            "iban_masked": "ES05****0723",
+            "bank_name": "DEUTSCHE BANK",
+            "bank_code": "0019",
+            "bic": "DEUTESBBXXX",
+            
+            "first_name": "Maria",
+            "last_name": "Rodriguez",
+            "full_name": "Maria Rodriguez",
+            "email": null,
+            "phone": "638549256",
+            "primary_phone": "638549256",
+            "national_id": "52268154X",
+            "birth_date": "1964-01-12",
+            
+            "street": "JUAN RAMON JIMENEZ",
+            "street_number": "7",
+            "floor": null,
+            "door": null,
+            "apartment": null,
+            "postcode": "21740",
+            "city": "HINOJOS",
+            "province": "Huelva",
+            "country": "ES",
+            "full_address": "JUAN RAMON JIMENEZ 7\n21740, HINOJOS, Huelva, ES",
+            
             "amount": 150.00,
             "currency": "EUR",
+            "sepa_type": "CORE",
+            
             "status": "pending",
             "risk_class": "medium",
+            "iban_valid": true,
+            "name_matched": true,
+            
             "external_reference": "ORDER-12345",
-            "created_at": "2025-12-04T10:00:00Z"
+            "created_at": "2025-12-04T10:00:00Z",
+            "updated_at": "2025-12-04T10:00:00Z"
         }
     ],
     "meta": { ... }
@@ -172,7 +206,7 @@ GET /api/admin/debtors
 GET /api/admin/debtors/{id}
 ```
 
-**Response:** Single debtor with related `upload`, `vop_logs`, `billing_attempts`.
+**Response:** Single debtor with related `upload`, `vopLogs`, `billingAttempts`.
 
 ---
 
@@ -201,12 +235,12 @@ GET /api/admin/vop-logs
             "id": 1,
             "debtor_id": 101,
             "upload_id": 1,
-            "iban_masked": "DE89****3000",
+            "iban_masked": "ES05****0723",
             "iban_valid": true,
             "bank_identified": true,
             "bank_name": "Deutsche Bank",
-            "bic": "DEUTDEDB",
-            "country": "DE",
+            "bic": "DEUTESBBXXX",
+            "country": "ES",
             "vop_score": 85,
             "score_label": "high",
             "result": "verified",

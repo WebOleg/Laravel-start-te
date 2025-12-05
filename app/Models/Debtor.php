@@ -1,17 +1,15 @@
 <?php
-
 /**
- * Debtor model for storing debtor records imported from CSV uploads.
+ * Debtor model representing individual debt records imported from client files.
  */
-
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Debtor extends Model
 {
@@ -21,41 +19,71 @@ class Debtor extends Model
         'upload_id',
         'iban',
         'iban_hash',
+        'old_iban',
+        'bank_name',
+        'bank_code',
+        'bic',
         'first_name',
         'last_name',
         'email',
         'phone',
+        'phone_2',
+        'phone_3',
+        'phone_4',
+        'primary_phone',
+        'national_id',
+        'birth_date',
         'address',
-        'zip_code',
+        'street',
+        'street_number',
+        'floor',
+        'door',
+        'apartment',
+        'postcode',
         'city',
+        'province',
         'country',
         'amount',
         'currency',
+        'sepa_type',
         'status',
         'risk_class',
+        'iban_valid',
+        'name_matched',
         'external_reference',
         'meta',
     ];
 
     protected $casts = [
-        'meta' => 'array',
         'amount' => 'decimal:2',
+        'birth_date' => 'date',
+        'iban_valid' => 'boolean',
+        'name_matched' => 'boolean',
+        'meta' => 'array',
+        'deleted_at' => 'datetime',
     ];
 
-    protected $hidden = [
-        'iban',
-    ];
-
-    // Status constants
     public const STATUS_PENDING = 'pending';
     public const STATUS_PROCESSING = 'processing';
     public const STATUS_RECOVERED = 'recovered';
     public const STATUS_FAILED = 'failed';
 
-    // Risk class constants
+    public const STATUSES = [
+        self::STATUS_PENDING,
+        self::STATUS_PROCESSING,
+        self::STATUS_RECOVERED,
+        self::STATUS_FAILED,
+    ];
+
     public const RISK_LOW = 'low';
     public const RISK_MEDIUM = 'medium';
     public const RISK_HIGH = 'high';
+
+    public const RISK_CLASSES = [
+        self::RISK_LOW,
+        self::RISK_MEDIUM,
+        self::RISK_HIGH,
+    ];
 
     /**
      * @return BelongsTo<Upload, Debtor>
@@ -102,18 +130,53 @@ class Debtor extends Model
         return trim("{$this->first_name} {$this->last_name}");
     }
 
-    public function getMaskedIbanAttribute(): string
+    public function getIbanMaskedAttribute(): string
     {
         if (strlen($this->iban) < 8) {
-            return '****';
+            return $this->iban;
         }
-
         return substr($this->iban, 0, 4) . '****' . substr($this->iban, -4);
     }
 
-    public function setIbanAttribute(string $value): void
+    public function getFullAddressAttribute(): string
     {
-        $this->attributes['iban'] = strtoupper(str_replace(' ', '', $value));
-        $this->attributes['iban_hash'] = hash('sha256', $this->attributes['iban']);
+        $parts = array_filter([
+            $this->street,
+            $this->street_number,
+            $this->floor ? "Floor {$this->floor}" : null,
+            $this->door ? "Door {$this->door}" : null,
+            $this->apartment ? "Apt {$this->apartment}" : null,
+        ]);
+        
+        $line1 = implode(' ', $parts);
+        $line2Parts = array_filter([$this->postcode, $this->city, $this->province, $this->country]);
+        $line2 = implode(', ', $line2Parts);
+        
+        return trim("{$line1}\n{$line2}");
+    }
+
+    public function generateIbanHash(): void
+    {
+        $this->iban_hash = hash('sha256', strtoupper(str_replace(' ', '', $this->iban)));
+    }
+
+    public function isPending(): bool
+    {
+        return $this->status === self::STATUS_PENDING;
+    }
+
+    public function isProcessing(): bool
+    {
+        return $this->status === self::STATUS_PROCESSING;
+    }
+
+    public function isRecovered(): bool
+    {
+        return $this->status === self::STATUS_RECOVERED;
+    }
+
+    public function isFailed(): bool
+    {
+        return $this->status === self::STATUS_FAILED;
     }
 }

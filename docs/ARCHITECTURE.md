@@ -102,8 +102,12 @@ tether-laravel/
                       │ id          │
                       │ upload_id   │◀─────────────────────┐
                       │ iban        │                      │
+                      │ bank_name   │                      │
+                      │ bic         │                      │
                       │ first_name  │                      │
                       │ last_name   │                      │
+                      │ national_id │                      │
+                      │ birth_date  │                      │
                       │ amount      │                      │
                       │ status      │                      │
                       └──────┬──────┘                      │
@@ -127,7 +131,7 @@ tether-laravel/
 ### Table Descriptions
 
 #### `uploads`
-Stores information about uploaded CSV files containing debtor data.
+Stores information about uploaded CSV/XLSX files containing debtor data.
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -138,28 +142,65 @@ Stores information about uploaded CSV files containing debtor data.
 | file_size | integer | File size in bytes |
 | mime_type | string | File MIME type |
 | status | enum | pending, processing, completed, failed |
-| total_records | integer | Total rows in CSV |
+| total_records | integer | Total rows in file |
 | processed_records | integer | Successfully processed rows |
 | failed_records | integer | Failed rows |
 | uploaded_by | bigint | User FK (nullable) |
+| column_mapping | jsonb | CSV column to field mapping |
+| meta | jsonb | Additional metadata |
 
 #### `debtors`
-Individual debtor records extracted from CSV uploads.
+Individual debtor records extracted from CSV/XLSX uploads.
 
 | Column | Type | Description |
 |--------|------|-------------|
+| **Identity** | | |
 | id | bigint | Primary key |
 | upload_id | bigint | FK to uploads |
-| iban | string | Bank account (encrypted) |
-| iban_hash | string | For duplicate detection |
+| external_reference | string | Client's internal ID |
+| **IBAN & Bank** | | |
+| iban | string | Bank account number |
+| iban_hash | string | SHA256 for duplicate detection |
+| old_iban | string | Previous IBAN (if migrated) |
+| bank_name | string | Bank name |
+| bank_code | string | National bank code |
+| bic | string | BIC/SWIFT code |
+| **Personal Info** | | |
 | first_name | string | Debtor first name |
 | last_name | string | Debtor last name |
+| national_id | string | DNI/NIE/ID number |
+| birth_date | date | Date of birth |
 | email | string | Contact email |
-| phone | string | Contact phone |
-| amount | decimal | Debt amount |
-| currency | string | Currency code (EUR) |
+| phone | string | Primary phone |
+| phone_2 | string | Secondary phone |
+| phone_3 | string | Tertiary phone |
+| phone_4 | string | Additional phone |
+| primary_phone | string | Preferred contact phone |
+| **Address** | | |
+| address | string | Full address (legacy) |
+| street | string | Street name |
+| street_number | string | Building number |
+| floor | string | Floor number |
+| door | string | Door identifier |
+| apartment | string | Apartment number |
+| postcode | string | Postal code |
+| city | string | City name |
+| province | string | Province/state |
+| country | string(2) | ISO country code |
+| **Financial** | | |
+| amount | decimal(12,2) | Debt amount |
+| currency | string(3) | Currency code (EUR) |
+| sepa_type | string | SEPA type (CORE, B2B) |
+| **Status** | | |
 | status | enum | pending, processing, recovered, failed |
 | risk_class | enum | low, medium, high |
+| iban_valid | boolean | Pre-validated IBAN flag |
+| name_matched | boolean | Pre-validated name match |
+| **Meta** | | |
+| meta | jsonb | Additional flexible data |
+| created_at | timestamp | Record created |
+| updated_at | timestamp | Record updated |
+| deleted_at | timestamp | Soft delete |
 
 #### `vop_logs`
 IBAN verification results from VOP (Verification of Payee) service.
@@ -193,6 +234,7 @@ SEPA Direct Debit payment attempts.
 | attempt_number | integer | Retry counter |
 | error_code | string | Bank error code |
 | error_message | string | Human-readable error |
+| can_retry | boolean | Eligible for retry |
 | processed_at | timestamp | When processed |
 
 ## Request Lifecycle
@@ -237,7 +279,7 @@ Controllers will use repositories for complex queries.
 API Resources transform Models to JSON, ensuring:
 - Consistent structure
 - Hidden sensitive fields (IBAN)
-- Computed fields (full_name, masked_iban)
+- Computed fields (full_name, iban_masked)
 
 ### Factory Pattern
 Factories generate test data with realistic values and states.
