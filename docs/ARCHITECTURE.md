@@ -341,3 +341,38 @@ if ($validator->isValid($iban)) {
 // For deduplication
 $hash = $validator->hash($iban);
 ```
+
+### SpreadsheetParserService
+
+Location: `app/Services/SpreadsheetParserService.php`
+
+Parses CSV and Excel files into standardized row arrays.
+
+**Supported formats:** CSV (comma/semicolon), XLSX, XLS
+
+**Methods:**
+
+| Method | Return | Description |
+|--------|--------|-------------|
+| `parse(UploadedFile $file)` | array | Parse uploaded file |
+| `parseCsv(string $path)` | array | Parse CSV file |
+| `parseExcel(string $path)` | array | Parse XLSX/XLS file |
+| `detectType(UploadedFile $file)` | string | Detect file type |
+
+### FileUploadService
+
+Location: `app/Services/FileUploadService.php`
+
+Orchestrates file upload processing: parse, validate, create debtors.
+
+**Features:**
+- Automatic column mapping (multi-language headers)
+- IBAN validation and enrichment
+- European/US amount format parsing
+- Date format detection
+
+**Usage:**
+```php
+$result = $uploadService->process($file, $userId);
+// Returns: ['upload' => Upload, 'created' => 10, 'failed' => 2, 'errors' => [...]]
+```

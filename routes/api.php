@@ -21,13 +21,12 @@ Route::post('/register', [AuthController::class, 'register']);
 Route::middleware('auth:sanctum')->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/user', [AuthController::class, 'user']);
-
     Route::apiResource('clients', ClientController::class);
     Route::apiResource('uploads', UploadController::class);
 
     // Admin routes
     Route::prefix('admin')->group(function () {
-        Route::apiResource('uploads', AdminUploadController::class)->only(['index', 'show']);
+        Route::apiResource('uploads', AdminUploadController::class)->only(['index', 'show', 'store']);
         Route::apiResource('debtors', AdminDebtorController::class)->only(['index', 'show']);
         Route::apiResource('vop-logs', AdminVopLogController::class)->only(['index', 'show']);
         Route::apiResource('billing-attempts', AdminBillingAttemptController::class)->only(['index', 'show']);
