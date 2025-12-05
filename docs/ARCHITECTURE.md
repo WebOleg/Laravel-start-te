@@ -299,3 +299,45 @@ Factories generate test data with realistic values and states.
 ### Authorization (Future)
 - Role-based access control
 - Admin vs Client permissions
+
+## Services Layer
+
+### IbanValidator
+
+Location: `app/Services/IbanValidator.php`
+
+IBAN validation service wrapping `jschaedl/iban-validation` library for production-ready validation.
+
+**Methods:**
+
+| Method | Return | Description |
+|--------|--------|-------------|
+| `validate(string $iban)` | array | Full validation with details |
+| `isValid(string $iban)` | bool | Quick validation check |
+| `isSepa(string $iban)` | bool | Check SEPA zone membership |
+| `getCountryCode(string $iban)` | string | Extract country code |
+| `getCountryName(string $iban)` | ?string | Get country name |
+| `getBankId(string $iban)` | ?string | Extract bank identifier |
+| `normalize(string $iban)` | string | Uppercase, remove spaces |
+| `format(string $iban)` | string | Format for display |
+| `mask(string $iban)` | string | Mask for secure display |
+| `hash(string $iban)` | string | SHA-256 for deduplication |
+
+**Usage:**
+```php
+use App\Services\IbanValidator;
+
+$validator = new IbanValidator();
+
+// Full validation
+$result = $validator->validate('DE89 3704 0044 0532 0130 00');
+// Returns: ['valid' => true, 'country_code' => 'DE', 'is_sepa' => true, ...]
+
+// Quick check
+if ($validator->isValid($iban)) {
+    // Process IBAN
+}
+
+// For deduplication
+$hash = $validator->hash($iban);
+```

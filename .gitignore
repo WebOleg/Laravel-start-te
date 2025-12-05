@@ -27,3 +27,4 @@ Thumbs.db
 storage/*.log
 docker-compose.override.yml
 .config/
+.composer/
