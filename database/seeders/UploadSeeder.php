@@ -106,7 +106,7 @@ class UploadSeeder extends Seeder
         VopLog::create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
-            'iban_masked' => $debtor->masked_iban,
+            'iban_masked' => $debtor->iban_masked,
             'iban_valid' => $data['valid'],
             'bank_identified' => $data['bank'],
             'bank_name' => $data['bank'] ? $banks[array_rand($banks)] : null,

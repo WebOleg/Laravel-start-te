@@ -91,7 +91,7 @@ class DashboardController extends Controller
                 VopLog::whereIn('result', [VopLog::RESULT_VERIFIED, VopLog::RESULT_LIKELY_VERIFIED])->count(),
                 $total
             ),
-            'average_score' => round(VopLog::avg('score') ?? 0, 2),
+            'average_score' => round(VopLog::avg('vop_score') ?? 0, 2),
             'today' => VopLog::whereDate('created_at', today())->count(),
         ];
     }
