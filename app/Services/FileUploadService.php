@@ -119,7 +119,8 @@ class FileUploadService
 
     public function __construct(
         private SpreadsheetParserService $parser,
-        private IbanValidator $ibanValidator
+        private IbanValidator $ibanValidator,
+        private BlacklistService $blacklistService
     ) {}
 
     /**
@@ -234,6 +235,7 @@ class FileUploadService
 
                 $this->validateAndEnrichIban($debtorData);
                 $this->enrichCountryFromIban($debtorData);
+                $this->checkBlacklist($debtorData);
                 $this->validateRequiredFields($debtorData, $index);
 
                 Debtor::create($debtorData);
@@ -287,6 +289,17 @@ class FileUploadService
 
         if ($result['valid']) {
             $data['bank_code'] = $data['bank_code'] ?? $result['bank_id'];
+        }
+    }
+
+    private function checkBlacklist(array $data): void
+    {
+        if (empty($data['iban'])) {
+            return;
+        }
+
+        if ($this->blacklistService->isBlacklisted($data['iban'])) {
+            throw new \InvalidArgumentException('IBAN is blacklisted');
         }
     }
 

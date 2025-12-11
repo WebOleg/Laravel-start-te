@@ -10,6 +10,7 @@ use App\Models\Upload;
 use App\Models\Debtor;
 use App\Services\SpreadsheetParserService;
 use App\Services\IbanValidator;
+use App\Services\BlacklistService;
 use App\Traits\ParsesDebtorData;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
@@ -43,8 +44,11 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
         return 'upload_' . $this->upload->id;
     }
 
-    public function handle(SpreadsheetParserService $parser, IbanValidator $ibanValidator): void
-    {
+    public function handle(
+        SpreadsheetParserService $parser,
+        IbanValidator $ibanValidator,
+        BlacklistService $blacklistService
+    ): void {
         Log::info("ProcessUploadJob started", ['upload_id' => $this->upload->id]);
 
         try {
@@ -65,7 +69,7 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
             if (count($rows) > self::BATCH_THRESHOLD) {
                 $this->processWithBatching($rows);
             } else {
-                $this->processDirectly($rows, $ibanValidator);
+                $this->processDirectly($rows, $ibanValidator, $blacklistService);
             }
 
         } catch (\Exception $e) {
@@ -143,8 +147,11 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
         ]);
     }
 
-    private function processDirectly(array $rows, IbanValidator $ibanValidator): void
-    {
+    private function processDirectly(
+        array $rows,
+        IbanValidator $ibanValidator,
+        BlacklistService $blacklistService
+    ): void {
         $created = 0;
         $failed = 0;
         $errors = [];
@@ -156,6 +163,7 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
 
                 $this->validateAndEnrichIban($debtorData, $ibanValidator);
                 $this->enrichCountryFromIban($debtorData);
+                $this->checkBlacklist($debtorData, $blacklistService);
                 $this->validateRequiredFields($debtorData);
 
                 Debtor::create($debtorData);
@@ -225,6 +233,17 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
 
         if ($result['valid']) {
             $data['bank_code'] = $data['bank_code'] ?? $result['bank_id'];
+        }
+    }
+
+    private function checkBlacklist(array $data, BlacklistService $blacklistService): void
+    {
+        if (empty($data['iban'])) {
+            return;
+        }
+
+        if ($blacklistService->isBlacklisted($data['iban'])) {
+            throw new \InvalidArgumentException('IBAN is blacklisted');
         }
     }
 

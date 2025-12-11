@@ -11,6 +11,7 @@ use App\Models\Upload;
 use App\Models\Debtor;
 use App\Services\SpreadsheetParserService;
 use App\Services\IbanValidator;
+use App\Services\BlacklistService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -53,7 +54,11 @@ class ProcessUploadJobTest extends TestCase
         ];
 
         $job = new ProcessUploadJob($upload, $columnMapping);
-        $job->handle(new SpreadsheetParserService(), new IbanValidator());
+        $job->handle(
+            new SpreadsheetParserService(),
+            new IbanValidator(),
+            new BlacklistService(new IbanValidator())
+        );
 
         $upload->refresh();
 
@@ -95,7 +100,11 @@ class ProcessUploadJobTest extends TestCase
         ];
 
         $job = new ProcessUploadJob($upload, $columnMapping);
-        $job->handle(new SpreadsheetParserService(), new IbanValidator());
+        $job->handle(
+            new SpreadsheetParserService(),
+            new IbanValidator(),
+            new BlacklistService(new IbanValidator())
+        );
 
         $upload->refresh();
 
@@ -129,7 +138,11 @@ class ProcessUploadJobTest extends TestCase
         ];
 
         $job = new ProcessUploadJob($upload, $columnMapping);
-        $job->handle(new SpreadsheetParserService(), new IbanValidator());
+        $job->handle(
+            new SpreadsheetParserService(),
+            new IbanValidator(),
+            new BlacklistService(new IbanValidator())
+        );
 
         $upload->refresh();
 
