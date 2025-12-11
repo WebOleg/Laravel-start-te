@@ -18,13 +18,10 @@ class FileUploadService
     use ParsesDebtorData;
 
     private const COLUMN_MAP = [
-        // IBAN
         'iban' => 'iban',
         'iban_number' => 'iban',
         'bank_account' => 'iban',
         'account_number' => 'iban',
-
-        // Full Name
         'name' => 'name',
         'full_name' => 'name',
         'fullname' => 'name',
@@ -32,22 +29,14 @@ class FileUploadService
         'debtor_name' => 'name',
         'client_name' => 'name',
         'account_holder' => 'name',
-
-        // First Name
         'first_name' => 'first_name',
         'firstname' => 'first_name',
-
-        // Last Name
         'last_name' => 'last_name',
         'lastname' => 'last_name',
         'surname' => 'last_name',
-
-        // Email
         'email' => 'email',
         'e_mail' => 'email',
         'mail' => 'email',
-
-        // Phone
         'phone' => 'phone',
         'phone_1' => 'phone',
         'telephone' => 'phone',
@@ -56,8 +45,6 @@ class FileUploadService
         'phone_3' => 'phone_3',
         'phone_4' => 'phone_4',
         'primary_phone' => 'primary_phone',
-
-        // Address
         'address' => 'address',
         'street' => 'street',
         'street_number' => 'street_number',
@@ -74,42 +61,28 @@ class FileUploadService
         'province' => 'province',
         'state' => 'province',
         'country' => 'country',
-
-        // Amount
         'amount' => 'amount',
         'sum' => 'amount',
         'total' => 'amount',
         'price' => 'amount',
-
-        // Currency
         'currency' => 'currency',
-
-        // National ID
         'national_id' => 'national_id',
         'id_number' => 'national_id',
         'personal_id' => 'national_id',
         'dni' => 'national_id',
         'nie' => 'national_id',
-
-        // Birth Date
         'birth_date' => 'birth_date',
         'birthdate' => 'birth_date',
         'date_of_birth' => 'birth_date',
         'dob' => 'birth_date',
-
-        // Bank
         'bank_name' => 'bank_name',
         'bank' => 'bank_name',
         'bank_code' => 'bank_code',
         'bic' => 'bic',
         'swift' => 'bic',
         'swift_code' => 'bic',
-
-        // SEPA
         'sepa_type' => 'sepa_type',
         'old_iban' => 'old_iban',
-
-        // Reference
         'external_reference' => 'external_reference',
         'reference' => 'external_reference',
         'ref' => 'external_reference',
@@ -133,7 +106,10 @@ class FileUploadService
         $upload = $this->createUploadRecord($file, $storedPath, $parsed['total_rows'], $userId);
 
         $columnMapping = $this->buildColumnMapping($parsed['headers']);
-        $upload->update(['column_mapping' => $columnMapping]);
+        $upload->update([
+            'column_mapping' => $columnMapping,
+            'headers' => $parsed['headers'],
+        ]);
 
         ProcessUploadJob::dispatch($upload, $columnMapping);
 
@@ -153,7 +129,10 @@ class FileUploadService
         $upload = $this->createUploadRecord($file, $storedPath, $parsed['total_rows'], $userId);
 
         $columnMapping = $this->buildColumnMapping($parsed['headers']);
-        $upload->update(['column_mapping' => $columnMapping]);
+        $upload->update([
+            'column_mapping' => $columnMapping,
+            'headers' => $parsed['headers'],
+        ]);
 
         $result = $this->processRows($upload, $parsed['rows'], $columnMapping);
         $this->finalizeUpload($upload, $result);
@@ -232,11 +211,12 @@ class FileUploadService
             try {
                 $debtorData = $this->mapRowToDebtor($row, $columnMapping);
                 $debtorData['upload_id'] = $upload->id;
+                $debtorData['raw_data'] = $row;
 
-                $this->validateAndEnrichIban($debtorData);
+                $this->normalizeIban($debtorData);
                 $this->enrichCountryFromIban($debtorData);
-                $this->checkBlacklist($debtorData);
-                $this->validateRequiredFields($debtorData, $index);
+
+                $debtorData['validation_status'] = Debtor::VALIDATION_PENDING;
 
                 Debtor::create($debtorData);
                 $created++;
@@ -259,6 +239,7 @@ class FileUploadService
         $data = [
             'status' => Debtor::STATUS_PENDING,
             'currency' => 'EUR',
+            'amount' => 0,
         ];
 
         foreach ($row as $header => $value) {
@@ -275,54 +256,23 @@ class FileUploadService
         return $data;
     }
 
-    private function validateAndEnrichIban(array &$data): void
+    private function normalizeIban(array &$data): void
     {
         if (empty($data['iban'])) {
+            $data['iban'] = '';
+            $data['iban_hash'] = null;
+            $data['iban_valid'] = false;
             return;
         }
 
-        $result = $this->ibanValidator->validate($data['iban']);
-
         $data['iban'] = $this->ibanValidator->normalize($data['iban']);
         $data['iban_hash'] = $this->ibanValidator->hash($data['iban']);
+
+        $result = $this->ibanValidator->validate($data['iban']);
         $data['iban_valid'] = $result['valid'];
 
         if ($result['valid']) {
             $data['bank_code'] = $data['bank_code'] ?? $result['bank_id'];
-        }
-    }
-
-    private function checkBlacklist(array $data): void
-    {
-        if (empty($data['iban'])) {
-            return;
-        }
-
-        if ($this->blacklistService->isBlacklisted($data['iban'])) {
-            throw new \InvalidArgumentException('IBAN is blacklisted');
-        }
-    }
-
-    private function validateRequiredFields(array $data, int $rowIndex): void
-    {
-        $errors = [];
-
-        if (empty($data['iban'])) {
-            $errors[] = 'IBAN is required';
-        } elseif (!($data['iban_valid'] ?? false)) {
-            $errors[] = 'IBAN is invalid';
-        }
-
-        if (empty($data['first_name']) && empty($data['last_name'])) {
-            $errors[] = 'Name is required';
-        }
-
-        if (empty($data['amount']) || $data['amount'] <= 0) {
-            $errors[] = 'Valid amount is required';
-        }
-
-        if (!empty($errors)) {
-            throw new \InvalidArgumentException(implode('; ', $errors));
         }
     }
 

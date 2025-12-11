@@ -2,6 +2,9 @@
 
 /**
  * Unit tests for ProcessUploadJob.
+ * 
+ * Stage A: Job accepts ALL rows without validation
+ * Stage B: Validation runs separately
  */
 
 namespace Tests\Unit\Jobs;
@@ -75,8 +78,9 @@ class ProcessUploadJobTest extends TestCase
         ]);
     }
 
-    public function test_job_handles_invalid_rows(): void
+    public function test_job_accepts_all_rows_including_invalid(): void
     {
+        // Stage A: Job accepts ALL rows, validation is in Stage B
         $this->testFilePath = 'uploads/test_' . uniqid() . '.csv';
         $content = "first_name,last_name,iban,amount\nJohn,Doe,INVALID,100.00\nJane,Smith,DE89370400440532013000,200.00";
         
@@ -108,13 +112,24 @@ class ProcessUploadJobTest extends TestCase
 
         $upload->refresh();
 
+        // All rows accepted in Stage A
         $this->assertEquals(Upload::STATUS_COMPLETED, $upload->status);
-        $this->assertEquals(1, $upload->processed_records);
-        $this->assertEquals(1, $upload->failed_records);
+        $this->assertEquals(2, $upload->processed_records);
+        $this->assertEquals(0, $upload->failed_records);
+
+        // Both records saved with pending validation
+        $this->assertDatabaseCount('debtors', 2);
+        $this->assertDatabaseHas('debtors', [
+            'upload_id' => $upload->id,
+            'first_name' => 'John',
+            'iban' => 'INVALID',
+            'validation_status' => Debtor::VALIDATION_PENDING,
+        ]);
     }
 
-    public function test_job_updates_status_to_failed_when_all_rows_fail(): void
+    public function test_job_completes_even_with_all_invalid_data(): void
     {
+        // Stage A: Job accepts ALL rows even if data is invalid
         $this->testFilePath = 'uploads/test_' . uniqid() . '.csv';
         $content = "first_name,last_name,iban,amount\nJohn,Doe,INVALID,100.00";
         
@@ -146,9 +161,10 @@ class ProcessUploadJobTest extends TestCase
 
         $upload->refresh();
 
-        $this->assertEquals(Upload::STATUS_FAILED, $upload->status);
-        $this->assertEquals(0, $upload->processed_records);
-        $this->assertEquals(1, $upload->failed_records);
+        // Job completes successfully, validation happens in Stage B
+        $this->assertEquals(Upload::STATUS_COMPLETED, $upload->status);
+        $this->assertEquals(1, $upload->processed_records);
+        $this->assertEquals(0, $upload->failed_records);
     }
 
     public function test_failed_method_updates_upload_status(): void

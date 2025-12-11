@@ -22,15 +22,25 @@ Route::post('/register', [AuthController::class, 'register']);
 Route::middleware('auth:sanctum')->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/user', [AuthController::class, 'user']);
+
     Route::apiResource('clients', ClientController::class);
     Route::apiResource('uploads', UploadController::class);
 
     // Admin routes
     Route::prefix('admin')->group(function () {
         Route::get('dashboard', [AdminDashboardController::class, 'index']);
+        
+        // Upload routes
         Route::get('uploads/{upload}/status', [AdminUploadController::class, 'status']);
+        Route::get('uploads/{upload}/debtors', [AdminUploadController::class, 'debtors']);
+        Route::post('uploads/{upload}/validate', [AdminUploadController::class, 'validate']);
+        Route::get('uploads/{upload}/validation-stats', [AdminUploadController::class, 'validationStats']);
         Route::apiResource('uploads', AdminUploadController::class)->only(['index', 'show', 'store']);
-        Route::apiResource('debtors', AdminDebtorController::class)->only(['index', 'show']);
+
+        // Debtor routes
+        Route::post('debtors/{debtor}/validate', [AdminDebtorController::class, 'validate']);
+        Route::apiResource('debtors', AdminDebtorController::class)->only(['index', 'show', 'update', 'destroy']);
+
         Route::apiResource('vop-logs', AdminVopLogController::class)->only(['index', 'show']);
         Route::apiResource('billing-attempts', AdminBillingAttemptController::class)->only(['index', 'show']);
     });

@@ -2,6 +2,9 @@
 
 /**
  * Feature tests for Admin Upload store endpoint.
+ * 
+ * Stage A: Upload accepts ALL rows and saves with validation_status=pending
+ * Stage B: Validation runs separately and updates status to valid/invalid
  */
 
 namespace Tests\Feature\Admin;
@@ -81,8 +84,9 @@ class UploadStoreTest extends TestCase
         ]);
     }
 
-    public function test_store_handles_invalid_iban(): void
+    public function test_store_accepts_invalid_iban_for_later_validation(): void
     {
+        // Stage A: Upload accepts ALL rows, validation happens in Stage B
         $content = "first_name,last_name,iban,amount\nJohn,Doe,INVALID123,150.00";
         $file = UploadedFile::fake()->createWithContent('debtors.csv', $content);
 
@@ -90,14 +94,18 @@ class UploadStoreTest extends TestCase
             ->postJson('/api/admin/uploads', ['file' => $file]);
 
         $response->assertStatus(201)
-            ->assertJsonPath('meta.created', 0)
-            ->assertJsonPath('meta.failed', 1);
+            ->assertJsonPath('meta.created', 1);
 
-        $this->assertDatabaseCount('debtors', 0);
+        // Record is saved with validation_status = pending
+        $this->assertDatabaseHas('debtors', [
+            'first_name' => 'John',
+            'validation_status' => Debtor::VALIDATION_PENDING,
+        ]);
     }
 
-    public function test_store_handles_missing_required_fields(): void
+    public function test_store_accepts_missing_amount_for_later_validation(): void
     {
+        // Stage A: Upload accepts ALL rows, validation happens in Stage B
         $content = "first_name,last_name,iban\nJohn,Doe,DE89370400440532013000";
         $file = UploadedFile::fake()->createWithContent('debtors.csv', $content);
 
@@ -105,7 +113,13 @@ class UploadStoreTest extends TestCase
             ->postJson('/api/admin/uploads', ['file' => $file]);
 
         $response->assertStatus(201)
-            ->assertJsonPath('meta.failed', 1);
+            ->assertJsonPath('meta.created', 1);
+
+        // Record is saved with validation_status = pending
+        $this->assertDatabaseHas('debtors', [
+            'first_name' => 'John',
+            'validation_status' => Debtor::VALIDATION_PENDING,
+        ]);
     }
 
     public function test_store_processes_multiple_rows(): void
@@ -127,9 +141,9 @@ class UploadStoreTest extends TestCase
         $this->assertDatabaseCount('debtors', 3);
     }
 
-    public function test_store_validates_and_enriches_iban(): void
+    public function test_store_saves_raw_data(): void
     {
-        $content = "first_name,last_name,iban,amount\nJohn,Doe,DE89370400440532013000,100";
+        $content = "first_name,last_name,iban,amount,custom_field\nJohn,Doe,DE89370400440532013000,100,extra_value";
         $file = UploadedFile::fake()->createWithContent('test.csv', $content);
 
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
@@ -138,9 +152,8 @@ class UploadStoreTest extends TestCase
         $response->assertStatus(201);
 
         $debtor = Debtor::first();
-        $this->assertTrue($debtor->iban_valid);
-        $this->assertEquals('DE', $debtor->country);
-        $this->assertNotNull($debtor->iban_hash);
+        $this->assertNotNull($debtor->raw_data);
+        $this->assertEquals('extra_value', $debtor->raw_data['custom_field']);
     }
 
     public function test_store_handles_european_amount_format(): void
@@ -155,5 +168,21 @@ class UploadStoreTest extends TestCase
 
         $debtor = Debtor::first();
         $this->assertEquals(1234.56, $debtor->amount);
+    }
+
+    public function test_store_saves_headers_to_upload(): void
+    {
+        $content = "first_name,last_name,iban,amount\nJohn,Doe,DE89370400440532013000,100";
+        $file = UploadedFile::fake()->createWithContent('test.csv', $content);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->postJson('/api/admin/uploads', ['file' => $file]);
+
+        $response->assertStatus(201);
+
+        $upload = Upload::first();
+        $this->assertIsArray($upload->headers);
+        $this->assertContains('first_name', $upload->headers);
+        $this->assertContains('iban', $upload->headers);
     }
 }

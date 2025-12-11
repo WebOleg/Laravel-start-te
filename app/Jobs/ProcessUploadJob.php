@@ -69,7 +69,7 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
             if (count($rows) > self::BATCH_THRESHOLD) {
                 $this->processWithBatching($rows);
             } else {
-                $this->processDirectly($rows, $ibanValidator, $blacklistService);
+                $this->processDirectly($rows, $ibanValidator);
             }
 
         } catch (\Exception $e) {
@@ -147,11 +147,8 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
         ]);
     }
 
-    private function processDirectly(
-        array $rows,
-        IbanValidator $ibanValidator,
-        BlacklistService $blacklistService
-    ): void {
+    private function processDirectly(array $rows, IbanValidator $ibanValidator): void
+    {
         $created = 0;
         $failed = 0;
         $errors = [];
@@ -160,11 +157,13 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
             try {
                 $debtorData = $this->mapRowToDebtor($row);
                 $debtorData['upload_id'] = $this->upload->id;
+                $debtorData['raw_data'] = $row;
 
-                $this->validateAndEnrichIban($debtorData, $ibanValidator);
+                $this->validateBasicStructure($debtorData);
+                $this->normalizeIban($debtorData, $ibanValidator);
                 $this->enrichCountryFromIban($debtorData);
-                $this->checkBlacklist($debtorData, $blacklistService);
-                $this->validateRequiredFields($debtorData);
+
+                $debtorData['validation_status'] = Debtor::VALIDATION_PENDING;
 
                 Debtor::create($debtorData);
                 $created++;
@@ -219,54 +218,40 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
         return $data;
     }
 
-    private function validateAndEnrichIban(array &$data, IbanValidator $ibanValidator): void
-    {
-        if (empty($data['iban'])) {
-            return;
-        }
-
-        $result = $ibanValidator->validate($data['iban']);
-
-        $data['iban'] = $ibanValidator->normalize($data['iban']);
-        $data['iban_hash'] = $ibanValidator->hash($data['iban']);
-        $data['iban_valid'] = $result['valid'];
-
-        if ($result['valid']) {
-            $data['bank_code'] = $data['bank_code'] ?? $result['bank_id'];
-        }
-    }
-
-    private function checkBlacklist(array $data, BlacklistService $blacklistService): void
-    {
-        if (empty($data['iban'])) {
-            return;
-        }
-
-        if ($blacklistService->isBlacklisted($data['iban'])) {
-            throw new \InvalidArgumentException('IBAN is blacklisted');
-        }
-    }
-
-    private function validateRequiredFields(array $data): void
+    private function validateBasicStructure(array $data): void
     {
         $errors = [];
-
-        if (empty($data['iban'])) {
-            $errors[] = 'IBAN is required';
-        } elseif (!($data['iban_valid'] ?? false)) {
-            $errors[] = 'IBAN is invalid';
-        }
 
         if (empty($data['first_name']) && empty($data['last_name'])) {
             $errors[] = 'Name is required';
         }
 
-        if (empty($data['amount']) || $data['amount'] <= 0) {
+        if (!isset($data['amount']) || !is_numeric($data['amount'])) {
             $errors[] = 'Valid amount is required';
         }
 
         if (!empty($errors)) {
             throw new \InvalidArgumentException(implode('; ', $errors));
+        }
+    }
+
+    private function normalizeIban(array &$data, IbanValidator $ibanValidator): void
+    {
+        if (empty($data['iban'])) {
+            $data['iban'] = '';
+            $data['iban_hash'] = null;
+            $data['iban_valid'] = false;
+            return;
+        }
+
+        $data['iban'] = $ibanValidator->normalize($data['iban']);
+        $data['iban_hash'] = $ibanValidator->hash($data['iban']);
+
+        $result = $ibanValidator->validate($data['iban']);
+        $data['iban_valid'] = $result['valid'];
+
+        if ($result['valid']) {
+            $data['bank_code'] = $data['bank_code'] ?? $result['bank_id'];
         }
     }
 

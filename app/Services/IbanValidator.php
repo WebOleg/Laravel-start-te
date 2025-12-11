@@ -90,6 +90,14 @@ class IbanValidator
     }
 
     /**
+     * Check if country code is in SEPA zone.
+     */
+    public function isSepaCountry(string $countryCode): bool
+    {
+        return in_array(strtoupper($countryCode), self::SEPA_COUNTRIES, true);
+    }
+
+    /**
      * Extract country code from IBAN.
      */
     public function getCountryCode(string $iban): string
@@ -181,11 +189,6 @@ class IbanValidator
     public function hash(string $iban): string
     {
         return hash('sha256', $this->normalize($iban));
-    }
-
-    private function isSepaCountry(string $countryCode): bool
-    {
-        return in_array(strtoupper($countryCode), self::SEPA_COUNTRIES, true);
     }
 
     private function getViolationMessages(): array

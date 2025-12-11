@@ -1,7 +1,9 @@
 <?php
+
 /**
- * Debtor model representing individual debt records imported from client files.
+ * Debtor model representing individual debt records.
  */
+
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -15,111 +17,86 @@ class Debtor extends Model
 {
     use HasFactory, SoftDeletes;
 
+    public const STATUS_PENDING = 'pending';
+    public const STATUS_PROCESSING = 'processing';
+    public const STATUS_RECOVERED = 'recovered';
+    public const STATUS_FAILED = 'failed';
+
+    public const VALIDATION_PENDING = 'pending';
+    public const VALIDATION_VALID = 'valid';
+    public const VALIDATION_INVALID = 'invalid';
+
+    public const RISK_CLASSES = ['low', 'medium', 'high'];
+
     protected $fillable = [
         'upload_id',
         'iban',
         'iban_hash',
-        'old_iban',
-        'bank_name',
-        'bank_code',
-        'bic',
+        'iban_valid',
         'first_name',
         'last_name',
         'email',
         'phone',
-        'phone_2',
-        'phone_3',
-        'phone_4',
-        'primary_phone',
-        'national_id',
-        'birth_date',
         'address',
         'street',
         'street_number',
-        'floor',
-        'door',
-        'apartment',
         'postcode',
         'city',
         'province',
         'country',
         'amount',
         'currency',
-        'sepa_type',
         'status',
+        'validation_status',
+        'validation_errors',
+        'validated_at',
         'risk_class',
-        'iban_valid',
-        'name_matched',
         'external_reference',
+        'bank_name',
+        'bank_code',
+        'bic',
+        'national_id',
+        'birth_date',
         'meta',
+        'raw_data',
     ];
 
     protected $casts = [
         'amount' => 'decimal:2',
-        'birth_date' => 'date',
         'iban_valid' => 'boolean',
-        'name_matched' => 'boolean',
+        'birth_date' => 'date',
         'meta' => 'array',
-        'deleted_at' => 'datetime',
+        'raw_data' => 'array',
+        'validation_errors' => 'array',
+        'validated_at' => 'datetime',
     ];
 
-    public const STATUS_PENDING = 'pending';
-    public const STATUS_PROCESSING = 'processing';
-    public const STATUS_RECOVERED = 'recovered';
-    public const STATUS_FAILED = 'failed';
-
-    public const STATUSES = [
-        self::STATUS_PENDING,
-        self::STATUS_PROCESSING,
-        self::STATUS_RECOVERED,
-        self::STATUS_FAILED,
+    protected $attributes = [
+        'currency' => 'EUR',
+        'status' => self::STATUS_PENDING,
+        'validation_status' => self::VALIDATION_PENDING,
     ];
 
-    public const RISK_LOW = 'low';
-    public const RISK_MEDIUM = 'medium';
-    public const RISK_HIGH = 'high';
-
-    public const RISK_CLASSES = [
-        self::RISK_LOW,
-        self::RISK_MEDIUM,
-        self::RISK_HIGH,
-    ];
-
-    /**
-     * @return BelongsTo<Upload, Debtor>
-     */
     public function upload(): BelongsTo
     {
         return $this->belongsTo(Upload::class);
     }
 
-    /**
-     * @return HasMany<VopLog>
-     */
     public function vopLogs(): HasMany
     {
         return $this->hasMany(VopLog::class);
     }
 
-    /**
-     * @return HasOne<VopLog>
-     */
     public function latestVopLog(): HasOne
     {
         return $this->hasOne(VopLog::class)->latestOfMany();
     }
 
-    /**
-     * @return HasMany<BillingAttempt>
-     */
     public function billingAttempts(): HasMany
     {
         return $this->hasMany(BillingAttempt::class);
     }
 
-    /**
-     * @return HasOne<BillingAttempt>
-     */
     public function latestBillingAttempt(): HasOne
     {
         return $this->hasOne(BillingAttempt::class)->latestOfMany();
@@ -130,53 +107,35 @@ class Debtor extends Model
         return trim("{$this->first_name} {$this->last_name}");
     }
 
-    public function getIbanMaskedAttribute(): string
+    public function scopeValid($query)
     {
-        if (strlen($this->iban) < 8) {
-            return $this->iban;
-        }
-        return substr($this->iban, 0, 4) . '****' . substr($this->iban, -4);
+        return $query->where('validation_status', self::VALIDATION_VALID);
     }
 
-    public function getFullAddressAttribute(): string
+    public function scopeInvalid($query)
     {
-        $parts = array_filter([
-            $this->street,
-            $this->street_number,
-            $this->floor ? "Floor {$this->floor}" : null,
-            $this->door ? "Door {$this->door}" : null,
-            $this->apartment ? "Apt {$this->apartment}" : null,
-        ]);
-        
-        $line1 = implode(' ', $parts);
-        $line2Parts = array_filter([$this->postcode, $this->city, $this->province, $this->country]);
-        $line2 = implode(', ', $line2Parts);
-        
-        return trim("{$line1}\n{$line2}");
+        return $query->where('validation_status', self::VALIDATION_INVALID);
     }
 
-    public function generateIbanHash(): void
+    public function scopeValidationPending($query)
     {
-        $this->iban_hash = hash('sha256', strtoupper(str_replace(' ', '', $this->iban)));
+        return $query->where('validation_status', self::VALIDATION_PENDING);
     }
 
-    public function isPending(): bool
+    public function scopeReadyForSync($query)
     {
-        return $this->status === self::STATUS_PENDING;
+        return $query->where('validation_status', self::VALIDATION_VALID)
+            ->where('status', self::STATUS_PENDING);
     }
 
-    public function isProcessing(): bool
+    public function hasValidationErrors(): bool
     {
-        return $this->status === self::STATUS_PROCESSING;
+        return !empty($this->validation_errors);
     }
 
-    public function isRecovered(): bool
+    public function isReadyForSync(): bool
     {
-        return $this->status === self::STATUS_RECOVERED;
-    }
-
-    public function isFailed(): bool
-    {
-        return $this->status === self::STATUS_FAILED;
+        return $this->validation_status === self::VALIDATION_VALID
+            && $this->status === self::STATUS_PENDING;
     }
 }

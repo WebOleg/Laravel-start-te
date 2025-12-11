@@ -1,7 +1,7 @@
 <?php
 
 /**
- * API Resource for transforming Upload model to JSON response.
+ * API resource for Upload model.
  */
 
 namespace App\Http\Resources;
@@ -11,9 +11,6 @@ use Illuminate\Http\Resources\Json\JsonResource;
 
 class UploadResource extends JsonResource
 {
-    /**
-     * @return array<string, mixed>
-     */
     public function toArray(Request $request): array
     {
         return [
@@ -23,26 +20,19 @@ class UploadResource extends JsonResource
             'file_size' => $this->file_size,
             'mime_type' => $this->mime_type,
             'status' => $this->status,
-            
-            // Record counts
             'total_records' => $this->total_records,
             'processed_records' => $this->processed_records,
             'failed_records' => $this->failed_records,
             'success_rate' => $this->success_rate,
-            
-            // Timestamps
+            'headers' => $this->headers,
             'processing_started_at' => $this->processing_started_at?->toISOString(),
             'processing_completed_at' => $this->processing_completed_at?->toISOString(),
             'created_at' => $this->created_at->toISOString(),
             'updated_at' => $this->updated_at->toISOString(),
-            
-            // Relations (loaded conditionally)
-            'uploader' => $this->whenLoaded('uploader', fn() => [
-                'id' => $this->uploader->id,
-                'name' => $this->uploader->name,
-            ]),
             'debtors_count' => $this->whenCounted('debtors'),
-            'debtors' => DebtorResource::collection($this->whenLoaded('debtors')),
+            'valid_count' => $this->when(isset($this->valid_count), $this->valid_count),
+            'invalid_count' => $this->when(isset($this->invalid_count), $this->invalid_count),
+            'uploader' => new UserResource($this->whenLoaded('uploader')),
         ];
     }
 }
