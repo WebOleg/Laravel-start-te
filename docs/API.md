@@ -86,6 +86,51 @@ GET /api/admin/debtors?page=2&per_page=50
 
 ## Endpoints
 
+### Dashboard
+
+#### Get Dashboard Statistics
+```
+GET /api/admin/dashboard
+Authorization: Bearer {token}
+```
+
+**Response:**
+```json
+{
+    "data": {
+        "uploads": {
+            "total": 25,
+            "pending": 2,
+            "processing": 1,
+            "completed": 20,
+            "failed": 2
+        },
+        "debtors": {
+            "total": 5000,
+            "by_status": {
+                "pending": 3000,
+                "processing": 500,
+                "recovered": 1200,
+                "failed": 300
+            },
+            "by_country": {
+                "ES": 2000,
+                "DE": 1500,
+                "NL": 800,
+                "FR": 500,
+                "IT": 200
+            }
+        },
+        "recent_activity": {
+            "latest_uploads": [...],
+            "latest_debtors": [...]
+        }
+    }
+}
+```
+
+---
+
 ### Uploads
 
 #### List Uploads
@@ -131,6 +176,62 @@ GET /api/admin/uploads/{id}
 ```
 
 **Response:** Single upload object with same structure.
+
+#### Create Upload
+```
+POST /api/admin/uploads
+Content-Type: multipart/form-data
+Authorization: Bearer {token}
+
+file: (binary)
+```
+
+**Response (sync, ≤100 rows):**
+```json
+{
+    "data": { ... },
+    "meta": {
+        "queued": false,
+        "created": 98,
+        "failed": 2,
+        "errors": [
+            {"row": 15, "message": "IBAN is invalid", "data": {...}},
+            {"row": 42, "message": "IBAN is blacklisted", "data": {...}}
+        ]
+    }
+}
+```
+
+**Response (async, >100 rows):**
+```json
+{
+    "data": { "id": 15, "status": "pending", ... },
+    "meta": {
+        "queued": true,
+        "message": "File queued for processing. Check status for updates."
+    }
+}
+```
+
+#### Get Upload Status
+```
+GET /api/admin/uploads/{id}/status
+```
+
+**Response:**
+```json
+{
+    "data": {
+        "id": 15,
+        "status": "processing",
+        "total_records": 5000,
+        "processed_records": 2500,
+        "failed_records": 3,
+        "progress": 50.06,
+        "is_complete": false
+    }
+}
+```
 
 ---
 
@@ -325,6 +426,8 @@ GET /api/admin/billing-attempts
 | Code | Description |
 |------|-------------|
 | 200 | Success |
+| 201 | Created (sync upload) |
+| 202 | Accepted (async upload queued) |
 | 401 | Unauthorized (missing/invalid token) |
 | 404 | Resource not found |
 | 422 | Validation error |

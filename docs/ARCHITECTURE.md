@@ -36,6 +36,9 @@
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────────┐           │
 │  │ uploads  │ │ debtors  │ │ vop_logs │ │ billing_attempts │           │
 │  └──────────┘ └──────────┘ └──────────┘ └──────────────────┘           │
+│  ┌────────────┐                                                         │
+│  │ blacklists │                                                         │
+│  └────────────┘                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -46,6 +49,7 @@ tether-laravel/
 │   ├── Http/
 │   │   ├── Controllers/
 │   │   │   ├── Admin/                 # Admin panel controllers
+│   │   │   │   ├── DashboardController.php
 │   │   │   │   ├── UploadController.php
 │   │   │   │   ├── DebtorController.php
 │   │   │   │   ├── VopLogController.php
@@ -57,12 +61,23 @@ tether-laravel/
 │   │       ├── DebtorResource.php
 │   │       ├── VopLogResource.php
 │   │       └── BillingAttemptResource.php
-│   └── Models/                        # Eloquent models
-│       ├── User.php
-│       ├── Upload.php
-│       ├── Debtor.php
-│       ├── VopLog.php
-│       └── BillingAttempt.php
+│   ├── Models/                        # Eloquent models
+│   │   ├── User.php
+│   │   ├── Upload.php
+│   │   ├── Debtor.php
+│   │   ├── VopLog.php
+│   │   ├── BillingAttempt.php
+│   │   └── Blacklist.php
+│   ├── Services/                      # Business logic
+│   │   ├── IbanValidator.php
+│   │   ├── SpreadsheetParserService.php
+│   │   ├── FileUploadService.php
+│   │   └── BlacklistService.php
+│   ├── Jobs/                          # Queue jobs
+│   │   ├── ProcessUploadJob.php
+│   │   └── ProcessUploadChunkJob.php
+│   └── Traits/                        # Shared traits
+│       └── ParsesDebtorData.php
 ├── bootstrap/
 │   └── app.php                        # Application bootstrap
 ├── database/
@@ -92,40 +107,43 @@ tether-laravel/
 │ email       │   └──▶│ uploaded_by │
 │ password    │       │ status      │
 └─────────────┘       │ total_records│
-                      └──────┬──────┘
-                             │
-                             │ 1:N
-                             ▼
-                      ┌─────────────┐
-                      │   debtors   │
-                      ├─────────────┤
-                      │ id          │
-                      │ upload_id   │◀─────────────────────┐
-                      │ iban        │                      │
-                      │ bank_name   │                      │
-                      │ bic         │                      │
-                      │ first_name  │                      │
-                      │ last_name   │                      │
-                      │ national_id │                      │
-                      │ birth_date  │                      │
-                      │ amount      │                      │
-                      │ status      │                      │
-                      └──────┬──────┘                      │
-                             │                             │
-              ┌──────────────┴──────────────┐              │
-              │ 1:N                    1:N  │              │
-              ▼                             ▼              │
-       ┌─────────────┐              ┌──────────────────┐   │
-       │  vop_logs   │              │ billing_attempts │   │
-       ├─────────────┤              ├──────────────────┤   │
-       │ id          │              │ id               │   │
-       │ debtor_id   │              │ debtor_id        │   │
-       │ upload_id   │──────────────│ upload_id        │───┘
-       │ iban_valid  │              │ transaction_id   │
-       │ vop_score   │              │ amount           │
-       │ result      │              │ status           │
-       └─────────────┘              │ attempt_number   │
-                                    └──────────────────┘
+      │               └──────┬──────┘
+      │                      │
+      │                      │ 1:N
+      │                      ▼
+      │               ┌─────────────┐
+      │               │   debtors   │
+      │               ├─────────────┤
+      │               │ id          │
+      │               │ upload_id   │◀─────────────────────┐
+      │               │ iban        │                      │
+      │               │ first_name  │                      │
+      │               │ last_name   │                      │
+      │               │ amount      │                      │
+      │               │ status      │                      │
+      │               └──────┬──────┘                      │
+      │                      │                             │
+      │       ┌──────────────┴──────────────┐              │
+      │       │ 1:N                    1:N  │              │
+      │       ▼                             ▼              │
+      │ ┌─────────────┐              ┌──────────────────┐  │
+      │ │  vop_logs   │              │ billing_attempts │  │
+      │ ├─────────────┤              ├──────────────────┤  │
+      │ │ id          │              │ id               │  │
+      │ │ debtor_id   │              │ debtor_id        │  │
+      │ │ upload_id   │──────────────│ upload_id        │──┘
+      │ │ result      │              │ status           │
+      │ └─────────────┘              └──────────────────┘
+      │
+      │  ┌─────────────┐
+      └─▶│ blacklists  │
+         ├─────────────┤
+         │ id          │
+         │ iban        │
+         │ iban_hash   │
+         │ reason      │
+         │ added_by    │
+         └─────────────┘
 ```
 
 ### Table Descriptions
@@ -237,6 +255,20 @@ SEPA Direct Debit payment attempts.
 | can_retry | boolean | Eligible for retry |
 | processed_at | timestamp | When processed |
 
+#### `blacklists`
+Blocked IBANs that should be rejected during upload processing.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | bigint | Primary key |
+| iban | string | Normalized IBAN (unique) |
+| iban_hash | string(64) | SHA-256 hash for fast lookup (unique, indexed) |
+| reason | string | Reason for blocking (nullable) |
+| source | string | Source: Manual, System, Chargeback (nullable) |
+| added_by | bigint | FK to users (nullable) |
+| created_at | timestamp | When added |
+| updated_at | timestamp | Last updated |
+
 ## Request Lifecycle
 ```
 1. HTTP Request
@@ -295,6 +327,7 @@ Factories generate test data with realistic values and states.
 - IBAN never exposed in API (masked)
 - IBAN hash for duplicate detection
 - Soft deletes preserve audit trail
+- Blacklist prevents processing of blocked IBANs
 
 ### Authorization (Future)
 - Role-based access control
@@ -366,8 +399,11 @@ Location: `app/Services/FileUploadService.php`
 Orchestrates file upload processing: parse, validate, create debtors.
 
 **Features:**
-- Automatic column mapping (multi-language headers)
+- Automatic column mapping (English headers)
+- Name splitting (full name → first_name + last_name)
+- Country extraction from IBAN
 - IBAN validation and enrichment
+- Blacklist checking
 - European/US amount format parsing
 - Date format detection
 
@@ -376,6 +412,66 @@ Orchestrates file upload processing: parse, validate, create debtors.
 $result = $uploadService->process($file, $userId);
 // Returns: ['upload' => Upload, 'created' => 10, 'failed' => 2, 'errors' => [...]]
 ```
+
+### BlacklistService
+
+Location: `app/Services/BlacklistService.php`
+
+Manages IBAN blacklist for blocking fraudulent or problematic accounts.
+
+**Methods:**
+
+| Method | Return | Description |
+|--------|--------|-------------|
+| `add(string $iban, ?string $reason, ?string $source, ?int $userId)` | Blacklist | Add IBAN to blacklist |
+| `remove(string $iban)` | bool | Remove IBAN from blacklist |
+| `isBlacklisted(string $iban)` | bool | Check if IBAN is blocked |
+
+**Usage:**
+```php
+use App\Services\BlacklistService;
+
+$blacklistService = app(BlacklistService::class);
+
+// Add to blacklist
+$blacklistService->add('DE89370400440532013000', 'Fraud', 'Manual', $userId);
+
+// Check during upload
+if ($blacklistService->isBlacklisted($iban)) {
+    throw new \InvalidArgumentException('IBAN is blacklisted');
+}
+
+// Remove from blacklist
+$blacklistService->remove('DE89370400440532013000');
+```
+
+## Traits
+
+### ParsesDebtorData
+
+Location: `app/Traits/ParsesDebtorData.php`
+
+Shared parsing logic used by FileUploadService and ProcessUploadJob.
+
+**Methods:**
+
+| Method | Description |
+|--------|-------------|
+| `splitFullName(array &$data)` | Split "John Doe" or "Doe, John" into first_name + last_name |
+| `enrichCountryFromIban(array &$data)` | Extract country code from IBAN if not provided |
+| `castValue(string $field, mixed $value)` | Type cast value based on field name |
+| `parseAmount(string $value)` | Parse EU (1.234,56) or US (1,234.56) format |
+| `parseDate(string $value)` | Parse various date formats |
+| `normalizeName(string $name)` | Convert "JOHN" to "John" |
+
+**Name Splitting Examples:**
+
+| Input | First Name | Last Name |
+|-------|------------|-----------|
+| JOHN DOE | John | Doe |
+| Doe, John | John | Doe |
+| Maria Del Pilar Rodriguez | Maria | Del Pilar Rodriguez |
+| Madonna | Madonna | Madonna |
 
 ## Queue Jobs
 
@@ -398,9 +494,14 @@ Background job for processing uploaded CSV/XLSX files.
 1. Job dispatched with Upload model
 2. Update status → processing
 3. Parse file (CSV/XLSX)
-4. Validate each row (IBAN, required fields)
-5. Create Debtor records
-6. Update status → completed/failed
+4. For each row:
+   - Map columns to fields
+   - Split full name if needed
+   - Extract country from IBAN
+   - Validate IBAN
+   - Check blacklist
+   - Create Debtor record
+5. Update status → completed/failed
 ```
 
 **Usage:**
@@ -414,6 +515,7 @@ ProcessUploadJob::dispatchSync($upload, $columnMapping);
 
 **Error Handling:**
 - Invalid rows logged to `upload.meta.errors`
+- Blacklisted IBANs rejected with "IBAN is blacklisted" error
 - Job failure updates upload status to `failed`
 - Exception message stored in `upload.meta.error`
 
