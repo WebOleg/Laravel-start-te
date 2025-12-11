@@ -30,10 +30,18 @@ migrate:
 	docker-compose exec app php artisan migrate
 
 fresh:
+	docker-compose exec app composer dump-autoload
 	docker-compose exec app php artisan migrate:fresh --seed
 
 seed:
 	docker-compose exec app php artisan db:seed
+
+# Composer
+autoload:
+	docker-compose exec app composer dump-autoload
+
+install:
+	docker-compose exec app composer install
 
 # Testing
 test:
@@ -61,8 +69,13 @@ help:
 	@echo "  make up        - Start containers"
 	@echo "  make down      - Stop containers"
 	@echo "  make restart   - Restart containers"
+	@echo "  make build     - Rebuild containers"
 	@echo "  make test      - Run all tests"
-	@echo "  make fresh     - Fresh migrate + seed"
+	@echo "  make fresh     - Autoload + fresh migrate + seed"
+	@echo "  make autoload  - Composer dump-autoload"
+	@echo "  make install   - Composer install"
 	@echo "  make bash      - Enter app container"
 	@echo "  make tinker    - Laravel tinker"
 	@echo "  make logs      - View logs"
+	@echo "  make cache     - Cache config & routes"
+	@echo "  make clear     - Clear all caches"

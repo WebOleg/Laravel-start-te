@@ -9,118 +9,107 @@ namespace App\Services;
 use App\Jobs\ProcessUploadJob;
 use App\Models\Upload;
 use App\Models\Debtor;
+use App\Traits\ParsesDebtorData;
 use Illuminate\Http\UploadedFile;
-use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 class FileUploadService
 {
+    use ParsesDebtorData;
+
     private const COLUMN_MAP = [
+        // IBAN
         'iban' => 'iban',
         'iban_number' => 'iban',
         'bank_account' => 'iban',
         'account_number' => 'iban',
 
+        // Full Name
+        'name' => 'name',
+        'full_name' => 'name',
+        'fullname' => 'name',
+        'customer_name' => 'name',
+        'debtor_name' => 'name',
+        'client_name' => 'name',
+        'account_holder' => 'name',
+
+        // First Name
         'first_name' => 'first_name',
         'firstname' => 'first_name',
-        'vorname' => 'first_name',
-        'nombre' => 'first_name',
 
+        // Last Name
         'last_name' => 'last_name',
         'lastname' => 'last_name',
-        'nachname' => 'last_name',
-        'apellido' => 'last_name',
         'surname' => 'last_name',
 
+        // Email
         'email' => 'email',
         'e_mail' => 'email',
         'mail' => 'email',
 
+        // Phone
         'phone' => 'phone',
+        'phone_1' => 'phone',
         'telephone' => 'phone',
-        'telefon' => 'phone',
-        'telefono' => 'phone',
-        'mobile' => 'phone',
-
+        'mobile' => 'mobile',
         'phone_2' => 'phone_2',
         'phone_3' => 'phone_3',
         'phone_4' => 'phone_4',
+        'primary_phone' => 'primary_phone',
 
+        // Address
         'address' => 'address',
         'street' => 'street',
-        'strasse' => 'street',
-        'calle' => 'street',
-
         'street_number' => 'street_number',
         'house_number' => 'street_number',
-        'hausnummer' => 'street_number',
-        'numero' => 'street_number',
-
         'floor' => 'floor',
-        'etage' => 'floor',
-        'piso' => 'floor',
-
         'door' => 'door',
         'apartment' => 'apartment',
         'apt' => 'apartment',
-        'wohnung' => 'apartment',
-
         'postcode' => 'postcode',
         'postal_code' => 'postcode',
         'zip' => 'postcode',
         'zip_code' => 'postcode',
-        'plz' => 'postcode',
-        'codigo_postal' => 'postcode',
-
         'city' => 'city',
-        'stadt' => 'city',
-        'ciudad' => 'city',
-        'ort' => 'city',
-
         'province' => 'province',
         'state' => 'province',
-        'bundesland' => 'province',
-        'provincia' => 'province',
-
         'country' => 'country',
-        'land' => 'country',
-        'pais' => 'country',
 
+        // Amount
         'amount' => 'amount',
-        'betrag' => 'amount',
-        'importe' => 'amount',
         'sum' => 'amount',
         'total' => 'amount',
+        'price' => 'amount',
 
+        // Currency
         'currency' => 'currency',
-        'wahrung' => 'currency',
-        'moneda' => 'currency',
 
+        // National ID
         'national_id' => 'national_id',
-        'dni' => 'national_id',
-        'nie' => 'national_id',
         'id_number' => 'national_id',
         'personal_id' => 'national_id',
-        'ausweisnummer' => 'national_id',
+        'dni' => 'national_id',
+        'nie' => 'national_id',
 
+        // Birth Date
         'birth_date' => 'birth_date',
         'birthdate' => 'birth_date',
         'date_of_birth' => 'birth_date',
         'dob' => 'birth_date',
-        'geburtsdatum' => 'birth_date',
-        'fecha_nacimiento' => 'birth_date',
 
+        // Bank
         'bank_name' => 'bank_name',
         'bank' => 'bank_name',
-        'banco' => 'bank_name',
-
         'bank_code' => 'bank_code',
-        'blz' => 'bank_code',
-
         'bic' => 'bic',
         'swift' => 'bic',
         'swift_code' => 'bic',
 
+        // SEPA
+        'sepa_type' => 'sepa_type',
+        'old_iban' => 'old_iban',
+
+        // Reference
         'external_reference' => 'external_reference',
         'reference' => 'external_reference',
         'ref' => 'external_reference',
@@ -134,8 +123,6 @@ class FileUploadService
     ) {}
 
     /**
-     * Process uploaded file asynchronously via queue.
-     *
      * @return array{upload: Upload, queued: bool}
      */
     public function processAsync(UploadedFile $file, ?int $userId = null): array
@@ -156,8 +143,6 @@ class FileUploadService
     }
 
     /**
-     * Process uploaded file synchronously (for small files or testing).
-     *
      * @return array{upload: Upload, created: int, failed: int, errors: array}
      */
     public function process(UploadedFile $file, ?int $userId = null): array
@@ -211,7 +196,7 @@ class FileUploadService
         $mapping = [];
 
         foreach ($headers as $header) {
-            $normalized = strtolower(trim($header));
+            $normalized = $this->normalizeColumnName($header);
 
             if (isset(self::COLUMN_MAP[$normalized])) {
                 $mapping[$header] = self::COLUMN_MAP[$normalized];
@@ -219,6 +204,13 @@ class FileUploadService
         }
 
         return $mapping;
+    }
+
+    private function normalizeColumnName(string $name): string
+    {
+        $name = strtolower(trim($name));
+        $name = preg_replace('/[^a-z0-9]+/', '_', $name);
+        return trim($name, '_');
     }
 
     /**
@@ -241,6 +233,7 @@ class FileUploadService
                 $debtorData['upload_id'] = $upload->id;
 
                 $this->validateAndEnrichIban($debtorData);
+                $this->enrichCountryFromIban($debtorData);
                 $this->validateRequiredFields($debtorData, $index);
 
                 Debtor::create($debtorData);
@@ -267,77 +260,17 @@ class FileUploadService
         ];
 
         foreach ($row as $header => $value) {
-            if (isset($columnMapping[$header]) && $value !== null) {
-                $field = $columnMapping[$header];
-                $data[$field] = $this->castValue($field, $value);
+            if (!isset($columnMapping[$header]) || $value === null) {
+                continue;
             }
+
+            $field = $columnMapping[$header];
+            $data[$field] = $this->castValue($field, $value);
         }
+
+        $this->splitFullName($data);
 
         return $data;
-    }
-
-    private function castValue(string $field, mixed $value): mixed
-    {
-        if ($value === null || $value === '') {
-            return null;
-        }
-
-        return match ($field) {
-            'amount' => $this->parseAmount($value),
-            'birth_date' => $this->parseDate($value),
-            'country' => strtoupper(substr(trim($value), 0, 2)),
-            'currency' => strtoupper(substr(trim($value), 0, 3)),
-            default => trim((string) $value),
-        };
-    }
-
-    private function parseAmount(mixed $value): ?float
-    {
-        if ($value === null || $value === '') {
-            return null;
-        }
-
-        $value = str_replace(' ', '', (string) $value);
-
-        if (str_contains($value, ',') && str_contains($value, '.')) {
-            if (strrpos($value, ',') > strrpos($value, '.')) {
-                $value = str_replace('.', '', $value);
-                $value = str_replace(',', '.', $value);
-            } else {
-                $value = str_replace(',', '', $value);
-            }
-        } elseif (str_contains($value, ',')) {
-            if (preg_match('/,\d{1,2}$/', $value)) {
-                $value = str_replace(',', '.', $value);
-            } else {
-                $value = str_replace(',', '', $value);
-            }
-        }
-
-        return (float) $value;
-    }
-
-    private function parseDate(mixed $value): ?string
-    {
-        if ($value === null || $value === '') {
-            return null;
-        }
-
-        $formats = ['Y-m-d', 'd.m.Y', 'd/m/Y', 'm/d/Y', 'd-m-Y'];
-
-        foreach ($formats as $format) {
-            $date = \DateTime::createFromFormat($format, trim($value));
-            if ($date) {
-                return $date->format('Y-m-d');
-            }
-        }
-
-        $timestamp = strtotime($value);
-        if ($timestamp) {
-            return date('Y-m-d', $timestamp);
-        }
-
-        return null;
     }
 
     private function validateAndEnrichIban(array &$data): void
@@ -353,7 +286,6 @@ class FileUploadService
         $data['iban_valid'] = $result['valid'];
 
         if ($result['valid']) {
-            $data['country'] = $data['country'] ?? $result['country_code'];
             $data['bank_code'] = $data['bank_code'] ?? $result['bank_id'];
         }
     }
@@ -369,7 +301,7 @@ class FileUploadService
         }
 
         if (empty($data['first_name']) && empty($data['last_name'])) {
-            $errors[] = 'Name is required (first_name or last_name)';
+            $errors[] = 'Name is required';
         }
 
         if (empty($data['amount']) || $data['amount'] <= 0) {

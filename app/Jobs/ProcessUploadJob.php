@@ -10,6 +10,7 @@ use App\Models\Upload;
 use App\Models\Debtor;
 use App\Services\SpreadsheetParserService;
 use App\Services\IbanValidator;
+use App\Traits\ParsesDebtorData;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -21,7 +22,7 @@ use Illuminate\Support\Facades\Log;
 
 class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
 {
-    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels, ParsesDebtorData;
 
     public int $tries = 3;
     public int $timeout = 600;
@@ -53,7 +54,7 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
             ]);
 
             $filePath = storage_path('app/' . $this->upload->file_path);
-            
+
             if (!file_exists($filePath)) {
                 throw new \RuntimeException("File not found: {$filePath}");
             }
@@ -154,6 +155,7 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
                 $debtorData['upload_id'] = $this->upload->id;
 
                 $this->validateAndEnrichIban($debtorData, $ibanValidator);
+                $this->enrichCountryFromIban($debtorData);
                 $this->validateRequiredFields($debtorData);
 
                 Debtor::create($debtorData);
@@ -204,67 +206,9 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
             }
         }
 
+        $this->splitFullName($data);
+
         return $data;
-    }
-
-    private function castValue(string $field, mixed $value): mixed
-    {
-        if ($value === null || $value === '') {
-            return null;
-        }
-
-        return match ($field) {
-            'amount' => $this->parseAmount($value),
-            'birth_date' => $this->parseDate($value),
-            'country' => strtoupper(substr(trim($value), 0, 2)),
-            'currency' => strtoupper(substr(trim($value), 0, 3)),
-            default => trim((string) $value),
-        };
-    }
-
-    private function parseAmount(mixed $value): ?float
-    {
-        if ($value === null || $value === '') {
-            return null;
-        }
-
-        $value = str_replace(' ', '', (string) $value);
-
-        if (str_contains($value, ',') && str_contains($value, '.')) {
-            if (strrpos($value, ',') > strrpos($value, '.')) {
-                $value = str_replace('.', '', $value);
-                $value = str_replace(',', '.', $value);
-            } else {
-                $value = str_replace(',', '', $value);
-            }
-        } elseif (str_contains($value, ',')) {
-            if (preg_match('/,\d{1,2}$/', $value)) {
-                $value = str_replace(',', '.', $value);
-            } else {
-                $value = str_replace(',', '', $value);
-            }
-        }
-
-        return (float) $value;
-    }
-
-    private function parseDate(mixed $value): ?string
-    {
-        if ($value === null || $value === '') {
-            return null;
-        }
-
-        $formats = ['Y-m-d', 'd.m.Y', 'd/m/Y', 'm/d/Y', 'd-m-Y'];
-
-        foreach ($formats as $format) {
-            $date = \DateTime::createFromFormat($format, trim($value));
-            if ($date) {
-                return $date->format('Y-m-d');
-            }
-        }
-
-        $timestamp = strtotime($value);
-        return $timestamp ? date('Y-m-d', $timestamp) : null;
     }
 
     private function validateAndEnrichIban(array &$data, IbanValidator $ibanValidator): void
@@ -280,7 +224,6 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
         $data['iban_valid'] = $result['valid'];
 
         if ($result['valid']) {
-            $data['country'] = $data['country'] ?? $result['country_code'];
             $data['bank_code'] = $data['bank_code'] ?? $result['bank_id'];
         }
     }
