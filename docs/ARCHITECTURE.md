@@ -591,3 +591,130 @@ redirect_stderr=true
 stdout_logfile=/var/www/storage/logs/horizon.log
 stopwaitsecs=3600
 ```
+
+### DebtorValidationService
+
+Location: `app/Services/DebtorValidationService.php`
+
+Validates debtor data in Stage B (after upload). Performs comprehensive validation including IBAN, required fields, encoding, and blacklist checks.
+
+**Methods:**
+
+| Method | Return | Description |
+|--------|--------|-------------|
+| `validateUpload(Upload $upload)` | array | Validate all pending debtors in upload |
+| `validateAndUpdate(Debtor $debtor)` | void | Validate single debtor and update status |
+| `validate(Debtor $debtor)` | array | Returns ['valid' => bool, 'errors' => [...]] |
+
+**Validation Rules:**
+
+| Field | Rule | Error Message |
+|-------|------|---------------|
+| IBAN | Required, valid checksum | "IBAN is required" / "IBAN is invalid" |
+| Name | first_name OR last_name | "Name is required" |
+| Amount | Required, > 0, ≤ 50000 | "Amount is required" / "Amount must be positive" |
+| City | Required, 2-100 chars, valid encoding | "City is required" / "City contains invalid characters" |
+| Postcode | Required, 3-20 chars | "Postal code is required" |
+| Address | Required, 5-200 chars, valid encoding | "Address is required" |
+| Blacklist | IBAN not in blacklist | "IBAN is blacklisted" |
+
+**Usage:**
+```php
+use App\Services\DebtorValidationService;
+
+$service = app(DebtorValidationService::class);
+
+// Validate entire upload
+$stats = $service->validateUpload($upload);
+// Returns: ['total' => 100, 'valid' => 85, 'invalid' => 15]
+
+// Validate single debtor
+$service->validateAndUpdate($debtor);
+// Updates: validation_status, validation_errors, validated_at
+```
+
+## Two-Stage Upload Flow
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     STAGE A: UPLOAD                              │
+│                                                                  │
+│  1. Parse CSV/XLSX file                                         │
+│  2. Save ALL rows (even invalid)                                │
+│  3. Set validation_status = 'pending'                           │
+│  4. Store raw_data (original CSV row)                           │
+│  5. Store headers (column names)                                │
+│                                                                  │
+│  Result: User sees ALL data, can edit before validation         │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    STAGE B: VALIDATION                           │
+│                                                                  │
+│  1. User clicks "Validate" button                               │
+│  2. DebtorValidationService runs all rules                      │
+│  3. Update validation_status = 'valid' or 'invalid'             │
+│  4. Store validation_errors (if any)                            │
+│  5. Set validated_at timestamp                                  │
+│                                                                  │
+│  Result: User sees validation results, can fix and re-validate  │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    STAGE C: SYNC (Future)                        │
+│                                                                  │
+│  Only debtors with:                                             │
+│    - validation_status = 'valid'                                │
+│    - status = 'pending'                                         │
+│                                                                  │
+│  Are sent to payment gateway                                    │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Additional Debtor Fields (Validation)
+
+| Column | Type | Description |
+|--------|------|-------------|
+| validation_status | string | pending, valid, invalid |
+| validation_errors | json | Array of error messages |
+| validated_at | timestamp | When last validated |
+| raw_data | json | Original CSV row data |
+
+### Additional Upload Fields
+
+| Column | Type | Description |
+|--------|------|-------------|
+| headers | json | CSV column headers for dynamic UI |
+
+### Debtor Constants
+```php
+class Debtor extends Model
+{
+    const STATUS_PENDING = 'pending';
+    const STATUS_PROCESSING = 'processing';
+    const STATUS_RECOVERED = 'recovered';
+    const STATUS_FAILED = 'failed';
+
+    const VALIDATION_PENDING = 'pending';
+    const VALIDATION_VALID = 'valid';
+    const VALIDATION_INVALID = 'invalid';
+
+    const RISK_CLASSES = ['low', 'medium', 'high'];
+}
+```
+
+### Validation Scopes
+```php
+// Get valid debtors
+$upload->debtors()->valid();
+
+// Get invalid debtors
+$upload->debtors()->invalid();
+
+// Get pending validation
+$upload->debtors()->validationPending();
+
+// Get ready for sync (valid + pending status)
+$upload->debtors()->readyForSync();
+```

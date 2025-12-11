@@ -18,7 +18,7 @@ A SaaS platform for automated debt recovery through SEPA Direct Debit payments.
 
 Tether enables merchants to recover outstanding debts through automated SEPA Direct Debit collection. The platform provides:
 
-- **CSV Upload Processing**: Bulk debtor import with validation
+- **CSV Upload Processing**: Bulk debtor import with two-stage validation
 - **VOP Verification**: IBAN validation and bank identification
 - **Automated Billing**: SEPA Direct Debit payment attempts with retry logic
 - **Admin Panel**: Real-time monitoring and management
@@ -114,10 +114,12 @@ docker-compose exec app php artisan test --filter=UploadControllerTest
 
 | Controller | Tests | Status |
 |------------|-------|--------|
-| UploadController | 5 | ✅ |
-| DebtorController | 7 | ✅ |
+| UploadController | 8 | ✅ |
+| DebtorController | 9 | ✅ |
 | VopLogController | 5 | ✅ |
 | BillingAttemptController | 6 | ✅ |
+| UploadValidationTest | 5 | ✅ |
+| BlacklistUploadTest | 4 | ✅ |
 
 ## API Documentation
 
@@ -133,12 +135,24 @@ See [docs/API.md](docs/API.md) for detailed API documentation.
 |--------|----------|-------------|
 | GET | `/admin/uploads` | List all uploads |
 | GET | `/admin/uploads/{id}` | Get upload details |
+| POST | `/admin/uploads` | Create upload (multipart) |
+| GET | `/admin/uploads/{id}/status` | Get upload status |
+| POST | `/admin/uploads/{id}/validate` | Trigger validation |
+| GET | `/admin/uploads/{id}/validation-stats` | Get validation stats |
+| GET | `/admin/uploads/{id}/debtors` | List upload debtors |
 | GET | `/admin/debtors` | List all debtors |
 | GET | `/admin/debtors/{id}` | Get debtor details |
+| PUT | `/admin/debtors/{id}` | Update debtor (raw_data) |
 | GET | `/admin/vop-logs` | List VOP verifications |
 | GET | `/admin/vop-logs/{id}` | Get VOP details |
 | GET | `/admin/billing-attempts` | List billing attempts |
 | GET | `/admin/billing-attempts/{id}` | Get attempt details |
+
+### Two-Stage Validation Flow
+
+1. **Stage A (Upload)**: All rows accepted, saved with `validation_status=pending`
+2. **Stage B (Validation)**: User triggers validation via `/validate` endpoint
+3. **Stage C (Sync)**: Only valid debtors sent to payment gateway
 
 ## Project Structure
 ```
@@ -148,6 +162,14 @@ app/
 │   │   └── Admin/           # Admin API controllers
 │   └── Resources/           # API JSON transformers
 ├── Models/                  # Eloquent models
+├── Services/                # Business logic
+│   ├── IbanValidator.php
+│   ├── FileUploadService.php
+│   ├── DebtorValidationService.php
+│   └── BlacklistService.php
+├── Jobs/                    # Queue jobs
+│   ├── ProcessUploadJob.php
+│   └── ProcessUploadChunkJob.php
 database/
 ├── factories/               # Test data factories
 ├── migrations/              # Database schema

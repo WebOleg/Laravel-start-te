@@ -432,3 +432,174 @@ GET /api/admin/billing-attempts
 | 404 | Resource not found |
 | 422 | Validation error |
 | 500 | Server error |
+
+---
+
+### Upload Validation (Two-Stage Flow)
+
+The upload process uses two stages:
+- **Stage A (Upload):** Accept ALL rows, save with `validation_status=pending`
+- **Stage B (Validation):** Run validation on demand, update statuses
+
+#### Get Upload Debtors
+```
+GET /api/admin/uploads/{id}/debtors
+```
+
+**Query Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `validation_status` | string | Filter: `pending`, `valid`, `invalid` |
+| `search` | string | Search by name, IBAN, email |
+| `per_page` | integer | Items per page (default: 50) |
+
+**Response:**
+```json
+{
+    "data": [
+        {
+            "id": 101,
+            "upload_id": 1,
+            "iban_masked": "ES05****0723",
+            "first_name": "Maria",
+            "last_name": "Rodriguez",
+            "amount": 150.00,
+            "validation_status": "valid",
+            "validation_errors": null,
+            "validated_at": "2025-12-11T10:00:00Z",
+            "raw_data": {
+                "first_name": "Maria",
+                "last_name": "Rodriguez",
+                "iban": "ES0500190050054010130723",
+                "amount": "150.00",
+                "custom_field": "extra_value"
+            }
+        }
+    ],
+    "meta": { ... }
+}
+```
+
+#### Validate Upload
+```
+POST /api/admin/uploads/{id}/validate
+Authorization: Bearer {token}
+```
+
+Triggers validation for all debtors with `validation_status=pending`.
+
+**Response:**
+```json
+{
+    "message": "Validation completed",
+    "data": {
+        "total": 100,
+        "valid": 85,
+        "invalid": 15
+    }
+}
+```
+
+**Error (upload still processing):**
+```json
+{
+    "message": "Upload is still processing. Please wait.",
+    "status": 422
+}
+```
+
+#### Get Validation Stats
+```
+GET /api/admin/uploads/{id}/validation-stats
+Authorization: Bearer {token}
+```
+
+**Response:**
+```json
+{
+    "data": {
+        "total": 100,
+        "valid": 85,
+        "invalid": 10,
+        "pending": 3,
+        "blacklisted": 2,
+        "ready_for_sync": 85
+    }
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `total` | Total debtors in upload |
+| `valid` | Passed all validation rules |
+| `invalid` | Failed validation (excluding blacklisted) |
+| `pending` | Not yet validated |
+| `blacklisted` | IBAN in blacklist |
+| `ready_for_sync` | Valid + pending status (ready for billing) |
+
+---
+
+### Individual Debtor Validation
+
+#### Validate Single Debtor
+```
+POST /api/admin/debtors/{id}/validate
+Authorization: Bearer {token}
+```
+
+**Response:**
+```json
+{
+    "message": "Validation completed",
+    "data": {
+        "id": 101,
+        "validation_status": "invalid",
+        "validation_errors": [
+            "IBAN is required",
+            "City is required"
+        ],
+        "validated_at": "2025-12-11T10:00:00Z"
+    }
+}
+```
+
+#### Update Debtor (via raw_data)
+```
+PUT /api/admin/debtors/{id}
+Content-Type: application/json
+Authorization: Bearer {token}
+
+{
+    "raw_data": {
+        "first_name": "Johann",
+        "last_name": "Mueller",
+        "iban": "DE89370400440532013000",
+        "amount": "200.00",
+        "city": "Berlin",
+        "postcode": "10115",
+        "address": "Main St 1"
+    }
+}
+```
+
+Updates debtor fields from raw_data and triggers re-validation.
+
+**Response:** Updated debtor object with new `validation_status`.
+
+---
+
+## Validation Rules
+
+Debtors are validated against these rules:
+
+| Field | Rule | Error Message |
+|-------|------|---------------|
+| IBAN | Required, valid checksum | "IBAN is required" / "IBAN is invalid" |
+| Name | first_name OR last_name required | "Name is required" |
+| Amount | Required, > 0, ≤ 50000 | "Amount is required" / "Amount must be positive" |
+| City | Required, 2-100 chars, valid encoding | "City is required" / "City contains invalid characters" |
+| Postcode | Required, 3-20 chars | "Postal code is required" |
+| Address | Required, 5-200 chars, valid encoding | "Address is required" |
+| Blacklist | IBAN not in blacklist | "IBAN is blacklisted" |
+
