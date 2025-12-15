@@ -163,7 +163,14 @@ GET /api/admin/uploads
             "processing_completed_at": "2025-12-04T10:05:00Z",
             "created_at": "2025-12-04T09:59:00Z",
             "updated_at": "2025-12-04T10:05:00Z",
-            "debtors_count": 100
+            "debtors_count": 100,
+            "skipped": {
+                "total": 5,
+                "blacklisted": 2,
+                "chargebacked": 1,
+                "already_recovered": 1,
+                "recently_attempted": 1
+            }
         }
     ],
     "meta": { ... }
@@ -192,15 +199,30 @@ file: (binary)
     "data": { ... },
     "meta": {
         "queued": false,
-        "created": 98,
+        "created": 95,
         "failed": 2,
+        "skipped": {
+            "total": 3,
+            "blacklisted": 1,
+            "chargebacked": 1,
+            "already_recovered": 0,
+            "recently_attempted": 1
+        },
         "errors": [
-            {"row": 15, "message": "IBAN is invalid", "data": {...}},
-            {"row": 42, "message": "IBAN is blacklisted", "data": {...}}
+            {"row": 15, "message": "Parse error", "data": {...}}
         ]
     }
 }
 ```
+
+**Skipped Reasons:**
+
+| Reason | Block Type | Description |
+|--------|------------|-------------|
+| `blacklisted` | Permanent | IBAN exists in blacklist table |
+| `chargebacked` | Permanent | IBAN has previous chargeback |
+| `already_recovered` | Permanent | Debt already recovered for this IBAN |
+| `recently_attempted` | 7-day cooldown | Billing attempt within last 7 days |
 
 **Response (async, >100 rows):**
 ```json
@@ -379,7 +401,7 @@ GET /api/admin/billing-attempts
 |-----------|------|-------------|
 | `upload_id` | integer | Filter by upload ID |
 | `debtor_id` | integer | Filter by debtor ID |
-| `status` | string | Filter: `pending`, `approved`, `declined`, `error`, `voided` |
+| `status` | string | Filter: `pending`, `approved`, `declined`, `error`, `voided`, `chargebacked` |
 
 **Response:**
 ```json
@@ -435,11 +457,24 @@ GET /api/admin/billing-attempts
 
 ---
 
-### Upload Validation (Two-Stage Flow)
+## Two-Stage Processing Flow
 
-The upload process uses two stages:
-- **Stage A (Upload):** Accept ALL rows, save with `validation_status=pending`
-- **Stage B (Validation):** Run validation on demand, update statuses
+### Stage 1: Upload (Deduplication)
+
+During CSV upload, IBANs are checked against deduplication rules. Records that match are **skipped** (not created in database).
+
+**Deduplication Rules:**
+
+| Rule | Block Type | Check |
+|------|------------|-------|
+| Blacklisted | Permanent | `blacklists.iban_hash` exists |
+| Chargebacked | Permanent | `billing_attempts.status = 'chargebacked'` |
+| Already Recovered | Permanent | `debtors.status = 'recovered'` |
+| Recently Attempted | 7-day cooldown | `billing_attempts.created_at > now() - 7 days` |
+
+### Stage 2: Validation
+
+After upload, records are validated for data quality. This happens automatically when viewing upload details.
 
 #### Get Upload Debtors
 ```
@@ -522,21 +557,27 @@ Authorization: Bearer {token}
         "total": 100,
         "valid": 85,
         "invalid": 10,
-        "pending": 3,
-        "blacklisted": 2,
-        "ready_for_sync": 85
+        "pending": 5,
+        "ready_for_sync": 85,
+        "skipped": {
+            "total": 3,
+            "blacklisted": 1,
+            "chargebacked": 1,
+            "already_recovered": 0,
+            "recently_attempted": 1
+        }
     }
 }
 ```
 
 | Field | Description |
 |-------|-------------|
-| `total` | Total debtors in upload |
+| `total` | Total debtors created in upload |
 | `valid` | Passed all validation rules |
-| `invalid` | Failed validation (excluding blacklisted) |
+| `invalid` | Failed validation |
 | `pending` | Not yet validated |
-| `blacklisted` | IBAN in blacklist |
 | `ready_for_sync` | Valid + pending status (ready for billing) |
+| `skipped` | Records skipped during upload (from meta) |
 
 ---
 
@@ -601,5 +642,3 @@ Debtors are validated against these rules:
 | City | Required, 2-100 chars, valid encoding | "City is required" / "City contains invalid characters" |
 | Postcode | Required, 3-20 chars | "Postal code is required" |
 | Address | Required, 5-200 chars, valid encoding | "Address is required" |
-| Blacklist | IBAN not in blacklist | "IBAN is blacklisted" |
-
