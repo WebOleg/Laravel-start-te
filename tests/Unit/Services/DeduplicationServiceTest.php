@@ -221,4 +221,82 @@ class DeduplicationServiceTest extends TestCase
 
         $this->assertEquals(DeduplicationService::SKIP_BLACKLISTED, $result['reason']);
     }
+
+    public function test_blocks_iban_on_day_6(): void
+    {
+        $iban = 'DE89370400440532013000';
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'iban' => $iban,
+            'iban_hash' => $this->ibanValidator->hash($iban),
+        ]);
+
+        $attempt = BillingAttempt::create([
+            'debtor_id' => $debtor->id,
+            'upload_id' => $upload->id,
+            'transaction_id' => 'tx_day6',
+            'amount' => 100,
+            'status' => BillingAttempt::STATUS_PENDING,
+        ]);
+        
+        $attempt->forceFill(['created_at' => now()->subDays(6)])->saveQuietly();
+
+        $result = $this->service->checkIban($iban);
+
+        $this->assertNotNull($result);
+        $this->assertEquals(DeduplicationService::SKIP_RECENTLY_ATTEMPTED, $result['reason']);
+        $this->assertEquals(6, $result['days_ago']);
+    }
+
+    public function test_allows_iban_on_day_8(): void
+    {
+        $iban = 'DE89370400440532013000';
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'iban' => $iban,
+            'iban_hash' => $this->ibanValidator->hash($iban),
+        ]);
+
+        $attempt = BillingAttempt::create([
+            'debtor_id' => $debtor->id,
+            'upload_id' => $upload->id,
+            'transaction_id' => 'tx_day8',
+            'amount' => 100,
+            'status' => BillingAttempt::STATUS_DECLINED,
+        ]);
+        
+        $attempt->forceFill(['created_at' => now()->subDays(8)])->saveQuietly();
+
+        $result = $this->service->checkIban($iban);
+
+        $this->assertNull($result);
+    }
+
+    public function test_blocks_iban_exactly_on_day_7(): void
+    {
+        $iban = 'DE89370400440532013000';
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'iban' => $iban,
+            'iban_hash' => $this->ibanValidator->hash($iban),
+        ]);
+
+        $attempt = BillingAttempt::create([
+            'debtor_id' => $debtor->id,
+            'upload_id' => $upload->id,
+            'transaction_id' => 'tx_day7',
+            'amount' => 100,
+            'status' => BillingAttempt::STATUS_ERROR,
+        ]);
+        
+        $attempt->forceFill(['created_at' => now()->subDays(7)])->saveQuietly();
+
+        $result = $this->service->checkIban($iban);
+
+        $this->assertNotNull($result);
+        $this->assertEquals(DeduplicationService::SKIP_RECENTLY_ATTEMPTED, $result['reason']);
+    }
 }
