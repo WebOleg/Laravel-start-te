@@ -14,6 +14,7 @@ namespace App\Services;
 use App\Models\Blacklist;
 use App\Models\BillingAttempt;
 use App\Models\Debtor;
+use Illuminate\Support\Facades\DB;
 
 class DeduplicationService
 {
@@ -136,49 +137,70 @@ class DeduplicationService
 
     /**
      * Check multiple IBANs in batch for better performance.
+     * Uses optimized JOINs instead of whereHas subqueries.
      * 
      * @param array<string> $ibanHashes
      * @return array<string, array{reason: string, permanent: bool, days_ago?: int, last_status?: string}>
      */
     public function checkBatch(array $ibanHashes, ?int $excludeUploadId = null): array
     {
+        if (empty($ibanHashes)) {
+            return [];
+        }
+
         $results = [];
 
+        // 1. Blacklisted - single indexed query
         $blacklisted = Blacklist::whereIn('iban_hash', $ibanHashes)
             ->pluck('iban_hash')
             ->flip()
-            ->toArray();
+            ->all();
 
-        $chargebacked = BillingAttempt::whereHas('debtor', function ($q) use ($ibanHashes) {
-            $q->whereIn('iban_hash', $ibanHashes);
-        })
-            ->where('status', BillingAttempt::STATUS_CHARGEBACKED)
-            ->with('debtor:id,iban_hash')
-            ->get()
-            ->pluck('debtor.iban_hash')
-            ->flip()
-            ->toArray();
-
-        $recovered = Debtor::whereIn('iban_hash', $ibanHashes)
-            ->where('status', Debtor::STATUS_RECOVERED)
-            ->when($excludeUploadId, fn($q) => $q->where('upload_id', '!=', $excludeUploadId))
+        // 2. Recovered - single indexed query
+        $recoveredQuery = Debtor::whereIn('iban_hash', $ibanHashes)
+            ->where('status', Debtor::STATUS_RECOVERED);
+        
+        if ($excludeUploadId) {
+            $recoveredQuery->where('upload_id', '!=', $excludeUploadId);
+        }
+        
+        $recovered = $recoveredQuery
             ->pluck('iban_hash')
             ->flip()
-            ->toArray();
+            ->all();
 
+        // 3. Chargebacked - optimized JOIN query
+        $chargebacked = DB::table('billing_attempts')
+            ->join('debtors', 'billing_attempts.debtor_id', '=', 'debtors.id')
+            ->whereIn('debtors.iban_hash', $ibanHashes)
+            ->where('billing_attempts.status', BillingAttempt::STATUS_CHARGEBACKED)
+            ->distinct()
+            ->pluck('debtors.iban_hash')
+            ->flip()
+            ->all();
+
+        // 4. Recently attempted - optimized JOIN query with date filter
         $cutoffDate = now()->subDays(self::COOLDOWN_DAYS);
-        $recentAttempts = BillingAttempt::whereHas('debtor', function ($q) use ($ibanHashes, $excludeUploadId) {
-            $q->whereIn('iban_hash', $ibanHashes)
-                ->when($excludeUploadId, fn($q) => $q->where('upload_id', '!=', $excludeUploadId));
-        })
-            ->whereIn('status', BillingAttempt::IN_FLIGHT_STATUSES)
-            ->where('created_at', '>=', $cutoffDate)
-            ->with('debtor:id,iban_hash')
+        
+        $recentAttemptsQuery = DB::table('billing_attempts')
+            ->join('debtors', 'billing_attempts.debtor_id', '=', 'debtors.id')
+            ->whereIn('debtors.iban_hash', $ibanHashes)
+            ->whereIn('billing_attempts.status', BillingAttempt::IN_FLIGHT_STATUSES)
+            ->where('billing_attempts.created_at', '>=', $cutoffDate);
+        
+        if ($excludeUploadId) {
+            $recentAttemptsQuery->where('debtors.upload_id', '!=', $excludeUploadId);
+        }
+        
+        $recentAttempts = $recentAttemptsQuery
+            ->select('debtors.iban_hash', 'billing_attempts.status', 'billing_attempts.created_at')
+            ->orderByDesc('billing_attempts.created_at')
             ->get()
-            ->groupBy('debtor.iban_hash')
-            ->map(fn($attempts) => $attempts->sortByDesc('created_at')->first())
-            ->toArray();
+            ->groupBy('iban_hash')
+            ->map(fn($group) => $group->first())
+            ->all();
 
+        // Build results with priority: blacklist > chargeback > recovered > recent
         foreach ($ibanHashes as $hash) {
             if (isset($blacklisted[$hash])) {
                 $results[$hash] = ['reason' => self::SKIP_BLACKLISTED, 'permanent' => true];
@@ -188,11 +210,12 @@ class DeduplicationService
                 $results[$hash] = ['reason' => self::SKIP_RECOVERED, 'permanent' => true];
             } elseif (isset($recentAttempts[$hash])) {
                 $attempt = $recentAttempts[$hash];
+                $createdAt = \Carbon\Carbon::parse($attempt->created_at);
                 $results[$hash] = [
                     'reason' => self::SKIP_RECENTLY_ATTEMPTED,
                     'permanent' => false,
-                    'days_ago' => (int) $attempt['created_at']->diffInDays(now()),
-                    'last_status' => $attempt['status'],
+                    'days_ago' => (int) $createdAt->diffInDays(now()),
+                    'last_status' => $attempt->status,
                 ];
             }
         }
