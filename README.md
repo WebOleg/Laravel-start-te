@@ -59,14 +59,23 @@ Tether enables merchants to recover outstanding debts through automated SEPA Dir
    make up
 ```
 
-4. **Run migrations and seed**
+4. **Install dependencies**
+```bash
+   # If vendor/ directory has permission issues (owned by root)
+   sudo chown -R $USER:$USER vendor/ storage/ bootstrap/cache/
+
+   # Install Composer dependencies
+   composer install
+```
+
+5. **Run migrations and seed**
 ```bash
    docker-compose exec app php artisan migrate --seed
    # or
    make fresh
 ```
 
-5. **Generate API token** (for testing)
+6. **Generate API token** (for testing)
 ```bash
    docker-compose exec app php artisan tinker
    >>> User::first()->createToken('dev')->plainTextToken

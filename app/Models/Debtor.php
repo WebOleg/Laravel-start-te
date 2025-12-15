@@ -26,7 +26,10 @@ class Debtor extends Model
     public const VALIDATION_VALID = 'valid';
     public const VALIDATION_INVALID = 'invalid';
 
-    public const RISK_CLASSES = ['low', 'medium', 'high'];
+    public const RISK_LOW = 'low';
+    public const RISK_MEDIUM = 'medium';
+    public const RISK_HIGH = 'high';
+    public const RISK_CLASSES = [self::RISK_LOW, self::RISK_MEDIUM, self::RISK_HIGH];
 
     protected $fillable = [
         'upload_id',
