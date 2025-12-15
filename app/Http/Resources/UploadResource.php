@@ -13,6 +13,8 @@ class UploadResource extends JsonResource
 {
     public function toArray(Request $request): array
     {
+        $meta = $this->meta ?? [];
+
         return [
             'id' => $this->id,
             'filename' => $this->filename,
@@ -32,6 +34,8 @@ class UploadResource extends JsonResource
             'debtors_count' => $this->whenCounted('debtors'),
             'valid_count' => $this->when(isset($this->valid_count), $this->valid_count),
             'invalid_count' => $this->when(isset($this->invalid_count), $this->invalid_count),
+            'skipped' => $this->when(isset($meta['skipped']), $meta['skipped'] ?? null),
+            'skipped_rows' => $this->when(isset($meta['skipped_rows']), $meta['skipped_rows'] ?? null),
             'uploader' => new UserResource($this->whenLoaded('uploader')),
         ];
     }

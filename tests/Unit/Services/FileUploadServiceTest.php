@@ -3,8 +3,8 @@
 /**
  * Unit tests for FileUploadService.
  * 
- * Stage A: FileUploadService accepts ALL rows without validation
- * Stage B: DebtorValidationService validates (including blacklist check)
+ * Stage A: FileUploadService accepts rows and skips duplicates/blacklisted
+ * Stage B: DebtorValidationService validates remaining records
  */
 
 namespace Tests\Unit\Services;
@@ -12,6 +12,7 @@ namespace Tests\Unit\Services;
 use App\Models\Debtor;
 use App\Services\FileUploadService;
 use App\Services\BlacklistService;
+use App\Services\DeduplicationService;
 use App\Services\IbanValidator;
 use App\Services\SpreadsheetParserService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -22,45 +23,41 @@ class FileUploadServiceTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_process_accepts_all_rows_including_blacklisted(): void
+    private function createService(): FileUploadService
     {
-        // Stage A: Upload accepts ALL rows, blacklist check is in Stage B
+        $ibanValidator = new IbanValidator();
+        $blacklistService = new BlacklistService($ibanValidator);
+        $deduplicationService = new DeduplicationService($ibanValidator);
+
+        return new FileUploadService(
+            new SpreadsheetParserService(),
+            $ibanValidator,
+            $blacklistService,
+            $deduplicationService
+        );
+    }
+
+    public function test_process_skips_blacklisted_iban(): void
+    {
         $ibanValidator = new IbanValidator();
         $blacklistService = new BlacklistService($ibanValidator);
         $blacklistService->add('DE89370400440532013000', 'Fraud');
 
-        $service = new FileUploadService(
-            new SpreadsheetParserService(),
-            $ibanValidator,
-            $blacklistService
-        );
+        $service = $this->createService();
 
         $content = "first_name,last_name,iban,amount\nJohn,Doe,DE89370400440532013000,100.00";
         $file = UploadedFile::fake()->createWithContent('test.csv', $content);
 
         $result = $service->process($file);
 
-        // Row is accepted in Stage A
-        $this->assertEquals(1, $result['created']);
-        $this->assertEquals(0, $result['failed']);
-
-        // Record saved with pending status
-        $this->assertDatabaseHas('debtors', [
-            'iban' => 'DE89370400440532013000',
-            'validation_status' => Debtor::VALIDATION_PENDING,
-        ]);
+        $this->assertEquals(0, $result['created']);
+        $this->assertEquals(1, $result['skipped']['total']);
+        $this->assertEquals(1, $result['skipped']['blacklisted']);
     }
 
     public function test_process_accepts_clean_iban(): void
     {
-        $ibanValidator = new IbanValidator();
-        $blacklistService = new BlacklistService($ibanValidator);
-
-        $service = new FileUploadService(
-            new SpreadsheetParserService(),
-            $ibanValidator,
-            $blacklistService
-        );
+        $service = $this->createService();
 
         $content = "first_name,last_name,iban,amount\nJohn,Doe,DE89370400440532013000,100.00";
         $file = UploadedFile::fake()->createWithContent('test.csv', $content);
@@ -69,18 +66,12 @@ class FileUploadServiceTest extends TestCase
 
         $this->assertEquals(1, $result['created']);
         $this->assertEquals(0, $result['failed']);
+        $this->assertEquals(0, $result['skipped']['total']);
     }
 
     public function test_process_saves_raw_data(): void
     {
-        $ibanValidator = new IbanValidator();
-        $blacklistService = new BlacklistService($ibanValidator);
-
-        $service = new FileUploadService(
-            new SpreadsheetParserService(),
-            $ibanValidator,
-            $blacklistService
-        );
+        $service = $this->createService();
 
         $content = "first_name,last_name,iban,amount,custom\nJohn,Doe,DE89370400440532013000,100.00,extra";
         $file = UploadedFile::fake()->createWithContent('test.csv', $content);
@@ -94,14 +85,7 @@ class FileUploadServiceTest extends TestCase
 
     public function test_process_saves_headers_to_upload(): void
     {
-        $ibanValidator = new IbanValidator();
-        $blacklistService = new BlacklistService($ibanValidator);
-
-        $service = new FileUploadService(
-            new SpreadsheetParserService(),
-            $ibanValidator,
-            $blacklistService
-        );
+        $service = $this->createService();
 
         $content = "first_name,last_name,iban,amount\nJohn,Doe,DE89370400440532013000,100.00";
         $file = UploadedFile::fake()->createWithContent('test.csv', $content);
@@ -111,5 +95,22 @@ class FileUploadServiceTest extends TestCase
         $upload = $result['upload'];
         $this->assertIsArray($upload->headers);
         $this->assertContains('first_name', $upload->headers);
+    }
+
+    public function test_process_returns_skipped_rows_info(): void
+    {
+        $ibanValidator = new IbanValidator();
+        $blacklistService = new BlacklistService($ibanValidator);
+        $blacklistService->add('DE89370400440532013000', 'Fraud');
+
+        $service = $this->createService();
+
+        $content = "first_name,last_name,iban,amount\nJohn,Doe,DE89370400440532013000,100.00";
+        $file = UploadedFile::fake()->createWithContent('test.csv', $content);
+
+        $result = $service->process($file);
+
+        $this->assertNotEmpty($result['skipped']);
+        $this->assertArrayHasKey('skipped_rows', $result['upload']->meta);
     }
 }

@@ -97,6 +97,7 @@ class UploadController extends Controller
                     'queued' => false,
                     'created' => $result['created'],
                     'failed' => $result['failed'],
+                    'skipped' => $result['skipped'],
                     'errors' => array_slice($result['errors'], 0, 10),
                 ],
             ], 201);
@@ -183,7 +184,6 @@ class UploadController extends Controller
             ", [Debtor::VALIDATION_VALID, Debtor::VALIDATION_INVALID, Debtor::VALIDATION_PENDING])
             ->first();
 
-        // Count blacklisted (cross-database compatible)
         $driver = DB::connection()->getDriverName();
         $blacklistQuery = $upload->debtors()
             ->where('validation_status', Debtor::VALIDATION_INVALID);
@@ -193,11 +193,13 @@ class UploadController extends Controller
                 ->whereRaw("validation_errors::text LIKE ?", ['%blacklist%'])
                 ->count();
         } else {
-            // SQLite and others
             $blacklisted = $blacklistQuery
                 ->where('validation_errors', 'like', '%blacklist%')
                 ->count();
         }
+
+        $meta = $upload->meta ?? [];
+        $skipped = $meta['skipped'] ?? null;
 
         return response()->json([
             'data' => [
@@ -207,6 +209,7 @@ class UploadController extends Controller
                 'pending' => (int) $stats->pending,
                 'blacklisted' => $blacklisted,
                 'ready_for_sync' => $upload->debtors()->readyForSync()->count(),
+                'skipped' => $skipped,
             ],
         ]);
     }

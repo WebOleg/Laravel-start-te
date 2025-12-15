@@ -93,10 +93,13 @@ class FileUploadService
     public function __construct(
         private SpreadsheetParserService $parser,
         private IbanValidator $ibanValidator,
-        private BlacklistService $blacklistService
+        private BlacklistService $blacklistService,
+        private DeduplicationService $deduplicationService
     ) {}
 
     /**
+     * Process file asynchronously via queue.
+     * 
      * @return array{upload: Upload, queued: bool}
      */
     public function processAsync(UploadedFile $file, ?int $userId = null): array
@@ -120,7 +123,9 @@ class FileUploadService
     }
 
     /**
-     * @return array{upload: Upload, created: int, failed: int, errors: array}
+     * Process file synchronously.
+     * 
+     * @return array{upload: Upload, created: int, failed: int, skipped: array, errors: array}
      */
     public function process(UploadedFile $file, ?int $userId = null): array
     {
@@ -141,6 +146,7 @@ class FileUploadService
             'upload' => $upload->fresh(),
             'created' => $result['created'],
             'failed' => $result['failed'],
+            'skipped' => $result['skipped'],
             'errors' => $result['errors'],
         ];
     }
@@ -194,7 +200,9 @@ class FileUploadService
     }
 
     /**
-     * @return array{created: int, failed: int, errors: array}
+     * Process rows with deduplication.
+     * 
+     * @return array{created: int, failed: int, skipped: array, skipped_rows: array, errors: array}
      */
     private function processRows(Upload $upload, array $rows, array $columnMapping): array
     {
@@ -206,16 +214,45 @@ class FileUploadService
         $created = 0;
         $failed = 0;
         $errors = [];
+        
+        $skipped = [
+            'total' => 0,
+            DeduplicationService::SKIP_BLACKLISTED => 0,
+            DeduplicationService::SKIP_CHARGEBACKED => 0,
+            DeduplicationService::SKIP_RECOVERED => 0,
+            DeduplicationService::SKIP_RECENTLY_ATTEMPTED => 0,
+        ];
+        $skippedRows = [];
+
+        $ibanHashes = $this->extractIbanHashes($rows, $columnMapping);
+        $dedupeResults = $this->deduplicationService->checkBatch($ibanHashes, $upload->id);
 
         foreach ($rows as $index => $row) {
             try {
                 $debtorData = $this->mapRowToDebtor($row, $columnMapping);
+                $this->normalizeIban($debtorData);
+                
+                $ibanHash = $debtorData['iban_hash'] ?? null;
+                
+                if ($ibanHash && isset($dedupeResults[$ibanHash])) {
+                    $skipInfo = $dedupeResults[$ibanHash];
+                    $skipped['total']++;
+                    $skipped[$skipInfo['reason']]++;
+                    
+                    $skippedRows[] = [
+                        'row' => $index + 2,
+                        'iban_masked' => $this->ibanValidator->mask($debtorData['iban'] ?? ''),
+                        'reason' => $skipInfo['reason'],
+                        'days_ago' => $skipInfo['days_ago'] ?? null,
+                        'last_status' => $skipInfo['last_status'] ?? null,
+                    ];
+                    continue;
+                }
+
                 $debtorData['upload_id'] = $upload->id;
                 $debtorData['raw_data'] = $row;
-
-                $this->normalizeIban($debtorData);
+                
                 $this->enrichCountryFromIban($debtorData);
-
                 $debtorData['validation_status'] = Debtor::VALIDATION_PENDING;
 
                 Debtor::create($debtorData);
@@ -231,7 +268,39 @@ class FileUploadService
             }
         }
 
-        return compact('created', 'failed', 'errors');
+        return [
+            'created' => $created,
+            'failed' => $failed,
+            'skipped' => $skipped,
+            'skipped_rows' => $skippedRows,
+            'errors' => $errors,
+        ];
+    }
+
+    /**
+     * Extract IBAN hashes from rows for batch deduplication check.
+     * 
+     * @return array<string>
+     */
+    private function extractIbanHashes(array $rows, array $columnMapping): array
+    {
+        $hashes = [];
+
+        foreach ($rows as $row) {
+            $iban = null;
+            foreach ($row as $header => $value) {
+                if (isset($columnMapping[$header]) && $columnMapping[$header] === 'iban' && !empty($value)) {
+                    $iban = $this->ibanValidator->normalize($value);
+                    break;
+                }
+            }
+
+            if ($iban) {
+                $hashes[] = $this->ibanValidator->hash($iban);
+            }
+        }
+
+        return array_unique($hashes);
     }
 
     private function mapRowToDebtor(array $row, array $columnMapping): array
@@ -276,6 +345,9 @@ class FileUploadService
         }
     }
 
+    /**
+     * Finalize upload with skipped counts in meta.
+     */
     private function finalizeUpload(Upload $upload, array $result): void
     {
         $status = $result['failed'] === 0
@@ -289,6 +361,8 @@ class FileUploadService
             'processing_completed_at' => now(),
             'meta' => [
                 'errors' => array_slice($result['errors'], 0, 100),
+                'skipped' => $result['skipped'],
+                'skipped_rows' => array_slice($result['skipped_rows'], 0, 100),
             ],
         ]);
     }

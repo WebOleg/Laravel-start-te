@@ -1,9 +1,5 @@
 <?php
 
-/**
- * BillingAttempt model for storing SEPA Direct Debit transaction attempts.
- */
-
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -13,6 +9,20 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class BillingAttempt extends Model
 {
     use HasFactory;
+
+    public const STATUS_PENDING = 'pending';
+    public const STATUS_APPROVED = 'approved';
+    public const STATUS_DECLINED = 'declined';
+    public const STATUS_ERROR = 'error';
+    public const STATUS_VOIDED = 'voided';
+    public const STATUS_CHARGEBACKED = 'chargebacked';
+
+    public const IN_FLIGHT_STATUSES = [
+        self::STATUS_PENDING,
+        self::STATUS_APPROVED,
+        self::STATUS_DECLINED,
+        self::STATUS_ERROR,
+    ];
 
     protected $fillable = [
         'debtor_id',
@@ -47,24 +57,11 @@ class BillingAttempt extends Model
         'response_payload',
     ];
 
-    // Status constants
-    public const STATUS_PENDING = 'pending';
-    public const STATUS_APPROVED = 'approved';
-    public const STATUS_DECLINED = 'declined';
-    public const STATUS_ERROR = 'error';
-    public const STATUS_VOIDED = 'voided';
-
-    /**
-     * @return BelongsTo<Debtor, BillingAttempt>
-     */
     public function debtor(): BelongsTo
     {
         return $this->belongsTo(Debtor::class);
     }
 
-    /**
-     * @return BelongsTo<Upload, BillingAttempt>
-     */
     public function upload(): BelongsTo
     {
         return $this->belongsTo(Upload::class);
@@ -95,11 +92,17 @@ class BillingAttempt extends Model
         return $this->status === self::STATUS_VOIDED;
     }
 
+    public function isChargebacked(): bool
+    {
+        return $this->status === self::STATUS_CHARGEBACKED;
+    }
+
     public function isFinal(): bool
     {
         return in_array($this->status, [
             self::STATUS_APPROVED,
             self::STATUS_VOIDED,
+            self::STATUS_CHARGEBACKED,
         ]);
     }
 
