@@ -131,6 +131,78 @@ Authorization: Bearer {token}
 
 ---
 
+### Stats
+
+#### Get Chargeback Rates by Country
+```
+GET /api/admin/stats/chargeback-rates
+Authorization: Bearer {token}
+```
+
+**Query Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `period` | string | `7d` | Time period: `24h`, `7d`, `30d`, `90d` |
+
+**Response:**
+```json
+{
+    "data": {
+        "period": "7d",
+        "start_date": "2025-12-09T00:00:00+00:00",
+        "threshold": 25,
+        "countries": [
+            {
+                "country": "ES",
+                "total": 100,
+                "approved": 85,
+                "declined": 10,
+                "errors": 3,
+                "chargebacks": 2,
+                "cb_rate_total": 2.0,
+                "cb_rate_approved": 2.35,
+                "alert": false
+            },
+            {
+                "country": "DE",
+                "total": 50,
+                "approved": 30,
+                "declined": 5,
+                "errors": 0,
+                "chargebacks": 15,
+                "cb_rate_total": 30.0,
+                "cb_rate_approved": 50.0,
+                "alert": true
+            }
+        ],
+        "totals": {
+            "total": 150,
+            "approved": 115,
+            "declined": 15,
+            "errors": 3,
+            "chargebacks": 17,
+            "cb_rate_total": 11.33,
+            "cb_rate_approved": 14.78,
+            "alert": false
+        }
+    }
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `period` | Requested time period |
+| `start_date` | Start date for the period |
+| `threshold` | Alert threshold percentage (default: 25%) |
+| `countries` | Stats grouped by country |
+| `totals` | Aggregate totals across all countries |
+| `cb_rate_total` | Chargebacks / Total transactions * 100 |
+| `cb_rate_approved` | Chargebacks / Approved transactions * 100 |
+| `alert` | True if rate exceeds threshold |
+
+---
+
 ### Uploads
 
 #### List Uploads
