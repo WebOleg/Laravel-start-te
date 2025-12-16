@@ -13,6 +13,7 @@ use App\Http\Controllers\Admin\DebtorController as AdminDebtorController;
 use App\Http\Controllers\Admin\VopLogController as AdminVopLogController;
 use App\Http\Controllers\Admin\BillingAttemptController as AdminBillingAttemptController;
 use App\Http\Controllers\Admin\UploadController as AdminUploadController;
+use App\Http\Controllers\Admin\StatsController as AdminStatsController;
 
 // Public routes
 Route::post('/login', [AuthController::class, 'login']);
@@ -29,6 +30,9 @@ Route::middleware('auth:sanctum')->group(function () {
     // Admin routes
     Route::prefix('admin')->group(function () {
         Route::get('dashboard', [AdminDashboardController::class, 'index']);
+
+        // Stats routes
+        Route::get('stats/chargeback-rates', [AdminStatsController::class, 'chargebackRates']);
         
         // Upload routes
         Route::get('uploads/{upload}/status', [AdminUploadController::class, 'status']);
