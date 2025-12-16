@@ -12,6 +12,7 @@ use App\Http\Resources\UploadResource;
 use App\Http\Resources\DebtorResource;
 use App\Models\Upload;
 use App\Models\Debtor;
+use App\Models\BillingAttempt;
 use App\Services\FileUploadService;
 use App\Services\DebtorValidationService;
 use Illuminate\Http\Request;
@@ -132,10 +133,16 @@ class UploadController extends Controller
 
     public function debtors(Upload $upload, Request $request): AnonymousResourceCollection
     {
-        $query = $upload->debtors();
+        $query = $upload->debtors()->with(['latestBillingAttempt']);
 
         if ($request->has('validation_status')) {
             $query->where('validation_status', $request->input('validation_status'));
+        }
+
+        if ($request->boolean('exclude_chargebacked')) {
+            $query->whereDoesntHave('billingAttempts', function ($q) {
+                $q->where('status', BillingAttempt::STATUS_CHARGEBACKED);
+            });
         }
 
         if ($request->has('search')) {
@@ -198,6 +205,13 @@ class UploadController extends Controller
                 ->count();
         }
 
+        // Count debtors with chargebacked billing attempts
+        $chargebacked = $upload->debtors()
+            ->whereHas('billingAttempts', function ($query) {
+                $query->where('status', BillingAttempt::STATUS_CHARGEBACKED);
+            })
+            ->count();
+
         $meta = $upload->meta ?? [];
         $skipped = $meta['skipped'] ?? null;
 
@@ -208,9 +222,41 @@ class UploadController extends Controller
                 'invalid' => (int) $stats->invalid - $blacklisted,
                 'pending' => (int) $stats->pending,
                 'blacklisted' => $blacklisted,
+                'chargebacked' => $chargebacked,
                 'ready_for_sync' => $upload->debtors()->readyForSync()->count(),
                 'skipped' => $skipped,
             ],
+        ]);
+    }
+
+    /**
+     * Filter (delete) chargebacked debtors from upload.
+     */
+    public function filterChargebacks(Upload $upload): JsonResponse
+    {
+        $chargebackedDebtors = $upload->debtors()
+            ->whereHas('billingAttempts', function ($query) {
+                $query->where('status', BillingAttempt::STATUS_CHARGEBACKED);
+            })
+            ->get();
+
+        $count = $chargebackedDebtors->count();
+
+        if ($count === 0) {
+            return response()->json([
+                'message' => 'No chargebacked records found',
+                'data' => ['removed' => 0],
+            ]);
+        }
+
+        // Delete chargebacked debtors
+        foreach ($chargebackedDebtors as $debtor) {
+            $debtor->delete();
+        }
+
+        return response()->json([
+            'message' => "Removed {$count} chargebacked records",
+            'data' => ['removed' => $count],
         ]);
     }
 

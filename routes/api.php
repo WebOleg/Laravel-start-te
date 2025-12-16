@@ -35,6 +35,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('uploads/{upload}/debtors', [AdminUploadController::class, 'debtors']);
         Route::post('uploads/{upload}/validate', [AdminUploadController::class, 'validate']);
         Route::get('uploads/{upload}/validation-stats', [AdminUploadController::class, 'validationStats']);
+        Route::post('uploads/{upload}/filter-chargebacks', [AdminUploadController::class, 'filterChargebacks']);
         Route::apiResource('uploads', AdminUploadController::class)->only(['index', 'show', 'store']);
 
         // Debtor routes
