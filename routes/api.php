@@ -45,3 +45,13 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::apiResource('billing-attempts', AdminBillingAttemptController::class)->only(['index', 'show']);
     });
 });
+
+/*
+|--------------------------------------------------------------------------
+| Webhook Routes
+|--------------------------------------------------------------------------
+*/
+
+Route::prefix('webhooks')->group(function () {
+    Route::post('/emp', [\App\Http\Controllers\Webhook\EmpWebhookController::class, 'handle']);
+});
