@@ -33,7 +33,8 @@ Route::middleware('auth:sanctum')->group(function () {
 
         // Stats routes
         Route::get('stats/chargeback-rates', [AdminStatsController::class, 'chargebackRates']);
-        
+        Route::get('stats/chargeback-codes', [AdminStatsController::class, 'chargebackCodes']);
+
         // Upload routes
         Route::get('uploads/{upload}/status', [AdminUploadController::class, 'status']);
         Route::get('uploads/{upload}/debtors', [AdminUploadController::class, 'debtors']);

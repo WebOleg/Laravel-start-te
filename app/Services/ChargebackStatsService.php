@@ -107,6 +107,46 @@ class ChargebackStatsService
     {
         foreach (['24h', '7d', '30d', '90d'] as $period) {
             Cache::forget("chargeback_stats_{$period}");
+            Cache::forget("chargeback_codes_{$period}");
         }
+    }
+
+    public function getChargebackCodes(string $period): array
+    {
+        $cacheKey = "chargeback_codes_{$period}";
+        $ttl = config('tether.chargeback.cache_ttl', 900);
+
+        return Cache::remember($cacheKey, $ttl, fn () => $this->calculateChargebackCodes($period));
+    }
+
+    public function calculateChargebackCodes(string $period): array
+    {
+        $startDate = $this->getStartDate($period);
+
+        $codes = DB::table('billing_attempts')
+            ->where('created_at', '>=', $startDate)
+            ->where('status', BillingAttempt::STATUS_CHARGEBACKED)
+            ->whereNotNull('error_code')
+            ->select([
+                'error_message as chargeback_reason',
+                'error_code as chargeback_code',
+                DB::raw('SUM(amount) as total_amount'),
+                DB::raw('COUNT(*) as occurrences')
+            ])
+            ->groupBy('chargeback_code', 'error_message')
+            ->orderBy('total_amount', 'desc')
+            ->get();
+
+        $result = [];
+        foreach ($codes as $row) {
+            $result[] = [
+                'chargeback_code'   => $row->chargeback_code,
+                'chargeback_reason' => $row->chargeback_reason,
+                'total_amount'      => (float) $row->total_amount,
+                'occurrences'       => (int) $row->occurrences,
+            ];
+        }
+
+        return $result;
     }
 }
