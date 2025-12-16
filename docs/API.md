@@ -255,6 +255,31 @@ GET /api/admin/uploads/{id}/status
 }
 ```
 
+#### Filter Chargebacks
+
+Remove chargebacked debtors from an upload (for retry scenarios).
+```
+POST /api/admin/uploads/{id}/filter-chargebacks
+Authorization: Bearer {token}
+```
+
+**Response:**
+```json
+{
+    "message": "Removed 5 chargebacked records",
+    "data": {
+        "removed": 5
+    }
+}
+```
+
+**Use Case:**
+1. Upload CSV with 100 records
+2. Send payments to EMP
+3. 5 chargebacks received over time
+4. Before retry: call filter-chargebacks to remove those 5 records
+5. Retry only processes clean records
+
 ---
 
 ### Debtors
@@ -443,6 +468,60 @@ GET /api/admin/billing-attempts
 
 ---
 
+## Webhooks
+
+### EMP (emerchantpay) Webhook
+```
+POST /api/webhooks/emp
+Content-Type: application/json
+```
+
+Receives notifications from emerchantpay about transaction status changes and chargebacks.
+
+**Chargeback Notification:**
+```json
+{
+    "unique_id": "cb_unique_456",
+    "transaction_type": "chargeback",
+    "status": "approved",
+    "original_transaction_unique_id": "tx_original_123",
+    "amount": 10000,
+    "currency": "EUR",
+    "signature": "sha1_hash"
+}
+```
+
+**Transaction Status Update:**
+```json
+{
+    "unique_id": "tx_123",
+    "transaction_type": "sdd_sale",
+    "status": "approved",
+    "signature": "sha1_hash"
+}
+```
+
+**Signature Verification:**
+```
+signature = SHA1(unique_id + EMP_PASSWORD)
+```
+
+**Response:**
+```json
+{
+    "status": "ok",
+    "message": "Chargeback processed"
+}
+```
+
+**Webhook Flow:**
+1. EMP sends POST request to `/api/webhooks/emp`
+2. System verifies signature
+3. For chargebacks: finds original transaction, updates billing_attempt status to `chargebacked`
+4. For transactions: updates billing_attempt status
+
+---
+
 ## HTTP Status Codes
 
 | Code | Description |
@@ -486,6 +565,7 @@ GET /api/admin/uploads/{id}/debtors
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `validation_status` | string | Filter: `pending`, `valid`, `invalid` |
+| `exclude_chargebacked` | boolean | Exclude debtors with chargebacked billing attempts |
 | `search` | string | Search by name, IBAN, email |
 | `per_page` | integer | Items per page (default: 50) |
 
@@ -509,6 +589,11 @@ GET /api/admin/uploads/{id}/debtors
                 "iban": "ES0500190050054010130723",
                 "amount": "150.00",
                 "custom_field": "extra_value"
+            },
+            "latest_billing": {
+                "id": 1,
+                "status": "approved",
+                "amount": 150.00
             }
         }
     ],
@@ -558,6 +643,8 @@ Authorization: Bearer {token}
         "valid": 85,
         "invalid": 10,
         "pending": 5,
+        "blacklisted": 2,
+        "chargebacked": 3,
         "ready_for_sync": 85,
         "skipped": {
             "total": 3,
@@ -576,6 +663,8 @@ Authorization: Bearer {token}
 | `valid` | Passed all validation rules |
 | `invalid` | Failed validation |
 | `pending` | Not yet validated |
+| `blacklisted` | Invalid due to blacklist |
+| `chargebacked` | Has billing_attempt with status='chargebacked' |
 | `ready_for_sync` | Valid + pending status (ready for billing) |
 | `skipped` | Records skipped during upload (from meta) |
 
