@@ -201,10 +201,10 @@ class ChargebackStatsService
                 : 0;
             
             $result['banks'][] = [
-                'bank_name' => $row->bank_name,
+                'bank_name' => $row->bank_name ?? 'Not Identified',
                 'total_amount' => (float) $row->total_amount,
                 'chargebacks' => (int) $row->chargebacks,
-                'cb_rate' => $cbBankRate,
+                'cb_rate' => (float) $cbBankRate,
             ];
 
             $result['totals']['total'] += (int) $row->total;
