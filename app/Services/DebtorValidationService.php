@@ -13,6 +13,7 @@ use App\Models\Upload;
 class DebtorValidationService
 {
     public const NAME_MAX_LENGTH = 35;
+    public const INVALID_NAME_PATTERN = '/[0-9*#@$%^&+=\[\]{}|\\\\<>áàâäçèéêëîïíóòôöúùûüÿñÁÀÂÄÇÈÉÊËÎÏÍÓÒÔÖÚÙÛÜŸÑ]/';
 
     public function __construct(
         private IbanValidator $ibanValidator
@@ -111,12 +112,22 @@ class DebtorValidationService
     {
         $errors = [];
 
-        if (!empty($debtor->first_name) && mb_strlen($debtor->first_name) > self::NAME_MAX_LENGTH) {
-            $errors[] = 'First name cannot exceed ' . self::NAME_MAX_LENGTH . ' characters';
+        if (!empty($debtor->first_name)) {
+            if (mb_strlen($debtor->first_name) > self::NAME_MAX_LENGTH) {
+                $errors[] = 'First name cannot exceed ' . self::NAME_MAX_LENGTH . ' characters';
+            }
+            if (preg_match(self::INVALID_NAME_PATTERN, $debtor->first_name)) {
+                $errors[] = 'First name contains numbers or symbols';
+            }
         }
 
-        if (!empty($debtor->last_name) && mb_strlen($debtor->last_name) > self::NAME_MAX_LENGTH) {
-            $errors[] = 'Last name cannot exceed ' . self::NAME_MAX_LENGTH . ' characters';
+        if (!empty($debtor->last_name)) {
+            if (mb_strlen($debtor->last_name) > self::NAME_MAX_LENGTH) {
+                $errors[] = 'Last name cannot exceed ' . self::NAME_MAX_LENGTH . ' characters';
+            }
+            if (preg_match(self::INVALID_NAME_PATTERN, $debtor->last_name)) {
+                $errors[] = 'Last name contains numbers or symbols';
+            }
         }
 
         return $errors;
