@@ -133,7 +133,7 @@ class ChargebackStatsService
                 DB::raw('SUM(amount) as total_amount'),
                 DB::raw('COUNT(*) as occurrences')
             ])
-            ->groupBy('chargeback_code', 'error_message')
+            ->groupBy('error_code', 'error_message')
             ->orderBy('total_amount', 'desc')
             ->get();
 
