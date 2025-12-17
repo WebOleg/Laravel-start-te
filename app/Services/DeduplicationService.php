@@ -6,7 +6,7 @@
  * Implements three-tier skip logic:
  * 1. Hard block forever: blacklisted, chargebacked
  * 2. Soft block forever: already recovered
- * 3. Soft block with 7-day cooldown: recently attempted
+ * 3. Soft block with 30-day cooldown: recently attempted
  */
 
 namespace App\Services;
@@ -23,7 +23,7 @@ class DeduplicationService
     public const SKIP_RECOVERED = 'already_recovered';
     public const SKIP_RECENTLY_ATTEMPTED = 'recently_attempted';
 
-    public const COOLDOWN_DAYS = 7;
+    public const COOLDOWN_DAYS = 30;
 
     public function __construct(
         private IbanValidator $ibanValidator
@@ -76,17 +76,11 @@ class DeduplicationService
         return null;
     }
 
-    /**
-     * Check if IBAN hash exists in blacklist.
-     */
     public function isBlacklisted(string $ibanHash): bool
     {
         return Blacklist::where('iban_hash', $ibanHash)->exists();
     }
 
-    /**
-     * Check if IBAN has any chargebacked billing attempts.
-     */
     public function isChargebacked(string $ibanHash): bool
     {
         return BillingAttempt::whereHas('debtor', function ($q) use ($ibanHash) {
@@ -96,9 +90,6 @@ class DeduplicationService
             ->exists();
     }
 
-    /**
-     * Check if IBAN was already recovered.
-     */
     public function isRecovered(string $ibanHash, ?int $excludeUploadId = null): bool
     {
         return Debtor::where('iban_hash', $ibanHash)
@@ -108,8 +99,6 @@ class DeduplicationService
     }
 
     /**
-     * Get recent billing attempt within cooldown period.
-     * 
      * @return array{days_ago: int, status: string}|null
      */
     public function getRecentAttempt(string $ibanHash, ?int $excludeUploadId = null): ?array
@@ -136,9 +125,6 @@ class DeduplicationService
     }
 
     /**
-     * Check multiple IBANs in batch for better performance.
-     * Uses optimized JOINs instead of whereHas subqueries.
-     * 
      * @param array<string> $ibanHashes
      * @return array<string, array{reason: string, permanent: bool, days_ago?: int, last_status?: string}>
      */
@@ -150,13 +136,11 @@ class DeduplicationService
 
         $results = [];
 
-        // 1. Blacklisted - single indexed query
         $blacklisted = Blacklist::whereIn('iban_hash', $ibanHashes)
             ->pluck('iban_hash')
             ->flip()
             ->all();
 
-        // 2. Recovered - single indexed query
         $recoveredQuery = Debtor::whereIn('iban_hash', $ibanHashes)
             ->where('status', Debtor::STATUS_RECOVERED);
         
@@ -169,7 +153,6 @@ class DeduplicationService
             ->flip()
             ->all();
 
-        // 3. Chargebacked - optimized JOIN query
         $chargebacked = DB::table('billing_attempts')
             ->join('debtors', 'billing_attempts.debtor_id', '=', 'debtors.id')
             ->whereIn('debtors.iban_hash', $ibanHashes)
@@ -179,7 +162,6 @@ class DeduplicationService
             ->flip()
             ->all();
 
-        // 4. Recently attempted - optimized JOIN query with date filter
         $cutoffDate = now()->subDays(self::COOLDOWN_DAYS);
         
         $recentAttemptsQuery = DB::table('billing_attempts')
@@ -200,7 +182,6 @@ class DeduplicationService
             ->map(fn($group) => $group->first())
             ->all();
 
-        // Build results with priority: blacklist > chargeback > recovered > recent
         foreach ($ibanHashes as $hash) {
             if (isset($blacklisted[$hash])) {
                 $results[$hash] = ['reason' => self::SKIP_BLACKLISTED, 'permanent' => true];

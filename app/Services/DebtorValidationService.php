@@ -12,6 +12,8 @@ use App\Models\Upload;
 
 class DebtorValidationService
 {
+    public const NAME_MAX_LENGTH = 35;
+
     public function __construct(
         private IbanValidator $ibanValidator
     ) {}
@@ -21,6 +23,7 @@ class DebtorValidationService
         $errors = [];
 
         $errors = array_merge($errors, $this->validateRequiredFields($debtor));
+        $errors = array_merge($errors, $this->validateName($debtor));
         $errors = array_merge($errors, $this->validateIban($debtor));
         $errors = array_merge($errors, $this->validateAmount($debtor));
         $errors = array_merge($errors, $this->validateEmail($debtor));
@@ -99,6 +102,21 @@ class DebtorValidationService
 
         if (empty($debtor->street) && empty($debtor->address)) {
             $errors[] = 'Address is required';
+        }
+
+        return $errors;
+    }
+
+    protected function validateName(Debtor $debtor): array
+    {
+        $errors = [];
+
+        if (!empty($debtor->first_name) && mb_strlen($debtor->first_name) > self::NAME_MAX_LENGTH) {
+            $errors[] = 'First name cannot exceed ' . self::NAME_MAX_LENGTH . ' characters';
+        }
+
+        if (!empty($debtor->last_name) && mb_strlen($debtor->last_name) > self::NAME_MAX_LENGTH) {
+            $errors[] = 'Last name cannot exceed ' . self::NAME_MAX_LENGTH . ' characters';
         }
 
         return $errors;

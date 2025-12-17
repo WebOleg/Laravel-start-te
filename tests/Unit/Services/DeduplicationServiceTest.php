@@ -142,7 +142,7 @@ class DeduplicationServiceTest extends TestCase
             'status' => BillingAttempt::STATUS_DECLINED,
         ]);
         
-        $attempt->forceFill(['created_at' => now()->subDays(10)])->saveQuietly();
+        $attempt->forceFill(['created_at' => now()->subDays(35)])->saveQuietly();
 
         $result = $this->service->checkIban($iban);
 
@@ -222,7 +222,7 @@ class DeduplicationServiceTest extends TestCase
         $this->assertEquals(DeduplicationService::SKIP_BLACKLISTED, $result['reason']);
     }
 
-    public function test_blocks_iban_on_day_6(): void
+    public function test_blocks_iban_on_day_29(): void
     {
         $iban = 'DE89370400440532013000';
         $upload = Upload::factory()->create();
@@ -235,21 +235,21 @@ class DeduplicationServiceTest extends TestCase
         $attempt = BillingAttempt::create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
-            'transaction_id' => 'tx_day6',
+            'transaction_id' => 'tx_day29',
             'amount' => 100,
             'status' => BillingAttempt::STATUS_PENDING,
         ]);
         
-        $attempt->forceFill(['created_at' => now()->subDays(6)])->saveQuietly();
+        $attempt->forceFill(['created_at' => now()->subDays(29)])->saveQuietly();
 
         $result = $this->service->checkIban($iban);
 
         $this->assertNotNull($result);
         $this->assertEquals(DeduplicationService::SKIP_RECENTLY_ATTEMPTED, $result['reason']);
-        $this->assertEquals(6, $result['days_ago']);
+        $this->assertEquals(29, $result['days_ago']);
     }
 
-    public function test_allows_iban_on_day_8(): void
+    public function test_allows_iban_on_day_31(): void
     {
         $iban = 'DE89370400440532013000';
         $upload = Upload::factory()->create();
@@ -262,19 +262,19 @@ class DeduplicationServiceTest extends TestCase
         $attempt = BillingAttempt::create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
-            'transaction_id' => 'tx_day8',
+            'transaction_id' => 'tx_day31',
             'amount' => 100,
             'status' => BillingAttempt::STATUS_DECLINED,
         ]);
         
-        $attempt->forceFill(['created_at' => now()->subDays(8)])->saveQuietly();
+        $attempt->forceFill(['created_at' => now()->subDays(31)])->saveQuietly();
 
         $result = $this->service->checkIban($iban);
 
         $this->assertNull($result);
     }
 
-    public function test_blocks_iban_exactly_on_day_7(): void
+    public function test_blocks_iban_exactly_on_day_30(): void
     {
         $iban = 'DE89370400440532013000';
         $upload = Upload::factory()->create();
@@ -287,12 +287,12 @@ class DeduplicationServiceTest extends TestCase
         $attempt = BillingAttempt::create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
-            'transaction_id' => 'tx_day7',
+            'transaction_id' => 'tx_day30',
             'amount' => 100,
             'status' => BillingAttempt::STATUS_ERROR,
         ]);
         
-        $attempt->forceFill(['created_at' => now()->subDays(7)])->saveQuietly();
+        $attempt->forceFill(['created_at' => now()->subDays(30)])->saveQuietly();
 
         $result = $this->service->checkIban($iban);
 
