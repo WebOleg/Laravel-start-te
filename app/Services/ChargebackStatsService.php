@@ -138,13 +138,20 @@ class ChargebackStatsService
             ->get();
 
         $result = [];
+        $result['period'] = $period;
+        $result['start_date'] = $startDate->toIso8601String();
+        $result['codes'] = [];
+        $result['totals']['total_amount'] = 0;
+        $result['totals']['occurrences'] = 0;
         foreach ($codes as $row) {
-            $result[] = [
+            $result['codes'][] = [
                 'chargeback_code'   => $row->chargeback_code,
                 'chargeback_reason' => $row->chargeback_reason,
                 'total_amount'      => (float) $row->total_amount,
                 'occurrences'       => (int) $row->occurrences,
             ];
+            $result['totals']['total_amount'] = ($result['totals']['total_amount'] ?? 0) + (float) $row->total_amount;
+            $result['totals']['occurrences'] = ($result['totals']['occurrences'] ?? 0) + (int) $row->occurrences;
         }
 
         return $result;
