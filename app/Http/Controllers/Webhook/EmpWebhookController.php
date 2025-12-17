@@ -8,6 +8,7 @@ namespace App\Http\Controllers\Webhook;
 
 use App\Http\Controllers\Controller;
 use App\Models\BillingAttempt;
+use App\Services\BlacklistService;
 use App\Services\IbanValidator;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
@@ -16,7 +17,8 @@ use Illuminate\Support\Facades\Log;
 class EmpWebhookController extends Controller
 {
     public function __construct(
-        private IbanValidator $ibanValidator
+        private IbanValidator $ibanValidator,
+        private BlacklistService $blacklistService
     ) {}
 
     /**
@@ -63,27 +65,61 @@ class EmpWebhookController extends Controller
             return response()->json(['error' => 'Transaction not found'], 404);
         }
 
+        $errorCode = $data['reason_code'] ?? $data['error_code'] ?? null;
+
         // Update status to chargebacked
         $billingAttempt->update([
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'error_code' => $errorCode,
+            'error_message' => $data['reason'] ?? null,
             'meta' => array_merge($billingAttempt->meta ?? [], [
                 'chargeback' => [
                     'unique_id' => $data['unique_id'] ?? null,
                     'amount' => $data['amount'] ?? null,
                     'currency' => $data['currency'] ?? null,
                     'reason' => $data['reason'] ?? null,
+                    'reason_code' => $errorCode,
                     'received_at' => now()->toIso8601String(),
                 ],
             ]),
         ]);
 
+        // Auto-blacklist IBAN if error code matches
+        $blacklisted = false;
+        if ($errorCode && $this->shouldBlacklistCode($errorCode)) {
+            $debtor = $billingAttempt->debtor;
+            if ($debtor && $debtor->iban) {
+                $this->blacklistService->add(
+                    $debtor->iban,
+                    'chargeback',
+                    "Auto-blacklisted: {$errorCode}"
+                );
+                $blacklisted = true;
+                Log::info('IBAN auto-blacklisted due to chargeback', [
+                    'debtor_id' => $debtor->id,
+                    'error_code' => $errorCode,
+                ]);
+            }
+        }
+
         Log::info('Chargeback processed', [
             'billing_attempt_id' => $billingAttempt->id,
             'debtor_id' => $billingAttempt->debtor_id,
             'original_tx' => $originalTxId,
+            'error_code' => $errorCode,
+            'blacklisted' => $blacklisted,
         ]);
 
         return response()->json(['status' => 'ok', 'message' => 'Chargeback processed']);
+    }
+
+    /**
+     * Check if error code should trigger auto-blacklist.
+     */
+    private function shouldBlacklistCode(string $code): bool
+    {
+        $blacklistCodes = config('tether.chargeback.blacklist_codes', []);
+        return in_array($code, $blacklistCodes);
     }
 
     /**
