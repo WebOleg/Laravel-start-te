@@ -120,7 +120,13 @@ class UploadSeeder extends Seeder
     private function createBillingAttempts(Debtor $debtor, Upload $upload): void
     {
         $attemptCount = rand(1, 3);
-        $statuses = [BillingAttempt::STATUS_APPROVED, BillingAttempt::STATUS_DECLINED, BillingAttempt::STATUS_ERROR];
+        $statuses = [
+            BillingAttempt::STATUS_APPROVED, 
+            BillingAttempt::STATUS_DECLINED, 
+            BillingAttempt::STATUS_ERROR, 
+            BillingAttempt::STATUS_VOIDED, 
+            BillingAttempt::STATUS_CHARGEBACKED
+        ];
         $errors = [
             'AC04' => 'Account closed',
             'AC06' => 'Account blocked',
@@ -132,7 +138,12 @@ class UploadSeeder extends Seeder
         for ($i = 1; $i <= $attemptCount; $i++) {
             $isLast = ($i === $attemptCount);
             $status = $isLast ? $statuses[array_rand($statuses)] : BillingAttempt::STATUS_DECLINED;
-            $hasError = in_array($status, [BillingAttempt::STATUS_DECLINED, BillingAttempt::STATUS_ERROR]);
+            $hasError = in_array($status, [
+                BillingAttempt::STATUS_DECLINED,
+                BillingAttempt::STATUS_ERROR,
+                BillingAttempt::STATUS_VOIDED,
+                BillingAttempt::STATUS_CHARGEBACKED
+            ]);
             $errorCode = $hasError ? array_rand($errors) : null;
 
             BillingAttempt::create([
