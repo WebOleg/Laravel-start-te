@@ -203,6 +203,56 @@ Authorization: Bearer {token}
 
 ---
 
+#### Get Chargeback Codes Statistics
+```
+GET /api/admin/stats/chargeback-codes
+Authorization: Bearer {token}
+```
+
+**Query Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `period` | string | `7d` | Time period: `24h`, `7d`, `30d`, `90d` |
+
+**Response:**
+```json
+{
+    "data": {
+        "period": "7d",
+        "start_date": "2025-12-09T00:00:00+00:00",
+        "codes": [
+            {
+                "chargeback_code": "AC04",
+                "chargeback_reason": "Account closed",
+                "occurrences": 15,
+                "total_amount": 2500.00
+            },
+            {
+                "chargeback_code": "MD01",
+                "chargeback_reason": "No mandate",
+                "occurrences": 8,
+                "total_amount": 1200.00
+            }
+        ],
+        "totals": {
+            "occurrences": 23,
+            "total_amount": 3700.00
+        }
+    }
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `codes` | Stats grouped by error code |
+| `chargeback_code` | SEPA error code |
+| `chargeback_reason` | Human-readable description |
+| `occurrences` | Number of chargebacks with this code |
+| `total_amount` | Sum of chargeback amounts |
+
+---
+
 ### Uploads
 
 #### List Uploads
@@ -294,7 +344,7 @@ file: (binary)
 | `blacklisted` | Permanent | IBAN exists in blacklist table |
 | `chargebacked` | Permanent | IBAN has previous chargeback |
 | `already_recovered` | Permanent | Debt already recovered for this IBAN |
-| `recently_attempted` | 7-day cooldown | Billing attempt within last 7 days |
+| `recently_attempted` | 30-day cooldown | Billing attempt within last 30 days |
 
 **Response (async, >100 rows):**
 ```json
@@ -530,13 +580,14 @@ GET /api/admin/billing-attempts
 
 **Common Error Codes:**
 
-| Code | Description |
-|------|-------------|
-| AC04 | Account closed |
-| AC06 | Account blocked |
-| AG01 | Transaction forbidden |
-| AM04 | Insufficient funds |
-| MD01 | No mandate |
+| Code | Description | Auto-Blacklist |
+|------|-------------|----------------|
+| AC04 | Account closed | Yes |
+| AC06 | Account blocked | Yes |
+| AG01 | Transaction forbidden | Yes |
+| MD01 | No mandate | Yes |
+| AM04 | Insufficient funds | No |
+| MS03 | Reason not specified | No |
 
 ---
 
@@ -559,6 +610,8 @@ Receives notifications from emerchantpay about transaction status changes and ch
     "original_transaction_unique_id": "tx_original_123",
     "amount": 10000,
     "currency": "EUR",
+    "reason": "Account closed",
+    "reason_code": "AC04",
     "signature": "sha1_hash"
 }
 ```
@@ -589,8 +642,23 @@ signature = SHA1(unique_id + EMP_PASSWORD)
 **Webhook Flow:**
 1. EMP sends POST request to `/api/webhooks/emp`
 2. System verifies signature
-3. For chargebacks: finds original transaction, updates billing_attempt status to `chargebacked`
+3. For chargebacks:
+   - Find original transaction
+   - Update billing_attempt status to `chargebacked`
+   - Store error_code and error_message
+   - **Auto-blacklist IBAN** if error code is in blacklist_codes (AC04, AC06, AG01, MD01)
 4. For transactions: updates billing_attempt status
+
+**Auto-Blacklist Codes:**
+
+Configurable in `config/tether.php`:
+```php
+'chargeback' => [
+    'blacklist_codes' => ['AC04', 'AC06', 'AG01', 'MD01'],
+]
+```
+
+When a chargeback is received with one of these codes, the debtor's IBAN is automatically added to the blacklist with reason "chargeback" and source "Auto-blacklisted: {code}".
 
 ---
 
@@ -621,7 +689,7 @@ During CSV upload, IBANs are checked against deduplication rules. Records that m
 | Blacklisted | Permanent | `blacklists.iban_hash` exists |
 | Chargebacked | Permanent | `billing_attempts.status = 'chargebacked'` |
 | Already Recovered | Permanent | `debtors.status = 'recovered'` |
-| Recently Attempted | 7-day cooldown | `billing_attempts.created_at > now() - 7 days` |
+| Recently Attempted | 30-day cooldown | `billing_attempts.created_at > now() - 30 days` |
 
 ### Stage 2: Validation
 
@@ -797,9 +865,27 @@ Debtors are validated against these rules:
 
 | Field | Rule | Error Message |
 |-------|------|---------------|
-| IBAN | Required, valid checksum | "IBAN is required" / "IBAN is invalid" |
+| IBAN | Required, valid checksum, SEPA country | "IBAN is required" / "IBAN is invalid" |
 | Name | first_name OR last_name required | "Name is required" |
+| Name | Max 35 characters each | "First/Last name cannot exceed 35 characters" |
+| Name | No numbers or symbols | "First/Last name contains numbers or symbols" |
 | Amount | Required, > 0, ≤ 50000 | "Amount is required" / "Amount must be positive" |
-| City | Required, 2-100 chars, valid encoding | "City is required" / "City contains invalid characters" |
-| Postcode | Required, 3-20 chars | "Postal code is required" |
-| Address | Required, 5-200 chars, valid encoding | "Address is required" |
+| City | Required | "City is required" |
+| Postcode | Required | "Postal code is required" |
+| Address | street OR address required | "Address is required" |
+| Email | Valid format (if provided) | "Email format is invalid" |
+| Encoding | No broken UTF-8 characters | "Field contains encoding issues" |
+| Blacklist | IBAN not in blacklist | "IBAN is blacklisted" |
+
+**Name Character Validation:**
+
+Names must contain only:
+- English letters A-Z, a-z
+- Spaces
+- Hyphens `-` and apostrophes `'`
+- Periods `.`
+
+Rejected characters:
+- Numbers 0-9
+- Symbols: `*#@$%^&+=[]{}|\<>`
+- Accented characters: `áàâäçèéêëîïíóòôöúùûüÿñ` (and uppercase variants)
