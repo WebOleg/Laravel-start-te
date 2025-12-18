@@ -889,3 +889,168 @@ Rejected characters:
 - Numbers 0-9
 - Symbols: `*#@$%^&+=[]{}|\<>`
 - Accented characters: `áàâäçèéêëîïíóòôöúùûüÿñ` (and uppercase variants)
+
+---
+
+## VOP Verification (BAV API)
+
+VOP (Verification of Payee) uses iban.com BAV API to verify bank accounts with issuing banks.
+
+### Supported Countries
+
+AT, BE, CY, DE, EE, ES, FI, FR, GR, HR, IE, IT, LT, LU, LV, MT, NL, PT, SI, SK
+
+### Get VOP Stats for Upload
+```
+GET /api/admin/uploads/{id}/vop-stats
+Authorization: Bearer {token}
+```
+
+**Response:**
+```json
+{
+    "data": {
+        "total_eligible": 85,
+        "verified": 70,
+        "pending": 15,
+        "by_result": {
+            "verified": 50,
+            "likely_verified": 15,
+            "inconclusive": 3,
+            "mismatch": 2,
+            "rejected": 0
+        }
+    }
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `total_eligible` | Debtors with validation_status=valid and supported country |
+| `verified` | Total VOP logs created |
+| `pending` | Eligible but not yet verified |
+| `by_result` | Count by VOP result category |
+
+### Start VOP Verification for Upload
+```
+POST /api/admin/uploads/{id}/verify-vop
+Authorization: Bearer {token}
+Content-Type: application/json
+
+{
+    "force": false
+}
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `force` | boolean | false | Re-verify even if already cached |
+
+**Response (202 Accepted):**
+```json
+{
+    "message": "VOP verification started",
+    "data": {
+        "upload_id": 15,
+        "force_refresh": false
+    }
+}
+```
+
+**Processing:**
+- Job queued on `vop` queue
+- Processes in chunks of 50 debtors
+- 500ms delay between API calls (rate limiting)
+- Results cached by IBAN hash (same IBAN = same bank)
+
+### Get VOP Logs for Upload
+```
+GET /api/admin/uploads/{id}/vop-logs
+Authorization: Bearer {token}
+```
+
+**Response:**
+```json
+{
+    "data": [
+        {
+            "id": 1,
+            "debtor_id": 101,
+            "upload_id": 15,
+            "iban_masked": "DE89****3000",
+            "iban_valid": true,
+            "bank_identified": true,
+            "bank_name": null,
+            "bic": "COBADEFFXXX",
+            "country": "DE",
+            "vop_score": 100,
+            "result": "verified",
+            "meta": {
+                "name_match": "yes",
+                "iban_hash": "abc123..."
+            },
+            "created_at": "2025-12-18T10:00:00Z"
+        }
+    ],
+    "meta": { ... }
+}
+```
+
+### Verify Single IBAN (Testing)
+```
+POST /api/admin/vop/verify-single
+Authorization: Bearer {token}
+Content-Type: application/json
+
+{
+    "iban": "DE89370400440532013000",
+    "name": "Max Mustermann",
+    "use_mock": true
+}
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `iban` | string | Yes | IBAN to verify |
+| `name` | string | Yes | Account holder name |
+| `use_mock` | boolean | No | Use mock response (no API credit used) |
+
+**Response:**
+```json
+{
+    "data": {
+        "success": true,
+        "valid": true,
+        "name_match": "yes",
+        "bic": "COBADEFFXXX",
+        "vop_score": 100,
+        "vop_result": "verified",
+        "error": null
+    },
+    "meta": {
+        "mock_mode": true,
+        "credits_used": 0
+    }
+}
+```
+
+**VOP Score Calculation:**
+
+| name_match | Score | Result |
+|------------|-------|--------|
+| yes | 100 | verified |
+| partial | 70 | likely_verified |
+| unavailable | 50 | inconclusive |
+| no | 20 | mismatch |
+| (invalid IBAN) | 0 | rejected |
+
+**API Response Times:**
+
+BAV API response time varies: 200ms to 3 minutes depending on the bank.
+
+**Environment Variables:**
+```
+IBAN_API_KEY=your_api_key
+IBAN_API_URL=https://api.iban.com/clients/api/verify/v3/
+IBAN_API_MOCK=true  # true for dev, false for production
+```
