@@ -169,6 +169,7 @@ class ChargebackStatsService
     public function calculateChargebackBanks(string $period): array
     {
         $startDate = $this->getStartDate($period);
+        $threshold = config('tether.chargeback.alert_threshold', 25);
 
         $banks = DB::table('billing_attempts')
             ->join('debtors', 'billing_attempts.debtor_id', '=', 'debtors.id')
@@ -179,6 +180,7 @@ class ChargebackStatsService
                 DB::raw('COUNT(*) as total'),
                 DB::raw('SUM(billing_attempts.amount) as total_amount'),
                 DB::raw("SUM(CASE WHEN billing_attempts.status = '".BillingAttempt::STATUS_CHARGEBACKED."' THEN 1 ELSE 0 END) as chargebacks"),
+                DB::raw("SUM(CASE WHEN billing_attempts.status = '".BillingAttempt::STATUS_APPROVED."' THEN 1 ELSE 0 END) as approved"),
             ])
             ->groupBy('vop_logs.bank_name')
             ->get();
@@ -192,6 +194,7 @@ class ChargebackStatsService
                 'total_amount' => 0,
                 'chargebacks' => 0,
                 'total_cb_rate' => 0,
+                'approved' => 0,
             ],
         ];
 
@@ -199,22 +202,31 @@ class ChargebackStatsService
             $cbBankRate = $row->total > 0 
                 ? round(($row->chargebacks / $row->total) * 100, 2) 
                 : 0;
+            $cbBankRateApproved = $row->approved > 0 
+                ? round(($row->chargebacks / $row->approved) * 100, 2) 
+                : 0;
             
             $result['banks'][] = [
                 'bank_name' => $row->bank_name ?? 'Not Identified',
                 'total_amount' => (float) $row->total_amount,
                 'chargebacks' => (int) $row->chargebacks,
                 'cb_rate' => (float) $cbBankRate,
+                'alert' => $cbBankRate >= $threshold || $cbBankRateApproved >= $threshold,
             ];
 
             $result['totals']['total'] += (int) $row->total;
             $result['totals']['total_amount'] += (float) $row->total_amount;
             $result['totals']['chargebacks'] += (int) $row->chargebacks;
+            $result['totals']['approved'] += (int) $row->approved;
         }
 
         $result['totals']['total_cb_rate'] = $result['totals']['total'] > 0 
             ? round(($result['totals']['chargebacks'] / $result['totals']['total']) * 100, 2) 
             : 0;
+        $approved_cb_rate = $result['totals']['approved'] > 0 
+            ? round(($result['totals']['chargebacks'] / $result['totals']['approved']) * 100, 2) 
+            : 0;
+        $result['totals']['alert'] = $result['totals']['total_cb_rate'] >= $threshold || $approved_cb_rate >= $threshold;
 
         return $result;
     }
