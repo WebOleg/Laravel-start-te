@@ -34,4 +34,13 @@ class StatsController extends Controller
 
         return response()->json(['data' => $codes]);
     }
+
+    public function chargebackBanks(Request $request): JsonResponse
+    {
+        $period = $request->input('period', '7d');
+
+        $banks = $this->chargebackStatsService->getChargebackBanks($period);
+
+        return response()->json(['data' => $banks]);
+    }
 }

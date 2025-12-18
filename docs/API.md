@@ -253,6 +253,65 @@ Authorization: Bearer {token}
 
 ---
 
+#### Get Chargeback Bank Statistics
+```
+GET /api/admin/stats/chargeback-banks
+Authorization: Bearer {token}
+```
+
+**Query Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `period`  | string | `7d`  | Time period: `24h`, `7d`, `30d`, `90d` |
+
+**Response:**
+```json
+{
+    "data": {
+        "period": "7d",
+        "start_date": "2025-12-09T00:00:00+00:00",
+        "banks": [
+            {
+                "bank_name": "N26",
+                "total_amount": 21953.99,
+                "chargebacks": 10,
+                "cb_rate": 13.16
+            },
+            {
+                "bank_name": "Sparkasse",
+                "total_amount": 12734.32,
+                "chargebacks": 4,
+                "cb_rate": 10.53
+            },
+            {
+                "bank_name": "Volksbank",
+                "total_amount": 12924.53,
+                "chargebacks": 6,
+                "cb_rate": 13.04
+            }
+        ],
+        "totals": {
+            "total": 600,
+            "total_amount": 164859.14,
+            "chargebacks": 65,
+            "total_cb_rate": 10.83
+        }
+    }
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `banks` | Stats grouped by bank name |
+| `bank_name` | Bank name |
+| `total_amount` | Total amount of this bank |
+| `chargebacks` | Number of chargebacks with this bank |
+| `cb_rate` | Chargebacks / Total transactions * 100 |
+
+---
+
+
 ### Uploads
 
 #### List Uploads

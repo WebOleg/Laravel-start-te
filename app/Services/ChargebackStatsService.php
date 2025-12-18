@@ -108,6 +108,7 @@ class ChargebackStatsService
         foreach (['24h', '7d', '30d', '90d'] as $period) {
             Cache::forget("chargeback_stats_{$period}");
             Cache::forget("chargeback_codes_{$period}");
+            Cache::forget("chargeback_banks_{$period}");
         }
     }
 
@@ -153,6 +154,67 @@ class ChargebackStatsService
             $result['totals']['total_amount'] = ($result['totals']['total_amount'] ?? 0) + (float) $row->total_amount;
             $result['totals']['occurrences'] = ($result['totals']['occurrences'] ?? 0) + (int) $row->occurrences;
         }
+
+        return $result;
+    }
+
+    public function getChargebackBanks(string $period): array
+    {
+        $cacheKey = "chargeback_banks_{$period}";
+        $ttl = config('tether.chargeback.cache_ttl', 900);
+
+        return Cache::remember($cacheKey, $ttl, fn () => $this->calculateChargebackBanks($period));
+    }
+
+    public function calculateChargebackBanks(string $period): array
+    {
+        $startDate = $this->getStartDate($period);
+
+        $banks = DB::table('billing_attempts')
+            ->join('debtors', 'billing_attempts.debtor_id', '=', 'debtors.id')
+            ->join('vop_logs', 'debtors.id', '=', 'vop_logs.debtor_id')
+            ->where('billing_attempts.created_at', '>=', $startDate)
+            ->select([
+                'vop_logs.bank_name',
+                DB::raw('COUNT(*) as total'),
+                DB::raw('SUM(billing_attempts.amount) as total_amount'),
+                DB::raw("SUM(CASE WHEN billing_attempts.status = '".BillingAttempt::STATUS_CHARGEBACKED."' THEN 1 ELSE 0 END) as chargebacks"),
+            ])
+            ->groupBy('vop_logs.bank_name')
+            ->get();
+
+        $result = [
+            'period' => $period,
+            'start_date' => $startDate->toIso8601String(),
+            'banks' => [],
+            'totals' => [
+                'total' => 0,
+                'total_amount' => 0,
+                'chargebacks' => 0,
+                'total_cb_rate' => 0,
+            ],
+        ];
+
+        foreach ($banks as $row) {
+            $cbBankRate = $row->total > 0 
+                ? round(($row->chargebacks / $row->total) * 100, 2) 
+                : 0;
+            
+            $result['banks'][] = [
+                'bank_name' => $row->bank_name ?? 'Not Identified',
+                'total_amount' => (float) $row->total_amount,
+                'chargebacks' => (int) $row->chargebacks,
+                'cb_rate' => (float) $cbBankRate,
+            ];
+
+            $result['totals']['total'] += (int) $row->total;
+            $result['totals']['total_amount'] += (float) $row->total_amount;
+            $result['totals']['chargebacks'] += (int) $row->chargebacks;
+        }
+
+        $result['totals']['total_cb_rate'] = $result['totals']['total'] > 0 
+            ? round(($result['totals']['chargebacks'] / $result['totals']['total']) * 100, 2) 
+            : 0;
 
         return $result;
     }
