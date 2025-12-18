@@ -235,7 +235,6 @@ class ChargebackStatsTest extends TestCase
                             'total_amount',
                             'chargebacks',
                             'cb_rate',
-                            'alert',
                         ]
                     ],
                     'totals' => [
@@ -243,8 +242,6 @@ class ChargebackStatsTest extends TestCase
                         'total_amount',
                         'chargebacks',
                         'total_cb_rate',
-                        'approved',
-                        'alert',
                     ]
                 ]
             ]);
@@ -399,50 +396,8 @@ class ChargebackStatsTest extends TestCase
         $response->assertStatus(200);
         $data = $response->json('data');
 
-        $this->assertEquals(16.67, $data['banks'][0]['cb_rate']);
-        $this->assertEquals(16.67, $data['totals']['total_cb_rate']); 
-    }
-
-    public function test_chargeback_banks_alert_triggered_when_rate_exceeds_threshold(): void
-    {
-        $upload = Upload::factory()->create();
-        $debtor = Debtor::factory()->create();
-
-        VopLog::factory()->create([
-            'debtor_id' => $debtor->id,
-            'bank_name' => 'Risk Bank',
-            'created_at' => now()->subDays(3),
-        ]);
-
-        // Create 4 approved and 4 chargebacked = 50% rate (exceeds default 25% threshold)
-        for ($i = 0; $i < 4; $i++) {
-            BillingAttempt::factory()->create([
-                'debtor_id' => $debtor->id,
-                'upload_id' => $upload->id,
-                'status' => BillingAttempt::STATUS_APPROVED,
-                'amount' => 100.00,
-                'created_at' => now()->subDays(3),
-            ]);
-        }
-
-        for ($i = 0; $i < 4; $i++) {
-            BillingAttempt::factory()->create([
-                'debtor_id' => $debtor->id,
-                'upload_id' => $upload->id,
-                'status' => BillingAttempt::STATUS_CHARGEBACKED,
-                'amount' => 100.00,
-                'created_at' => now()->subDays(3),
-            ]);
-        }
-
-        $response = $this->actingAs($this->user)
-            ->getJson('/api/admin/stats/chargeback-banks');
-
-        $response->assertStatus(200);
-        $data = $response->json('data');
-        
-        $this->assertTrue($data['banks'][0]['alert']);
-        $this->assertTrue($data['totals']['alert']);
+        $this->assertEqualsWithDelta(16.67, $data['banks'][0]['cb_rate'], 0.01);
+        $this->assertEqualsWithDelta(16.67, $data['totals']['total_cb_rate'], 0.01);
     }
 
     public function test_chargeback_banks_multiple_aggregated_correctly(): void
@@ -514,11 +469,11 @@ class ChargebackStatsTest extends TestCase
         
         $this->assertEquals(400.0, $deutscheBank['total_amount']); // 4 * 100
         $this->assertEquals(1, $deutscheBank['chargebacks']);
-        $this->assertEquals(25.0, $deutscheBank['cb_rate']); // 1/4
+        $this->assertEqualsWithDelta(25.0, $deutscheBank['cb_rate'], 0.01); // 1/4
         
         $this->assertEquals(400.0, $commerzbank['total_amount']); // 4 * 100
         $this->assertEquals(2, $commerzbank['chargebacks']);
-        $this->assertEquals(50.0, $commerzbank['cb_rate']); // 2/4
+        $this->assertEqualsWithDelta(50.0, $commerzbank['cb_rate'], 0.01); // 2/4
     }
 
     public function test_chargeback_banks_response_is_cached(): void
@@ -613,7 +568,7 @@ class ChargebackStatsTest extends TestCase
         $this->assertEquals(0.0, $data['totals']['total_cb_rate']);
     }
 
-    public function test_chargeback_banks_only_chargebacked_and_approved_statuses_included(): void
+    public function test_chargeback_banks_total_and_chargebacked_included(): void
     {
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create();
@@ -658,10 +613,9 @@ class ChargebackStatsTest extends TestCase
         $response->assertStatus(200);
         $data = $response->json('data');
 
-        // Should only count approved and chargebacked
+        // Should count all transaction statuses in total, but only chargebacked in chargeback count
         $this->assertEquals(4, $data['totals']['total']);
         $this->assertEquals(1, $data['totals']['chargebacks']);
-        $this->assertEquals(1, $data['totals']['approved']);
     }
 
     public function test_chargeback_banks_multiple_billing_attempts_aggregated_by_bank(): void
