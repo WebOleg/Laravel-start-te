@@ -659,4 +659,360 @@ class ChargebackStatsTest extends TestCase
         $this->assertEquals(2, $data['banks'][0]['chargebacks']);
     }
 
+    public function test_chargeback_codes_requires_auth(): void
+    {
+        $response = $this->getJson('/api/admin/stats/chargeback-codes');
+
+        $response->assertUnauthorized();
+    }
+
+    public function test_chargeback_codes_authenticated_user_can_access_endpoint(): void
+    {
+        $response = $this->actingAs($this->user)
+            ->getJson('/api/admin/stats/chargeback-codes');
+
+        $response->assertOk();
+        $response->assertJsonStructure(['data']);
+    }
+
+    public function test_chargeback_codes_uses_default_period(): void
+    {
+        $response = $this->actingAs($this->user)
+            ->getJson('/api/admin/stats/chargeback-codes');
+
+        $response->assertOk();
+        $this->assertEquals('7d', $response->json('data.period'));
+    }
+
+    public function test_chargeback_codes_with_24h_period(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create();
+
+        // Create data within 24h
+        BillingAttempt::factory()->create([
+            'debtor_id' => $debtor->id,
+            'upload_id' => $upload->id,
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'error_code' => 'CB001',
+            'created_at' => now()->subHours(2),
+        ]);
+
+        // Create data within 7d but outside 24h
+        BillingAttempt::factory()->create([
+            'debtor_id' => $debtor->id,
+            'upload_id' => $upload->id,
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'error_code' => 'CB002',
+            'created_at' => now()->subDays(5),
+        ]);
+
+        $response = $this->actingAs($this->user)
+        ->getJson('/api/admin/stats/chargeback-codes?period=24h');
+
+        $response->assertStatus(200);
+        $this->assertEquals('24h', $response->json('data.period'));
+        
+        // Verify only recent data is included
+        $codes = array_column($response->json('data.codes'), 'chargeback_code');
+        $this->assertCount(1, $codes);
+        $this->assertContains('CB001', $codes);
+        $this->assertNotContains('CB002', $codes);
+    }
+
+    public function test_chargeback_codes_with_7d_period(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create();
+        
+        // Create data within 24h
+        BillingAttempt::factory()->create([
+            'debtor_id' => $debtor->id,
+            'upload_id' => $upload->id,
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'error_code' => 'CB001',
+            'created_at' => now()->subHours(2),
+        ]);
+
+        // Create data within 7d but outside 24h
+        BillingAttempt::factory()->create([
+            'debtor_id' => $debtor->id,
+            'upload_id' => $upload->id,
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'error_code' => 'CB002',
+            'created_at' => now()->subDays(5),
+        ]);
+
+        // Create data within 30d but outside 7d
+        BillingAttempt::factory()->create([
+            'debtor_id' => $debtor->id,
+            'upload_id' => $upload->id,
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'error_code' => 'CB003',
+            'created_at' => now()->subDays(15),
+        ]);
+
+        $response = $this->actingAs($this->user)
+        ->getJson('/api/admin/stats/chargeback-codes?period=7d');
+
+        $response->assertStatus(200);
+        $this->assertEquals('7d', $response->json('data.period'));
+        
+        // Verify only recent data is included
+        $codes = array_column($response->json('data.codes'), 'chargeback_code');
+        $this->assertCount(2, $codes);
+        $this->assertContains('CB001', $codes);
+        $this->assertContains('CB002', $codes);
+        $this->assertNotContains('CB003', $codes);
+    }
+
+    public function test_chargeback_codes_with_30d_period(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create();
+        
+        // Create data within 24h
+        BillingAttempt::factory()->create([
+            'debtor_id' => $debtor->id,
+            'upload_id' => $upload->id,
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'error_code' => 'CB001',
+            'created_at' => now()->subHours(2),
+        ]);
+
+        // Create data within 7d but outside 24h
+        BillingAttempt::factory()->create([
+            'debtor_id' => $debtor->id,
+            'upload_id' => $upload->id,
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'error_code' => 'CB002',
+            'created_at' => now()->subDays(5),
+        ]);
+
+        // Create data within 30d but outside 7d
+        BillingAttempt::factory()->create([
+            'debtor_id' => $debtor->id,
+            'upload_id' => $upload->id,
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'error_code' => 'CB003',
+            'created_at' => now()->subDays(15),
+        ]);
+
+        // Create data within 90d but outside 30d
+        BillingAttempt::factory()->create([
+            'debtor_id' => $debtor->id,
+            'upload_id' => $upload->id,
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'error_code' => 'CB004',
+            'created_at' => now()->subDays(45),
+        ]);
+
+        $response = $this->actingAs($this->user)
+        ->getJson('/api/admin/stats/chargeback-codes?period=30d');
+
+        $response->assertStatus(200);
+        $this->assertEquals('30d', $response->json('data.period'));
+        
+        // Verify only recent data is included
+        $codes = array_column($response->json('data.codes'), 'chargeback_code');
+        $this->assertCount(3, $codes);
+        $this->assertContains('CB001', $codes);
+        $this->assertContains('CB002', $codes);
+        $this->assertContains('CB003', $codes);
+        $this->assertNotContains('CB004', $codes);
+    }
+
+    public function test_chargeback_codes_with_90d_period(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create();
+        
+        // Create data within 24h
+        BillingAttempt::factory()->create([
+            'debtor_id' => $debtor->id,
+            'upload_id' => $upload->id,
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'error_code' => 'CB001',
+            'created_at' => now()->subHours(2),
+        ]);
+
+        // Create data within 7d but outside 24h
+        BillingAttempt::factory()->create([
+            'debtor_id' => $debtor->id,
+            'upload_id' => $upload->id,
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'error_code' => 'CB002',
+            'created_at' => now()->subDays(5),
+        ]);
+
+        // Create data within 30d but outside 7d
+        BillingAttempt::factory()->create([
+            'debtor_id' => $debtor->id,
+            'upload_id' => $upload->id,
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'error_code' => 'CB003',
+            'created_at' => now()->subDays(15),
+        ]);
+
+        // Create data within 90d but outside 30d
+        BillingAttempt::factory()->create([
+            'debtor_id' => $debtor->id,
+            'upload_id' => $upload->id,
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'error_code' => 'CB004',
+            'created_at' => now()->subDays(45),
+        ]);
+
+        // Create data outside 90d
+        BillingAttempt::factory()->create([
+            'debtor_id' => $debtor->id,
+            'upload_id' => $upload->id,
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'error_code' => 'CB005',
+            'created_at' => now()->subDays(120),
+        ]);
+
+        $response = $this->actingAs($this->user)
+        ->getJson('/api/admin/stats/chargeback-codes?period=90d');
+
+        $response->assertStatus(200);
+        $this->assertEquals('90d', $response->json('data.period'));
+        
+        // Verify only recent data is included
+        $codes = array_column($response->json('data.codes'), 'chargeback_code');
+        $this->assertCount(4, $codes);
+        $this->assertContains('CB001', $codes);
+        $this->assertContains('CB002', $codes);
+        $this->assertContains('CB003', $codes);
+        $this->assertContains('CB004', $codes);
+        $this->assertNotContains('CB005', $codes);
+    }
+
+    public function test_chargeback_codes_requires_get_method(): void
+    {
+        $response = $this->actingAs($this->user)
+            ->postJson('/api/admin/stats/chargeback-codes');
+
+        $response->assertMethodNotAllowed();
+    }
+
+    public function test_chargeback_codes_different_periods_have_separate_cache(): void
+    {
+        Cache::flush();
+        
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create();
+
+        BillingAttempt::factory()->create([
+            'debtor_id' => $debtor->id,
+            'upload_id' => $upload->id,
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'error_code' => 'CB001',
+            'error_message' => 'Fraud',
+            'amount' => 100.00,
+            'created_at' => now()->subHour(12),
+        ]);
+
+        // Get 24h period
+        $response24h = $this->actingAs($this->user)
+            ->getJson('/api/admin/stats/chargeback-codes?period=24h');
+
+        $response24h->assertStatus(200);
+        $this->assertEquals('24h', $response24h->json('data.period'));
+
+        // Get 7d period
+        $response7d = $this->actingAs($this->user)
+            ->getJson('/api/admin/stats/chargeback-codes?period=7d');
+
+        $response7d->assertStatus(200);
+        $this->assertEquals('7d', $response7d->json('data.period'));
+
+        // Both should be cached separately
+        $this->assertNotEquals($response24h->json('data'), $response7d->json('data'));
+    }
+
+    public function test_chargeback_codes_response_structure(): void
+    {
+        $response = $this->actingAs($this->user)
+            ->getJson('/api/admin/stats/chargeback-codes');
+        
+        $response->assertJsonStructure([
+            'data' => [
+                'period',
+                'start_date',
+                'codes' => [
+                    '*' => [
+                        'chargeback_code',
+                        'chargeback_reason',
+                        'total_amount',
+                        'occurrences',
+                    ]
+                ],
+                'totals' => [
+                    'total_amount',
+                    'occurrences',
+                ]
+            ]
+        ]);
+    }
+
+    public function test_chargeback_codes_aggregates_same_code(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create();
+
+        // Create 3 attempts with same chargeback code
+        for ($i = 0; $i < 3; $i++) {
+            BillingAttempt::factory()->create([
+                'debtor_id' => $debtor->id,
+                'upload_id' => $upload->id,
+                'status' => BillingAttempt::STATUS_CHARGEBACKED,
+                'error_code' => 'CB001',
+                'error_message' => 'Insufficient Funds',
+                'amount' => 100.00,
+                'created_at' => now()->subHours($i),
+            ]);
+        }
+
+        $response = $this->actingAs($this->user)
+            ->getJson('/api/admin/stats/chargeback-codes');
+
+        $codes = $response->json('data.codes');
+
+        // Should have 1 code, not 3
+        $this->assertCount(1, $codes);
+        $this->assertEquals('CB001', $codes[0]['chargeback_code']);
+        $this->assertEquals(3, $codes[0]['occurrences']);
+        $this->assertEquals(300.00, $codes[0]['total_amount']);
+    }
+
+    public function test_chargeback_codes_validates_totals(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create();
+
+        BillingAttempt::factory()->create([
+            'debtor_id' => $debtor->id,
+            'upload_id' => $upload->id,
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'error_code' => 'CB001',
+            'amount' => 150.00,
+        ]);
+
+        BillingAttempt::factory()->create([
+            'debtor_id' => $debtor->id,
+            'upload_id' => $upload->id,
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'error_code' => 'CB002',
+            'amount' => 250.00,
+        ]);
+
+        $response = $this->actingAs($this->user)
+            ->getJson('/api/admin/stats/chargeback-codes');
+
+        $data = $response->json('data');
+        
+        $this->assertEquals(400.00, $data['totals']['total_amount']);
+        $this->assertEquals(2, $data['totals']['occurrences']);
+    }
 }
