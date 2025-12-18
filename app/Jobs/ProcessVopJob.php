@@ -39,41 +39,41 @@ class ProcessVopJob implements ShouldQueue, ShouldBeUnique
     {
         Log::info('ProcessVopJob started', ['upload_id' => $this->upload->id]);
 
-        $debtors = Debtor::where('upload_id', $this->upload->id)
+        $debtorIds = Debtor::where('upload_id', $this->upload->id)
             ->where('validation_status', Debtor::VALIDATION_VALID)
             ->where('iban_valid', true)
             ->whereDoesntHave('vopLogs')
             ->pluck('id')
             ->toArray();
 
-        if (empty($debtors)) {
+        if (empty($debtorIds)) {
             Log::info('ProcessVopJob: no debtors to verify', ['upload_id' => $this->upload->id]);
             return;
         }
 
-        $chunks = array_chunk($debtors, self::CHUNK_SIZE);
+        $chunks = array_chunk($debtorIds, self::CHUNK_SIZE);
         $jobs = [];
 
-        foreach ($chunks as $index => $debtorIds) {
+        foreach ($chunks as $index => $chunk) {
             $jobs[] = new ProcessVopChunkJob(
-                debtorIds: $debtorIds,
+                debtorIds: $chunk,
                 uploadId: $this->upload->id,
                 chunkIndex: $index,
                 forceRefresh: $this->forceRefresh
             );
         }
 
+        $uploadId = $this->upload->id;
+
         Bus::batch($jobs)
-            ->name("VOP Upload #{$this->upload->id}")
+            ->name("VOP Upload #{$uploadId}")
             ->allowFailures()
-            ->finally(function () {
-                Log::info('ProcessVopJob batch completed', ['upload_id' => $this->upload->id]);
-            })
+            ->onQueue('vop')
             ->dispatch();
 
         Log::info('ProcessVopJob dispatched', [
             'upload_id' => $this->upload->id,
-            'debtors' => count($debtors),
+            'debtors' => count($debtorIds),
             'chunks' => count($chunks),
         ]);
     }
