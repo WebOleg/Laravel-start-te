@@ -33,10 +33,23 @@ return [
     | emerchantpay Configuration
     |--------------------------------------------------------------------------
     */
+
     'emp' => [
         'username' => env('EMP_USERNAME'),
         'password' => env('EMP_PASSWORD'),
         'terminal_token' => env('EMP_TERMINAL_TOKEN'),
         'endpoint' => env('EMP_ENDPOINT', 'https://gate.emerchantpay.net'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | IBAN.com BAV API Configuration
+    |--------------------------------------------------------------------------
+    */
+
+    'iban' => [
+        'api_key' => env('IBAN_API_KEY'),
+        'api_url' => env('IBAN_API_URL', 'https://api.iban.com/clients/verify/v3/'),
+        'mock' => env('IBAN_API_MOCK', true),
     ],
 ];
