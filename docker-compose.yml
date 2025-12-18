@@ -15,6 +15,23 @@ services:
       - db
       - redis
 
+  queue:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tether_queue
+    restart: unless-stopped
+    working_dir: /var/www
+    command: php artisan queue:work --queue=default,vop --sleep=3 --tries=3 --max-time=3600
+    volumes:
+      - ./:/var/www
+      - ./storage:/var/www/storage
+    networks:
+      - tether_network
+    depends_on:
+      - app
+      - redis
+
   nginx:
     image: nginx:alpine
     container_name: tether_nginx
