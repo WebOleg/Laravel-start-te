@@ -9,6 +9,7 @@ A SaaS platform for automated debt recovery through SEPA Direct Debit payments.
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Development](#development)
+- [Troubleshooting](#troubleshooting)
 - [Testing](#testing)
 - [API Documentation](#api-documentation)
 - [Project Structure](#project-structure)
@@ -54,9 +55,16 @@ Tether enables merchants to recover outstanding debts through automated SEPA Dir
 
 3. **Start containers**
 ```bash
+   # Recommended: Use the startup script (handles port conflicts automatically)
+   ./start.sh
+
+   # Or use Make commands
+   make up              # Safe mode with port checks
+   make up-force        # Force start (stops conflicting services)
+   make up-alt          # Use alternative ports (5433, 6380)
+
+   # Or use Docker Compose directly
    docker-compose up -d
-   # or
-   make up
 ```
 
 4. **Install dependencies**
@@ -83,19 +91,59 @@ Tether enables merchants to recover outstanding debts through automated SEPA Dir
 
 ## Development
 
+### Quick Start Commands
+
+```bash
+./start.sh           # Interactive startup with conflict resolution
+make help            # Show all available commands
+make status          # Check ports and container status
+```
+
 ### Available Make Commands
 
+#### Docker Management
 | Command | Description |
 |---------|-------------|
-| `make up` | Start Docker containers |
-| `make down` | Stop Docker containers |
+| `make up` | Start containers (safe mode with port checks) |
+| `make up-force` | Force start (automatically stops conflicting services) |
+| `make up-alt` | Start with alternative ports (5433, 6380) |
+| `make down` | Stop containers |
+| `make down-alt` | Stop alternative port containers |
 | `make restart` | Restart containers |
-| `make test` | Run all tests |
+| `make build` | Rebuild containers |
+| `make status` | Show detailed status of all services |
+
+#### Port & Troubleshooting
+| Command | Description |
+|---------|-------------|
+| `make check-ports` | Check if required ports are available |
+| `make stop-host-postgres` | Stop host database service (if running) |
+| `make clean-ports` | Clean up Docker resources |
+
+#### Database
+| Command | Description |
+|---------|-------------|
+| `make migrate` | Run migrations |
 | `make fresh` | Fresh migrate + seed |
+| `make seed` | Run seeders |
+
+#### Testing
+| Command | Description |
+|---------|-------------|
+| `make test` | Run all tests |
+| `make test-filter` | Run filtered tests (filter=TestName) |
+| `make test-coverage` | Run tests with coverage |
+
+#### Utilities
+| Command | Description |
+|---------|-------------|
 | `make bash` | Enter app container |
 | `make tinker` | Laravel REPL |
 | `make logs` | View container logs |
-| `make help` | Show all commands |
+| `make cache` | Cache config & routes |
+| `make clear` | Clear all caches |
+| `make install` | Composer install |
+| `make autoload` | Composer dump-autoload |
 
 ### Without Make
 ```bash
@@ -103,6 +151,91 @@ docker-compose up -d
 docker-compose exec app php artisan migrate
 docker-compose exec app php artisan db:seed
 docker-compose exec app php artisan test
+```
+
+## Troubleshooting
+
+### Port Conflicts (Address Already in Use)
+
+If you see errors like `bind: address already in use` when starting containers:
+
+**Option 1: Use the startup script (Recommended)**
+```bash
+./start.sh
+```
+The script will detect port conflicts and offer solutions interactively.
+
+**Option 2: Use Make commands**
+```bash
+# Check which ports are in use
+make check-ports
+
+# Automatically stop conflicting services and start containers
+make up-force
+
+# Use alternative ports to avoid conflicts
+make up-alt
+```
+
+**Option 3: Manual resolution**
+```bash
+# Check what's using a specific port (example: 5432)
+lsof -i :5432
+# or
+ss -tlnp | grep :5432
+
+# Stop the conflicting service (example: PostgreSQL)
+sudo systemctl stop postgresql
+
+# Clean up and start
+make clean-ports
+docker-compose up -d
+```
+
+### Alternative Ports Setup
+
+If you want to run Tether alongside existing database/cache services on your host:
+
+1. Start with alternative ports:
+```bash
+make up-alt
+```
+
+2. Update your [.env](.env.example) file:
+```env
+DB_HOST=127.0.0.1
+DB_PORT=5433           # Changed from 5432
+REDIS_PORT=6380        # Changed from 6379
+```
+
+3. The services will be available at:
+   - PostgreSQL: `localhost:5433`
+   - Redis: `localhost:6380`
+   - Nginx: `localhost:8000`
+
+### Common Issues
+
+**Container fails to start**
+```bash
+make clean-ports
+make up
+```
+
+**Permission issues with vendor/ or storage/**
+```bash
+sudo chown -R $USER:$USER vendor/ storage/ bootstrap/cache/
+```
+
+**Database connection refused**
+```bash
+# Check if containers are running
+make status
+
+# Check logs
+make logs
+
+# Restart services
+make restart
 ```
 
 ## Testing

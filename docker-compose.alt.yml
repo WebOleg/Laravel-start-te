@@ -1,0 +1,81 @@
+# Alternative Docker Compose Configuration
+# Uses different ports to avoid conflicts with host services
+# PostgreSQL: 5433 instead of 5432
+# Redis: 6380 instead of 6379
+# Nginx: 8000 (same)
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tether_app
+    restart: unless-stopped
+    working_dir: /var/www
+    volumes:
+      - ./:/var/www
+      - ./storage:/var/www/storage
+    networks:
+      - tether_network
+    depends_on:
+      - db
+      - redis
+    environment:
+      - DB_HOST=db
+      - DB_PORT=5432  # Internal container port stays the same
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379  # Internal container port stays the same
+
+  nginx:
+    image: nginx:alpine
+    container_name: tether_nginx
+    restart: unless-stopped
+    ports:
+      - "8000:80"
+    volumes:
+      - ./:/var/www
+      - ./docker/nginx/conf.d:/etc/nginx/conf.d
+    networks:
+      - tether_network
+    depends_on:
+      - app
+
+  db:
+    image: postgres:15-alpine
+    container_name: tether_db_alt
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-tether}
+      POSTGRES_USER: ${DB_USERNAME:-tether}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-secret}
+    volumes:
+      - tether_db_data_alt:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"  # Host port 5433 maps to container port 5432
+    networks:
+      - tether_network
+
+  redis:
+    image: redis:7-alpine
+    container_name: tether_redis_alt
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - tether_redis_data_alt:/data
+    ports:
+      - "6380:6379"  # Host port 6380 maps to container port 6379
+    networks:
+      - tether_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  tether_network:
+    driver: bridge
+
+volumes:
+  tether_db_data_alt:
+  tether_redis_data_alt:
