@@ -1,7 +1,9 @@
 <?php
 
 /**
- * VOP verification service with caching and VopLog integration.
+ * VOP verification service orchestrating scoring and VopLog management.
+ * 
+ * Uses IbanApiService (IBAN SUITE - unlimited) for bank identification.
  */
 
 namespace App\Services;
@@ -13,12 +15,16 @@ use Illuminate\Support\Facades\Log;
 class VopVerificationService
 {
     public function __construct(
-        private IbanBavService $bavService,
+        private VopScoringService $scoringService,
         private IbanValidator $ibanValidator
     ) {}
 
     /**
      * Verify single debtor. Returns existing VopLog if cached.
+     *
+     * @param Debtor $debtor
+     * @param bool $forceRefresh
+     * @return ?VopLog
      */
     public function verify(Debtor $debtor, bool $forceRefresh = false): ?VopLog
     {
@@ -28,32 +34,27 @@ class VopVerificationService
 
         $ibanHash = $debtor->iban_hash ?? $this->ibanValidator->hash($debtor->iban);
 
-        // Check cache (existing VopLog)
+        // Check cache (existing VopLog for same IBAN)
         if (!$forceRefresh) {
             $existing = $this->findExistingVopLog($ibanHash);
             if ($existing) {
-                Log::debug('VOP cache hit', ['debtor_id' => $debtor->id, 'iban_hash' => substr($ibanHash, 0, 8)]);
+                Log::debug('VOP cache hit', [
+                    'debtor_id' => $debtor->id,
+                    'iban_hash' => substr($ibanHash, 0, 8),
+                ]);
                 return $this->linkVopLogToDebtor($existing, $debtor);
             }
         }
 
-        // Call BAV API
-        $name = trim(($debtor->first_name ?? '') . ' ' . ($debtor->last_name ?? ''));
-        $result = $this->bavService->verify($debtor->iban, $name);
-
-        if (!$result['success']) {
-            Log::warning('VOP verification failed', [
-                'debtor_id' => $debtor->id,
-                'error' => $result['error'],
-            ]);
-            return null;
-        }
-
-        return $this->createVopLog($debtor, $result, $ibanHash);
+        // Use VopScoringService (IbanApiService - unlimited)
+        return $this->scoringService->score($debtor, $forceRefresh);
     }
 
     /**
      * Check if debtor can be verified.
+     *
+     * @param Debtor $debtor
+     * @return bool
      */
     public function canVerify(Debtor $debtor): bool
     {
@@ -65,16 +66,14 @@ class VopVerificationService
             return false;
         }
 
-        $countryCode = substr($debtor->iban, 0, 2);
-        if (!$this->bavService->isCountrySupported($countryCode)) {
-            return false;
-        }
-
         return true;
     }
 
     /**
      * Check if debtor already has VopLog.
+     *
+     * @param Debtor $debtor
+     * @return bool
      */
     public function hasVopLog(Debtor $debtor): bool
     {
@@ -83,6 +82,9 @@ class VopVerificationService
 
     /**
      * Find existing VopLog by IBAN hash (cache lookup).
+     *
+     * @param string $ibanHash
+     * @return ?VopLog
      */
     private function findExistingVopLog(string $ibanHash): ?VopLog
     {
@@ -93,10 +95,13 @@ class VopVerificationService
 
     /**
      * Link existing VopLog data to new debtor.
+     *
+     * @param VopLog $existing
+     * @param Debtor $debtor
+     * @return VopLog
      */
     private function linkVopLogToDebtor(VopLog $existing, Debtor $debtor): VopLog
     {
-        // Create new VopLog for this debtor with same data
         return VopLog::create([
             'debtor_id' => $debtor->id,
             'upload_id' => $debtor->upload_id,
@@ -113,40 +118,10 @@ class VopVerificationService
     }
 
     /**
-     * Create new VopLog from BAV result.
-     */
-    private function createVopLog(Debtor $debtor, array $result, string $ibanHash): VopLog
-    {
-        $countryCode = substr($debtor->iban, 0, 2);
-
-        $vopLog = VopLog::create([
-            'debtor_id' => $debtor->id,
-            'upload_id' => $debtor->upload_id,
-            'iban_masked' => $this->ibanValidator->mask($debtor->iban),
-            'iban_valid' => $result['valid'],
-            'bank_identified' => !empty($result['bic']),
-            'bank_name' => null, // BAV doesn't return bank_name
-            'bic' => $result['bic'],
-            'country' => $countryCode,
-            'vop_score' => $result['vop_score'],
-            'result' => $result['vop_result'],
-            'meta' => [
-                'name_match' => $result['name_match'],
-                'iban_hash' => $ibanHash,
-            ],
-        ]);
-
-        Log::info('VOP verification completed', [
-            'debtor_id' => $debtor->id,
-            'vop_score' => $result['vop_score'],
-            'result' => $result['vop_result'],
-        ]);
-
-        return $vopLog;
-    }
-
-    /**
      * Get verification stats for upload.
+     *
+     * @param int $uploadId
+     * @return array
      */
     public function getUploadStats(int $uploadId): array
     {
@@ -162,11 +137,14 @@ class VopVerificationService
             ->pluck('count', 'result')
             ->toArray();
 
+        $avgScore = VopLog::where('upload_id', $uploadId)->avg('vop_score');
+
         return [
             'total_eligible' => $total,
             'verified' => $verified,
             'pending' => $total - $verified,
             'by_result' => $byResult,
+            'avg_score' => round($avgScore ?? 0),
         ];
     }
 }

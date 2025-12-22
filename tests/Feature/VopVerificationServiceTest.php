@@ -54,18 +54,6 @@ class VopVerificationServiceTest extends TestCase
         $this->assertFalse($this->service->canVerify($debtor));
     }
 
-    public function test_cannot_verify_unsupported_country(): void
-    {
-        $upload = Upload::factory()->create();
-        $debtor = Debtor::factory()->create([
-            'upload_id' => $upload->id,
-            'iban' => 'GB33BUKB20201555555555',
-            'iban_valid' => true,
-            'validation_status' => Debtor::VALIDATION_VALID,
-        ]);
-
-        $this->assertFalse($this->service->canVerify($debtor));
-    }
 
     public function test_cache_hit_returns_existing_voplog(): void
     {
