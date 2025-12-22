@@ -1,6 +1,7 @@
 # Architecture Overview
 
 ## System Architecture
+
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                              CLIENTS                                     │
@@ -36,13 +37,14 @@
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────────┐           │
 │  │ uploads  │ │ debtors  │ │ vop_logs │ │ billing_attempts │           │
 │  └──────────┘ └──────────┘ └──────────┘ └──────────────────┘           │
-│  ┌────────────┐                                                         │
-│  │ blacklists │                                                         │
-│  └────────────┘                                                         │
+│  ┌────────────┐ ┌─────────────────┐                                     │
+│  │ blacklists │ │ bank_references │                                     │
+│  └────────────┘ └─────────────────┘                                     │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Directory Structure
+
 ```
 tether-laravel/
 ├── app/
@@ -52,6 +54,7 @@ tether-laravel/
 │   │   │   │   ├── DashboardController.php
 │   │   │   │   ├── UploadController.php
 │   │   │   │   ├── DebtorController.php
+│   │   │   │   ├── VopController.php
 │   │   │   │   ├── VopLogController.php
 │   │   │   │   └── BillingAttemptController.php
 │   │   │   └── Api/                   # Public API controllers
@@ -67,15 +70,22 @@ tether-laravel/
 │   │   ├── Debtor.php
 │   │   ├── VopLog.php
 │   │   ├── BillingAttempt.php
-│   │   └── Blacklist.php
+│   │   ├── Blacklist.php
+│   │   └── BankReference.php
 │   ├── Services/                      # Business logic
 │   │   ├── IbanValidator.php
+│   │   ├── IbanApiService.php
+│   │   ├── VopScoringService.php
+│   │   ├── VopVerificationService.php
 │   │   ├── SpreadsheetParserService.php
 │   │   ├── FileUploadService.php
+│   │   ├── DebtorValidationService.php
 │   │   └── BlacklistService.php
 │   ├── Jobs/                          # Queue jobs
 │   │   ├── ProcessUploadJob.php
-│   │   └── ProcessUploadChunkJob.php
+│   │   ├── ProcessUploadChunkJob.php
+│   │   ├── ProcessVopJob.php
+│   │   └── ProcessVopChunkJob.php
 │   └── Traits/                        # Shared traits
 │       └── ParsesDebtorData.php
 ├── bootstrap/
@@ -98,6 +108,7 @@ tether-laravel/
 ## Database Schema
 
 ### Entity Relationship Diagram
+
 ```
 ┌─────────────┐       ┌─────────────┐
 │    users    │       │   uploads   │
@@ -135,141 +146,180 @@ tether-laravel/
       │ │ result      │              │ status           │
       │ └─────────────┘              └──────────────────┘
       │
-      │  ┌─────────────┐
-      └─▶│ blacklists  │
-         ├─────────────┤
-         │ id          │
-         │ iban        │
-         │ iban_hash   │
-         │ reason      │
-         │ added_by    │
-         └─────────────┘
+      │  ┌─────────────┐    ┌─────────────────┐
+      └─▶│ blacklists  │    │ bank_references │ (standalone)
+         ├─────────────┤    ├─────────────────┤
+         │ id          │    │ id              │
+         │ iban        │    │ country_iso     │
+         │ iban_hash   │    │ bank_code       │
+         │ reason      │    │ bank_name       │
+         │ added_by    │    │ sepa_sdd        │
+         └─────────────┘    └─────────────────┘
 ```
 
 ### Table Descriptions
 
 #### `uploads`
+
 Stores information about uploaded CSV/XLSX files containing debtor data.
 
-| Column | Type | Description |
-|--------|------|-------------|
-| id | bigint | Primary key |
-| filename | string | System-generated filename |
-| original_filename | string | User's original filename |
-| file_path | string | Storage path |
-| file_size | integer | File size in bytes |
-| mime_type | string | File MIME type |
-| status | enum | pending, processing, completed, failed |
-| total_records | integer | Total rows in file |
-| processed_records | integer | Successfully processed rows |
-| failed_records | integer | Failed rows |
-| uploaded_by | bigint | User FK (nullable) |
-| column_mapping | jsonb | CSV column to field mapping |
-| meta | jsonb | Additional metadata |
+| Column            | Type    | Description                            |
+| ----------------- | ------- | -------------------------------------- |
+| id                | bigint  | Primary key                            |
+| filename          | string  | System-generated filename              |
+| original_filename | string  | User's original filename               |
+| file_path         | string  | Storage path                           |
+| file_size         | integer | File size in bytes                     |
+| mime_type         | string  | File MIME type                         |
+| status            | enum    | pending, processing, completed, failed |
+| total_records     | integer | Total rows in file                     |
+| processed_records | integer | Successfully processed rows            |
+| failed_records    | integer | Failed rows                            |
+| uploaded_by       | bigint  | User FK (nullable)                     |
+| column_mapping    | jsonb   | CSV column to field mapping            |
+| headers           | jsonb   | CSV column headers for dynamic UI      |
+| meta              | jsonb   | Additional metadata                    |
 
 #### `debtors`
+
 Individual debtor records extracted from CSV/XLSX uploads.
 
-| Column | Type | Description |
-|--------|------|-------------|
-| **Identity** | | |
-| id | bigint | Primary key |
-| upload_id | bigint | FK to uploads |
-| external_reference | string | Client's internal ID |
-| **IBAN & Bank** | | |
-| iban | string | Bank account number |
-| iban_hash | string | SHA256 for duplicate detection |
-| old_iban | string | Previous IBAN (if migrated) |
-| bank_name | string | Bank name |
-| bank_code | string | National bank code |
-| bic | string | BIC/SWIFT code |
-| **Personal Info** | | |
-| first_name | string | Debtor first name |
-| last_name | string | Debtor last name |
-| national_id | string | DNI/NIE/ID number |
-| birth_date | date | Date of birth |
-| email | string | Contact email |
-| phone | string | Primary phone |
-| phone_2 | string | Secondary phone |
-| phone_3 | string | Tertiary phone |
-| phone_4 | string | Additional phone |
-| primary_phone | string | Preferred contact phone |
-| **Address** | | |
-| address | string | Full address (legacy) |
-| street | string | Street name |
-| street_number | string | Building number |
-| floor | string | Floor number |
-| door | string | Door identifier |
-| apartment | string | Apartment number |
-| postcode | string | Postal code |
-| city | string | City name |
-| province | string | Province/state |
-| country | string(2) | ISO country code |
-| **Financial** | | |
-| amount | decimal(12,2) | Debt amount |
-| currency | string(3) | Currency code (EUR) |
-| sepa_type | string | SEPA type (CORE, B2B) |
-| **Status** | | |
-| status | enum | pending, processing, recovered, failed |
-| risk_class | enum | low, medium, high |
-| iban_valid | boolean | Pre-validated IBAN flag |
-| name_matched | boolean | Pre-validated name match |
-| **Meta** | | |
-| meta | jsonb | Additional flexible data |
-| created_at | timestamp | Record created |
-| updated_at | timestamp | Record updated |
-| deleted_at | timestamp | Soft delete |
+| Column             | Type          | Description                            |
+| ------------------ | ------------- | -------------------------------------- |
+| **Identity**       |               |                                        |
+| id                 | bigint        | Primary key                            |
+| upload_id          | bigint        | FK to uploads                          |
+| external_reference | string        | Client's internal ID                   |
+| **IBAN & Bank**    |               |                                        |
+| iban               | string        | Bank account number                    |
+| iban_hash          | string        | SHA256 for duplicate detection         |
+| old_iban           | string        | Previous IBAN (if migrated)            |
+| bank_name          | string        | Bank name                              |
+| bank_code          | string        | National bank code                     |
+| bic                | string        | BIC/SWIFT code                         |
+| **Personal Info**  |               |                                        |
+| first_name         | string        | Debtor first name                      |
+| last_name          | string        | Debtor last name                       |
+| national_id        | string        | DNI/NIE/ID number                      |
+| birth_date         | date          | Date of birth                          |
+| email              | string        | Contact email                          |
+| phone              | string        | Primary phone                          |
+| phone_2            | string        | Secondary phone                        |
+| phone_3            | string        | Tertiary phone                         |
+| phone_4            | string        | Additional phone                       |
+| primary_phone      | string        | Preferred contact phone                |
+| **Address**        |               |                                        |
+| address            | string        | Full address (legacy)                  |
+| street             | string        | Street name                            |
+| street_number      | string        | Building number                        |
+| floor              | string        | Floor number                           |
+| door               | string        | Door identifier                        |
+| apartment          | string        | Apartment number                       |
+| postcode           | string        | Postal code                            |
+| city               | string        | City name                              |
+| province           | string        | Province/state                         |
+| country            | string(2)     | ISO country code                       |
+| **Financial**      |               |                                        |
+| amount             | decimal(12,2) | Debt amount                            |
+| currency           | string(3)     | Currency code (EUR)                    |
+| sepa_type          | string        | SEPA type (CORE, B2B)                  |
+| **Status**         |               |                                        |
+| status             | enum          | pending, processing, recovered, failed |
+| risk_class         | enum          | low, medium, high                      |
+| iban_valid         | boolean       | Pre-validated IBAN flag                |
+| name_matched       | boolean       | Pre-validated name match               |
+| validation_status  | string        | pending, valid, invalid                |
+| validation_errors  | jsonb         | Array of error messages                |
+| validated_at       | timestamp     | When last validated                    |
+| **Meta**           |               |                                        |
+| raw_data           | jsonb         | Original CSV row data                  |
+| meta               | jsonb         | Additional flexible data               |
+| created_at         | timestamp     | Record created                         |
+| updated_at         | timestamp     | Record updated                         |
+| deleted_at         | timestamp     | Soft delete                            |
 
 #### `vop_logs`
+
 IBAN verification results from VOP (Verification of Payee) service.
 
-| Column | Type | Description |
-|--------|------|-------------|
-| id | bigint | Primary key |
-| debtor_id | bigint | FK to debtors |
-| upload_id | bigint | FK to uploads |
-| iban_masked | string | Masked IBAN for display |
-| iban_valid | boolean | Checksum validation |
-| bank_identified | boolean | Bank found in registry |
-| bank_name | string | Bank name (if identified) |
-| bic | string | Bank BIC code |
-| vop_score | tinyint | Confidence score 0-100 |
-| result | enum | verified, likely_verified, inconclusive, mismatch, rejected |
+| Column          | Type      | Description                                                 |
+| --------------- | --------- | ----------------------------------------------------------- |
+| id              | bigint    | Primary key                                                 |
+| debtor_id       | bigint    | FK to debtors                                               |
+| upload_id       | bigint    | FK to uploads                                               |
+| iban_masked     | string    | Masked IBAN for display                                     |
+| iban_valid      | boolean   | Checksum validation                                         |
+| bank_identified | boolean   | Bank found in registry                                      |
+| bank_name       | string    | Bank name (if identified)                                   |
+| bic             | string    | Bank BIC code                                               |
+| country         | string(2) | Country code                                                |
+| vop_score       | tinyint   | Confidence score 0-100                                      |
+| result          | enum      | verified, likely_verified, inconclusive, mismatch, rejected |
+| meta            | jsonb     | Additional metadata                                         |
+| created_at      | timestamp | When verified                                               |
 
 #### `billing_attempts`
+
 SEPA Direct Debit payment attempts.
 
-| Column | Type | Description |
-|--------|------|-------------|
-| id | bigint | Primary key |
-| debtor_id | bigint | FK to debtors |
-| upload_id | bigint | FK to uploads |
-| transaction_id | string | Internal transaction ID |
-| unique_id | string | Payment gateway ID |
-| amount | decimal | Amount charged |
-| currency | string | Currency code |
-| status | enum | pending, approved, declined, error, voided |
-| attempt_number | integer | Retry counter |
-| error_code | string | Bank error code |
-| error_message | string | Human-readable error |
-| can_retry | boolean | Eligible for retry |
-| processed_at | timestamp | When processed |
+| Column         | Type      | Description                                              |
+| -------------- | --------- | -------------------------------------------------------- |
+| id             | bigint    | Primary key                                              |
+| debtor_id      | bigint    | FK to debtors                                            |
+| upload_id      | bigint    | FK to uploads                                            |
+| transaction_id | string    | Internal transaction ID                                  |
+| unique_id      | string    | Payment gateway ID                                       |
+| amount         | decimal   | Amount charged                                           |
+| currency       | string    | Currency code                                            |
+| status         | enum      | pending, approved, declined, error, voided, chargebacked |
+| attempt_number | integer   | Retry counter                                            |
+| error_code     | string    | Bank error code                                          |
+| error_message  | string    | Human-readable error                                     |
+| can_retry      | boolean   | Eligible for retry                                       |
+| processed_at   | timestamp | When processed                                           |
 
 #### `blacklists`
+
 Blocked IBANs that should be rejected during upload processing.
 
-| Column | Type | Description |
-|--------|------|-------------|
-| id | bigint | Primary key |
-| iban | string | Normalized IBAN (unique) |
-| iban_hash | string(64) | SHA-256 hash for fast lookup (unique, indexed) |
-| reason | string | Reason for blocking (nullable) |
-| source | string | Source: Manual, System, Chargeback (nullable) |
-| added_by | bigint | FK to users (nullable) |
-| created_at | timestamp | When added |
-| updated_at | timestamp | Last updated |
+| Column     | Type       | Description                                    |
+| ---------- | ---------- | ---------------------------------------------- |
+| id         | bigint     | Primary key                                    |
+| iban       | string     | Normalized IBAN (unique)                       |
+| iban_hash  | string(64) | SHA-256 hash for fast lookup (unique, indexed) |
+| reason     | string     | Reason for blocking (nullable)                 |
+| source     | string     | Source: Manual, System, Chargeback (nullable)  |
+| added_by   | bigint     | FK to users (nullable)                         |
+| created_at | timestamp  | When added                                     |
+| updated_at | timestamp  | Last updated                                   |
+
+#### `bank_references`
+
+Local cache for bank information from iban.com API.
+
+| Column      | Type        | Description                  |
+| ----------- | ----------- | ---------------------------- |
+| id          | bigint      | Primary key                  |
+| country_iso | char(2)     | Country code (DE, ES, FR...) |
+| bank_code   | string(20)  | National bank code from IBAN |
+| bic         | string(11)  | BIC/SWIFT code               |
+| bank_name   | string(255) | Bank name                    |
+| branch      | string(255) | Branch name (nullable)       |
+| address     | string(255) | Bank address (nullable)      |
+| city        | string(128) | City (nullable)              |
+| zip         | string(20)  | Postal code (nullable)       |
+| sepa_sct    | boolean     | SEPA Credit Transfer support |
+| sepa_sdd    | boolean     | SEPA Direct Debit support    |
+| sepa_cor1   | boolean     | SEPA COR1 support            |
+| sepa_b2b    | boolean     | SEPA B2B support             |
+| sepa_scc    | boolean     | SEPA Card Clearing support   |
+| created_at  | timestamp   | When cached                  |
+| updated_at  | timestamp   | Last updated                 |
+
+**Unique constraint:** `country_iso` + `bank_code`
 
 ## Request Lifecycle
+
 ```
 1. HTTP Request
        │
@@ -305,33 +355,42 @@ Blocked IBANs that should be rejected during upload processing.
 ## Design Patterns
 
 ### Repository Pattern (Future)
+
 Controllers will use repositories for complex queries.
 
 ### Resource Pattern
+
 API Resources transform Models to JSON, ensuring:
-- Consistent structure
-- Hidden sensitive fields (IBAN)
-- Computed fields (full_name, iban_masked)
+
+-   Consistent structure
+-   Hidden sensitive fields (IBAN)
+-   Computed fields (full_name, iban_masked)
 
 ### Factory Pattern
+
 Factories generate test data with realistic values and states.
 
 ## Security
 
 ### Authentication
-- Laravel Sanctum for API tokens
-- Tokens stored in `personal_access_tokens` table
-- Stateless authentication for API
+
+-   Laravel Sanctum for API tokens
+-   Tokens stored in `personal_access_tokens` table
+-   Stateless authentication for API
 
 ### Data Protection
-- IBAN never exposed in API (masked)
-- IBAN hash for duplicate detection
-- Soft deletes preserve audit trail
-- Blacklist prevents processing of blocked IBANs
+
+-   IBAN never exposed in API (masked)
+-   IBAN hash for duplicate detection
+-   Soft deletes preserve audit trail
+-   Blacklist prevents processing of blocked IBANs
 
 ### Authorization (Future)
-- Role-based access control
-- Admin vs Client permissions
+
+-   Role-based access control
+-   Admin vs Client permissions
+
+---
 
 ## Services Layer
 
@@ -343,20 +402,21 @@ IBAN validation service wrapping `jschaedl/iban-validation` library for producti
 
 **Methods:**
 
-| Method | Return | Description |
-|--------|--------|-------------|
-| `validate(string $iban)` | array | Full validation with details |
-| `isValid(string $iban)` | bool | Quick validation check |
-| `isSepa(string $iban)` | bool | Check SEPA zone membership |
-| `getCountryCode(string $iban)` | string | Extract country code |
-| `getCountryName(string $iban)` | ?string | Get country name |
-| `getBankId(string $iban)` | ?string | Extract bank identifier |
-| `normalize(string $iban)` | string | Uppercase, remove spaces |
-| `format(string $iban)` | string | Format for display |
-| `mask(string $iban)` | string | Mask for secure display |
-| `hash(string $iban)` | string | SHA-256 for deduplication |
+| Method                         | Return  | Description                  |
+| ------------------------------ | ------- | ---------------------------- |
+| `validate(string $iban)`       | array   | Full validation with details |
+| `isValid(string $iban)`        | bool    | Quick validation check       |
+| `isSepa(string $iban)`         | bool    | Check SEPA zone membership   |
+| `getCountryCode(string $iban)` | string  | Extract country code         |
+| `getCountryName(string $iban)` | ?string | Get country name             |
+| `getBankId(string $iban)`      | ?string | Extract bank identifier      |
+| `normalize(string $iban)`      | string  | Uppercase, remove spaces     |
+| `format(string $iban)`         | string  | Format for display           |
+| `mask(string $iban)`           | string  | Mask for secure display      |
+| `hash(string $iban)`           | string  | SHA-256 for deduplication    |
 
 **Usage:**
+
 ```php
 use App\Services\IbanValidator;
 
@@ -375,6 +435,242 @@ if ($validator->isValid($iban)) {
 $hash = $validator->hash($iban);
 ```
 
+---
+
+### IbanApiService
+
+Location: `app/Services/IbanApiService.php`
+
+IBAN.com API V4 integration for bank account validation and bank information lookup. Uses **IBAN SUITE (UNLIMITED)** subscription.
+
+**Configuration (`.env`):**
+
+```
+IBAN_API_KEY=your_api_key
+IBAN_API_URL=https://api.iban.com/clients/api/v4/iban/
+IBAN_API_MOCK=false
+```
+
+**Features:**
+
+-   Bank name and BIC lookup via iban.com API
+-   SEPA support detection (SCT, SDD, B2B, COR1, SCC)
+-   Local database cache (BankReference table)
+-   Memory cache (24 hours)
+-   Retry logic with exponential backoff
+-   Mock mode for development/testing
+
+**Methods:**
+
+| Method                                       | Return  | Description                      |
+| -------------------------------------------- | ------- | -------------------------------- |
+| `verify(string $iban, bool $skipLocalCache)` | array   | Full verification with bank data |
+| `getBankName(string $iban)`                  | ?string | Get bank name                    |
+| `getBic(string $iban)`                       | ?string | Get BIC/SWIFT code               |
+| `isValid(string $iban)`                      | bool    | Check IBAN validity via API      |
+| `supportsSepaSdd(string $iban)`              | bool    | Check SEPA Direct Debit support  |
+
+**Cache Flow:**
+
+```
+IBAN → extract country_iso + bank_code
+         ↓
+    Check bank_references table (source: database)
+         ↓
+    Not found? → Check memory cache (source: memory)
+         ↓
+    Not found? → Call iban.com API (source: api)
+         ↓
+    Save to bank_references + memory cache
+```
+
+**Usage:**
+
+```php
+use App\Services\IbanApiService;
+
+$service = app(IbanApiService::class);
+
+// Full verification
+$result = $service->verify('DE89370400440532013000');
+// Returns: [
+//   'success' => true,
+//   'bank_data' => ['bank' => 'Commerzbank', 'bic' => 'COBADEFFXXX', ...],
+//   'sepa_data' => ['SDD' => 'YES', 'SCT' => 'YES', ...],
+//   'validations' => [...],
+//   'cached' => true,
+//   'source' => 'database'
+// ]
+
+// Quick lookups
+$bankName = $service->getBankName($iban); // "Commerzbank"
+$bic = $service->getBic($iban);           // "COBADEFFXXX"
+
+// Check SEPA support
+if ($service->supportsSepaSdd($iban)) {
+    // Can process SEPA Direct Debit
+}
+```
+
+---
+
+### VopScoringService
+
+Location: `app/Services/VopScoringService.php`
+
+VOP Scoring Engine for calculating debtor verification scores (0-100).
+
+**Score Breakdown:**
+
+| Criterion         | Points | Description                         |
+| ----------------- | ------ | ----------------------------------- |
+| IBAN Valid        | +20    | Local checksum validation           |
+| Bank Identified   | +25    | Bank found via API                  |
+| SEPA SDD Support  | +25    | Bank supports Direct Debit          |
+| Country Supported | +15    | Country in SEPA zone                |
+| Name Match        | +15    | Reserved for future BAV integration |
+
+**Result Thresholds:**
+
+| Score  | Result          | Action          |
+| ------ | --------------- | --------------- |
+| 80-100 | verified        | Safe to bill    |
+| 60-79  | likely_verified | Probably safe   |
+| 40-59  | inconclusive    | Review needed   |
+| 20-39  | mismatch        | Issues detected |
+| 0-19   | rejected        | Do not bill     |
+
+**Methods:**
+
+| Method                                      | Return | Description               |
+| ------------------------------------------- | ------ | ------------------------- |
+| `score(Debtor $debtor, bool $forceRefresh)` | VopLog | Calculate and save VopLog |
+| `calculate(Debtor $debtor)`                 | array  | Dry run with breakdown    |
+| `getScoreBreakdown()`                       | array  | Get scoring criteria      |
+| `getResultThresholds()`                     | array  | Get result ranges         |
+
+**Usage:**
+
+```php
+use App\Services\VopScoringService;
+
+$service = app(VopScoringService::class);
+
+// Score and create VopLog
+$vopLog = $service->score($debtor);
+// Creates VopLog with: vop_score=85, result='verified', bank_name='Deutsche Bank'
+
+// Dry run (no VopLog created)
+$result = $service->calculate($debtor);
+// Returns: [
+//   'score' => 85,
+//   'result' => 'verified',
+//   'breakdown' => [
+//     'iban_valid' => ['passed' => true, 'points' => 20],
+//     'bank_identified' => ['passed' => true, 'points' => 25],
+//     'sepa_sdd' => ['passed' => true, 'points' => 25],
+//     'country_supported' => ['passed' => true, 'points' => 15],
+//   ]
+// ]
+```
+
+---
+
+### VopVerificationService
+
+Location: `app/Services/VopVerificationService.php`
+
+Main orchestrator for VOP verification process. Manages caching, delegation to scoring service, and VopLog management.
+
+**Dependencies:**
+
+-   `VopScoringService` - calculates scores using IbanApiService
+-   `IbanValidator` - IBAN validation and hashing
+
+**Methods:**
+
+| Method                                       | Return  | Description                                  |
+| -------------------------------------------- | ------- | -------------------------------------------- |
+| `verify(Debtor $debtor, bool $forceRefresh)` | ?VopLog | Verify debtor, returns cached or new VopLog  |
+| `canVerify(Debtor $debtor)`                  | bool    | Check if debtor is eligible for verification |
+| `hasVopLog(Debtor $debtor)`                  | bool    | Check if debtor already has VopLog           |
+| `getUploadStats(int $uploadId)`              | array   | Get verification stats for upload            |
+
+**Usage:**
+
+```php
+use App\Services\VopVerificationService;
+
+$service = app(VopVerificationService::class);
+
+// Verify single debtor
+$vopLog = $service->verify($debtor);
+
+// Force refresh (ignore cache)
+$vopLog = $service->verify($debtor, forceRefresh: true);
+
+// Check eligibility
+if ($service->canVerify($debtor)) {
+    // Debtor has validation_status=valid and valid IBAN
+}
+
+// Get upload stats
+$stats = $service->getUploadStats($uploadId);
+// Returns: [
+//   'total_eligible' => 100,
+//   'verified' => 85,
+//   'pending' => 15,
+//   'by_result' => ['verified' => 70, 'likely_verified' => 10, ...],
+//   'avg_score' => 82,
+// ]
+```
+
+---
+
+### DebtorValidationService
+
+Location: `app/Services/DebtorValidationService.php`
+
+Validates debtor data in Stage B (after upload). Performs comprehensive validation including IBAN, required fields, encoding, and blacklist checks.
+
+**Methods:**
+
+| Method                              | Return | Description                                  |
+| ----------------------------------- | ------ | -------------------------------------------- |
+| `validateUpload(Upload $upload)`    | array  | Validate all pending debtors in upload       |
+| `validateAndUpdate(Debtor $debtor)` | void   | Validate single debtor and update status     |
+| `validate(Debtor $debtor)`          | array  | Returns ['valid' => bool, 'errors' => [...]] |
+
+**Validation Rules:**
+
+| Field     | Rule                                  | Error Message                                           |
+| --------- | ------------------------------------- | ------------------------------------------------------- |
+| IBAN      | Required, valid checksum              | "IBAN is required" / "IBAN is invalid"                  |
+| Name      | first_name OR last_name               | "Name is required"                                      |
+| Amount    | Required, > 0, ≤ 50000                | "Amount is required" / "Amount must be positive"        |
+| City      | Required, 2-100 chars, valid encoding | "City is required" / "City contains invalid characters" |
+| Postcode  | Required, 3-20 chars                  | "Postal code is required"                               |
+| Address   | Required, 5-200 chars, valid encoding | "Address is required"                                   |
+| Blacklist | IBAN not in blacklist                 | "IBAN is blacklisted"                                   |
+
+---
+
+### BlacklistService
+
+Location: `app/Services/BlacklistService.php`
+
+Manages IBAN blacklist for blocking fraudulent or problematic accounts.
+
+**Methods:**
+
+| Method                                                              | Return    | Description                |
+| ------------------------------------------------------------------- | --------- | -------------------------- |
+| `add(string $iban, ?string $reason, ?string $source, ?int $userId)` | Blacklist | Add IBAN to blacklist      |
+| `remove(string $iban)`                                              | bool      | Remove IBAN from blacklist |
+| `isBlacklisted(string $iban)`                                       | bool      | Check if IBAN is blocked   |
+
+---
+
 ### SpreadsheetParserService
 
 Location: `app/Services/SpreadsheetParserService.php`
@@ -385,12 +681,14 @@ Parses CSV and Excel files into standardized row arrays.
 
 **Methods:**
 
-| Method | Return | Description |
-|--------|--------|-------------|
-| `parse(UploadedFile $file)` | array | Parse uploaded file |
-| `parseCsv(string $path)` | array | Parse CSV file |
-| `parseExcel(string $path)` | array | Parse XLSX/XLS file |
-| `detectType(UploadedFile $file)` | string | Detect file type |
+| Method                           | Return | Description         |
+| -------------------------------- | ------ | ------------------- |
+| `parse(UploadedFile $file)`      | array  | Parse uploaded file |
+| `parseCsv(string $path)`         | array  | Parse CSV file      |
+| `parseExcel(string $path)`       | array  | Parse XLSX/XLS file |
+| `detectType(UploadedFile $file)` | string | Detect file type    |
+
+---
 
 ### FileUploadService
 
@@ -399,79 +697,119 @@ Location: `app/Services/FileUploadService.php`
 Orchestrates file upload processing: parse, validate, create debtors.
 
 **Features:**
-- Automatic column mapping (English headers)
-- Name splitting (full name → first_name + last_name)
-- Country extraction from IBAN
-- IBAN validation and enrichment
-- Blacklist checking
-- European/US amount format parsing
-- Date format detection
 
-**Usage:**
-```php
-$result = $uploadService->process($file, $userId);
-// Returns: ['upload' => Upload, 'created' => 10, 'failed' => 2, 'errors' => [...]]
+-   Automatic column mapping (English headers)
+-   Name splitting (full name → first_name + last_name)
+-   Country extraction from IBAN
+-   IBAN validation and enrichment
+-   Blacklist checking
+-   European/US amount format parsing
+-   Date format detection
+
+---
+
+## VOP System Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           FRONTEND                                       │
+│                                                                          │
+│   Upload Detail Page                    VOP Logs Page                    │
+│   ┌─────────────────┐                  ┌─────────────────┐              │
+│   │ [Verify VOP]    │                  │ Score | Result  │              │
+│   │                 │                  │  85   | verified│              │
+│   │ Stats:          │                  │  72   | likely  │              │
+│   │ - Verified: 85  │                  │  45   | inconc. │              │
+│   │ - Pending: 15   │                  └─────────────────┘              │
+│   └─────────────────┘                                                    │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                          API LAYER                                       │
+│                                                                          │
+│   POST /uploads/{id}/verify-vop  →  VopController::verify()             │
+│   GET  /uploads/{id}/vop-stats   →  VopController::stats()              │
+│   GET  /uploads/{id}/vop-logs    →  VopController::logs()               │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                       SERVICE LAYER                                      │
+│                                                                          │
+│   ┌─────────────────────────────────────────────────────────────────┐   │
+│   │              VopVerificationService (Orchestrator)               │   │
+│   │                                                                  │   │
+│   │   - Manages VopLog caching (by iban_hash)                       │   │
+│   │   - Delegates scoring to VopScoringService                      │   │
+│   │   - Provides upload stats                                       │   │
+│   └─────────────────────────────────────────────────────────────────┘   │
+│                                    │                                     │
+│                                    ▼                                     │
+│   ┌─────────────────────────────────────────────────────────────────┐   │
+│   │                   VopScoringService                              │   │
+│   │                                                                  │   │
+│   │   Score = IBAN(20) + Bank(25) + SEPA(25) + Country(15)          │   │
+│   │   Creates VopLog record                                         │   │
+│   └─────────────────────────────────────────────────────────────────┘   │
+│                                    │                                     │
+│                                    ▼                                     │
+│   ┌─────────────────────────────────────────────────────────────────┐   │
+│   │                    IbanApiService                                │   │
+│   │                                                                  │   │
+│   │   1. Check BankReference table (local cache)                    │   │
+│   │   2. Not found? Call iban.com API V4 (UNLIMITED)                │   │
+│   │   3. Save to BankReference for future                           │   │
+│   └─────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        DATABASE                                          │
+│                                                                          │
+│   ┌────────────┐  ┌────────────┐  ┌─────────────────┐                  │
+│   │  debtors   │  │  vop_logs  │  │ bank_references │                  │
+│   │            │  │            │  │                 │                  │
+│   │ iban_hash ─┼──│ debtor_id  │  │ country_iso     │                  │
+│   │            │  │ vop_score  │  │ bank_code       │                  │
+│   │            │  │ result     │  │ bank_name       │                  │
+│   │            │  │ bank_name  │  │ sepa_sdd        │                  │
+│   └────────────┘  └────────────┘  └─────────────────┘                  │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
-### BlacklistService
+### VOP Verification Flow
 
-Location: `app/Services/BlacklistService.php`
-
-Manages IBAN blacklist for blocking fraudulent or problematic accounts.
-
-**Methods:**
-
-| Method | Return | Description |
-|--------|--------|-------------|
-| `add(string $iban, ?string $reason, ?string $source, ?int $userId)` | Blacklist | Add IBAN to blacklist |
-| `remove(string $iban)` | bool | Remove IBAN from blacklist |
-| `isBlacklisted(string $iban)` | bool | Check if IBAN is blocked |
-
-**Usage:**
-```php
-use App\Services\BlacklistService;
-
-$blacklistService = app(BlacklistService::class);
-
-// Add to blacklist
-$blacklistService->add('DE89370400440532013000', 'Fraud', 'Manual', $userId);
-
-// Check during upload
-if ($blacklistService->isBlacklisted($iban)) {
-    throw new \InvalidArgumentException('IBAN is blacklisted');
-}
-
-// Remove from blacklist
-$blacklistService->remove('DE89370400440532013000');
+```
+1. VopController receives POST /uploads/{id}/verify-vop
+2. Dispatches ProcessVopJob (background)
+3. For each eligible debtor:
+   ┌─────────────────────────────────────────────────────────────────┐
+   │ VopVerificationService.verify(debtor)                           │
+   │                                                                 │
+   │  a) Check cache by iban_hash                                    │
+   │     → Found? Link existing VopLog to debtor (no API call)       │
+   │                                                                 │
+   │  b) Not cached? Call VopScoringService.score(debtor)            │
+   │     → IbanApiService.verify(iban)                               │
+   │       → Check BankReference table (local cache)                 │
+   │       → Not found? Call iban.com API (UNLIMITED)                │
+   │       → Save to BankReference for future                        │
+   │     → Calculate score (IBAN + bank + SEPA + country)            │
+   │     → Create VopLog with result                                 │
+   └─────────────────────────────────────────────────────────────────┘
+4. Stats updated, frontend polls for progress
 ```
 
-## Traits
+### Caching Strategy
 
-### ParsesDebtorData
+| Level         | Storage       | Purpose                       | TTL       |
+| ------------- | ------------- | ----------------------------- | --------- |
+| VopLog cache  | PostgreSQL    | Same IBAN = reuse VopLog data | Permanent |
+| BankReference | PostgreSQL    | Same bank = no API call       | Permanent |
+| API response  | Laravel Cache | Reduce repeated API calls     | 24 hours  |
 
-Location: `app/Traits/ParsesDebtorData.php`
-
-Shared parsing logic used by FileUploadService and ProcessUploadJob.
-
-**Methods:**
-
-| Method | Description |
-|--------|-------------|
-| `splitFullName(array &$data)` | Split "John Doe" or "Doe, John" into first_name + last_name |
-| `enrichCountryFromIban(array &$data)` | Extract country code from IBAN if not provided |
-| `castValue(string $field, mixed $value)` | Type cast value based on field name |
-| `parseAmount(string $value)` | Parse EU (1.234,56) or US (1,234.56) format |
-| `parseDate(string $value)` | Parse various date formats |
-| `normalizeName(string $name)` | Convert "JOHN" to "John" |
-
-**Name Splitting Examples:**
-
-| Input | First Name | Last Name |
-|-------|------------|-----------|
-| JOHN DOE | John | Doe |
-| Doe, John | John | Doe |
-| Maria Del Pilar Rodriguez | Maria | Del Pilar Rodriguez |
-| Madonna | Madonna | Madonna |
+---
 
 ## Queue Jobs
 
@@ -483,157 +821,51 @@ Background job for processing uploaded CSV/XLSX files.
 
 **Configuration:**
 
-| Property | Value | Description |
-|----------|-------|-------------|
-| `$tries` | 3 | Max retry attempts |
-| `$timeout` | 300 | Max execution time (seconds) |
-| `$backoff` | [30, 60, 120] | Delay between retries |
+| Property   | Value         | Description                  |
+| ---------- | ------------- | ---------------------------- |
+| `$tries`   | 3             | Max retry attempts           |
+| `$timeout` | 300           | Max execution time (seconds) |
+| `$backoff` | [30, 60, 120] | Delay between retries        |
 
-**Flow:**
-```
-1. Job dispatched with Upload model
-2. Update status → processing
-3. Parse file (CSV/XLSX)
-4. For each row:
-   - Map columns to fields
-   - Split full name if needed
-   - Extract country from IBAN
-   - Validate IBAN
-   - Check blacklist
-   - Create Debtor record
-5. Update status → completed/failed
-```
+### ProcessVopJob
 
-**Usage:**
-```php
-// Async (queued)
-ProcessUploadJob::dispatch($upload, $columnMapping);
+Location: `app/Jobs/ProcessVopJob.php`
 
-// Sync (immediate)
-ProcessUploadJob::dispatchSync($upload, $columnMapping);
-```
+Main job for batch VOP verification of upload. Filters eligible debtors and dispatches chunk jobs.
 
-**Error Handling:**
-- Invalid rows logged to `upload.meta.errors`
-- Blacklisted IBANs rejected with "IBAN is blacklisted" error
-- Job failure updates upload status to `failed`
-- Exception message stored in `upload.meta.error`
+**Configuration:**
 
-## Queue System (Redis + Horizon)
+| Property   | Value | Description                  |
+| ---------- | ----- | ---------------------------- |
+| `$tries`   | 3     | Max retry attempts           |
+| `$timeout` | 300   | Max execution time (seconds) |
+| CHUNK_SIZE | 50    | Debtors per chunk            |
 
-### Architecture
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     LARAVEL HORIZON                          │
-│                   Dashboard: /horizon                        │
-└─────────────────────────────────────────────────────────────┘
-                            │
-         ┌──────────────────┼──────────────────┐
-         ▼                  ▼                  ▼
-   ┌──────────┐      ┌──────────┐      ┌──────────┐
-   │ critical │      │   high   │      │ default  │
-   │          │      │          │      │          │
-   │ Payments │      │   VOP    │      │ Uploads  │
-   │ Webhooks │      │  Alerts  │      │ Reports  │
-   │          │      │          │      │          │
-   │ 5 workers│      │ 3 workers│      │ 3 workers│
-   └──────────┘      └──────────┘      └──────────┘
-```
+### ProcessVopChunkJob
 
-### Queue Priorities
+Location: `app/Jobs/ProcessVopChunkJob.php`
 
-| Queue | Purpose | Workers | Timeout | Retries |
-|-------|---------|---------|---------|---------|
-| `critical` | Payments, webhooks | 5-10 | 60s | 5 |
-| `high` | VOP, alerts | 3-5 | 120s | 3 |
-| `default` | File processing | 3-5 | 300s | 3 |
-| `low` | Reports, cleanup | 2-3 | 600s | 1 |
+Processes chunk of debtors for VOP verification. Called by ProcessVopJob.
 
-### Job Batching
+**Configuration:**
 
-Large files (>100 rows) are split into chunks of 500 rows:
-```php
-// Small file: direct processing
-ProcessUploadJob → processes all rows
+| Property     | Value | Description                  |
+| ------------ | ----- | ---------------------------- |
+| `$timeout`   | 180   | Max execution time (seconds) |
+| API_DELAY_MS | 500   | Delay between API calls      |
 
-// Large file: batch processing
-ProcessUploadJob → dispatches batch:
-  ├── ProcessUploadChunkJob (rows 1-500)
-  ├── ProcessUploadChunkJob (rows 501-1000)
-  └── ProcessUploadChunkJob (rows 1001-1500)
-```
+### Queue Worker Commands
 
-### Commands
 ```bash
-# Start Horizon (development)
-php artisan horizon
-
-# Check status
-php artisan horizon:status
-
-# Pause/Continue
-php artisan horizon:pause
-php artisan horizon:continue
-
-# Terminate gracefully
-php artisan horizon:terminate
+php artisan queue:work                      # Default queue
+php artisan queue:work --queue=vop,default  # VOP queue priority
+php artisan queue:work --queue=default,vop  # Both queues
 ```
 
-### Production (Supervisor)
-```ini
-[program:horizon]
-process_name=%(program_name)s
-command=php /var/www/artisan horizon
-autostart=true
-autorestart=true
-user=www-data
-redirect_stderr=true
-stdout_logfile=/var/www/storage/logs/horizon.log
-stopwaitsecs=3600
-```
-
-### DebtorValidationService
-
-Location: `app/Services/DebtorValidationService.php`
-
-Validates debtor data in Stage B (after upload). Performs comprehensive validation including IBAN, required fields, encoding, and blacklist checks.
-
-**Methods:**
-
-| Method | Return | Description |
-|--------|--------|-------------|
-| `validateUpload(Upload $upload)` | array | Validate all pending debtors in upload |
-| `validateAndUpdate(Debtor $debtor)` | void | Validate single debtor and update status |
-| `validate(Debtor $debtor)` | array | Returns ['valid' => bool, 'errors' => [...]] |
-
-**Validation Rules:**
-
-| Field | Rule | Error Message |
-|-------|------|---------------|
-| IBAN | Required, valid checksum | "IBAN is required" / "IBAN is invalid" |
-| Name | first_name OR last_name | "Name is required" |
-| Amount | Required, > 0, ≤ 50000 | "Amount is required" / "Amount must be positive" |
-| City | Required, 2-100 chars, valid encoding | "City is required" / "City contains invalid characters" |
-| Postcode | Required, 3-20 chars | "Postal code is required" |
-| Address | Required, 5-200 chars, valid encoding | "Address is required" |
-| Blacklist | IBAN not in blacklist | "IBAN is blacklisted" |
-
-**Usage:**
-```php
-use App\Services\DebtorValidationService;
-
-$service = app(DebtorValidationService::class);
-
-// Validate entire upload
-$stats = $service->validateUpload($upload);
-// Returns: ['total' => 100, 'valid' => 85, 'invalid' => 15]
-
-// Validate single debtor
-$service->validateAndUpdate($debtor);
-// Updates: validation_status, validation_errors, validated_at
-```
+---
 
 ## Two-Stage Upload Flow
+
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                     STAGE A: UPLOAD                              │
@@ -662,32 +894,33 @@ $service->validateAndUpdate($debtor);
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                    STAGE C: SYNC (Future)                        │
+│                    STAGE C: VOP VERIFICATION                     │
+│                                                                  │
+│  1. User clicks "Verify VOP" button                             │
+│  2. ProcessVopJob dispatched                                    │
+│  3. VopVerificationService scores each debtor                   │
+│  4. VopLog created with score and result                        │
+│                                                                  │
+│  Result: User sees VOP scores, bank names, SEPA support         │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    STAGE D: SYNC (Future)                        │
 │                                                                  │
 │  Only debtors with:                                             │
 │    - validation_status = 'valid'                                │
+│    - vop_result = 'verified' or 'likely_verified'               │
 │    - status = 'pending'                                         │
 │                                                                  │
 │  Are sent to payment gateway                                    │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### Additional Debtor Fields (Validation)
+---
 
-| Column | Type | Description |
-|--------|------|-------------|
-| validation_status | string | pending, valid, invalid |
-| validation_errors | json | Array of error messages |
-| validated_at | timestamp | When last validated |
-| raw_data | json | Original CSV row data |
+## Debtor Constants
 
-### Additional Upload Fields
-
-| Column | Type | Description |
-|--------|------|-------------|
-| headers | json | CSV column headers for dynamic UI |
-
-### Debtor Constants
 ```php
 class Debtor extends Model
 {
@@ -704,180 +937,28 @@ class Debtor extends Model
 }
 ```
 
-### Validation Scopes
+## VopLog Constants
+
 ```php
-// Get valid debtors
-$upload->debtors()->valid();
-
-// Get invalid debtors
-$upload->debtors()->invalid();
-
-// Get pending validation
-$upload->debtors()->validationPending();
-
-// Get ready for sync (valid + pending status)
-$upload->debtors()->readyForSync();
-```
-
-### IbanApiService
-
-Location: `app/Services/IbanApiService.php`
-
-IBAN.com API V4 integration for bank account validation and bank information lookup.
-
-**Configuration (`.env`):**
-```
-IBAN_API_KEY=your_api_key
-IBAN_API_URL=https://api.iban.com/clients/api/v4/iban/
-IBAN_API_MOCK=false
-```
-
-**Features:**
-- Bank name and BIC lookup via iban.com API
-- SEPA support detection (SCT, SDD, B2B, COR1)
-- Response caching (24 hours)
-- Retry logic with exponential backoff
-- Mock mode for development/testing
-
-**Methods:**
-
-| Method | Return | Description |
-|--------|--------|-------------|
-| `verify(string $iban)` | array | Full verification with bank data |
-| `getBankName(string $iban)` | ?string | Get bank name |
-| `getBic(string $iban)` | ?string | Get BIC/SWIFT code |
-| `isValid(string $iban)` | bool | Check IBAN validity via API |
-| `supportsSepaSdd(string $iban)` | bool | Check SEPA Direct Debit support |
-
-**Usage:**
-```php
-use App\Services\IbanApiService;
-
-$service = app(IbanApiService::class);
-
-// Full verification
-$result = $service->verify('DE89370400440532013000');
-// Returns: [
-//   'success' => true,
-//   'bank_data' => ['bank' => 'Commerzbank', 'bic' => 'COBADEFFXXX', ...],
-//   'sepa_data' => ['SDD' => 'YES', 'SCT' => 'YES', ...],
-//   'validations' => [...],
-//   'cached' => false
-// ]
-
-// Quick lookups
-$bankName = $service->getBankName($iban); // "Commerzbank"
-$bic = $service->getBic($iban);           // "COBADEFFXXX"
-
-// Check SEPA support
-if ($service->supportsSepaSdd($iban)) {
-    // Can process SEPA Direct Debit
+class VopLog extends Model
+{
+    const RESULT_VERIFIED = 'verified';
+    const RESULT_LIKELY_VERIFIED = 'likely_verified';
+    const RESULT_INCONCLUSIVE = 'inconclusive';
+    const RESULT_MISMATCH = 'mismatch';
+    const RESULT_REJECTED = 'rejected';
 }
 ```
 
-**API Response Structure:**
-```php
-[
-    'success' => true,
-    'bank_data' => [
-        'bic' => 'COBADEFFXXX',
-        'bank' => 'Commerzbank',
-        'address' => 'Venloer Str. 288',
-        'city' => 'Köln',
-        'zip' => '50447',
-        'country' => 'Germany',
-        'country_iso' => 'DE',
-    ],
-    'sepa_data' => [
-        'SCT' => 'YES',  // SEPA Credit Transfer
-        'SDD' => 'YES',  // SEPA Direct Debit
-        'COR1' => 'YES', // SEPA COR1
-        'B2B' => 'YES',  // SEPA Business to Business
-        'SCC' => 'YES',  // SEPA Card Clearing
-    ],
-    'validations' => [
-        'iban' => ['code' => '001', 'message' => 'IBAN Check digit is correct'],
-        // ...
-    ],
-    'cached' => false,
-]
-```
+---
 
-### BankReference
+## API Endpoints (VOP)
 
-Location: `app/Models/BankReference.php`
-
-Local cache for bank information retrieved from iban.com API. Reduces API calls by storing bank data in database.
-
-**Table: `bank_references`**
-
-| Column | Type | Description |
-|--------|------|-------------|
-| id | bigint | Primary key |
-| country_iso | string(2) | Country code (DE, ES, FR...) |
-| bank_code | string(20) | National bank code from IBAN |
-| bic | string(11) | BIC/SWIFT code |
-| bank_name | string | Bank name |
-| branch | string | Branch name (optional) |
-| address | string | Bank address (optional) |
-| city | string | City (optional) |
-| zip | string | Postal code (optional) |
-| sepa_sct | boolean | SEPA Credit Transfer support |
-| sepa_sdd | boolean | SEPA Direct Debit support |
-| sepa_cor1 | boolean | SEPA COR1 support |
-| sepa_b2b | boolean | SEPA B2B support |
-| sepa_scc | boolean | SEPA Card Clearing support |
-
-**Unique constraint:** `country_iso` + `bank_code`
-
-**Static Methods:**
-
-| Method | Return | Description |
-|--------|--------|-------------|
-| `findByBankCode(string $countryIso, string $bankCode)` | ?self | Find by country and bank code |
-| `findByBic(string $bic)` | ?self | Find by BIC code |
-
-**Cache Flow:**
-```
-IBAN → extract country_iso + bank_code
-         ↓
-    Check bank_references table
-         ↓
-    Found? → return cached (source: database)
-    Not found? → call API → save to bank_references → return (source: api)
-```
-
-### VopScoringService
-
-Location: `app/Services/VopScoringService.php`
-
-VOP Scoring Engine for calculating debtor verification scores (0-100).
-
-**Score Breakdown:**
-
-| Criterion | Points | Description |
-|-----------|--------|-------------|
-| IBAN Valid | +20 | Local checksum validation |
-| Bank Identified | +25 | Bank found via API |
-| SEPA SDD Support | +25 | Bank supports Direct Debit |
-| Country Supported | +15 | Country in SEPA zone |
-| Name Match | +15 | Reserved for future BAV |
-
-**Result Thresholds:**
-
-| Score | Result | Action |
-|-------|--------|--------|
-| 80-100 | verified | Safe to bill |
-| 60-79 | likely_verified | Probably safe |
-| 40-59 | inconclusive | Review needed |
-| 20-39 | mismatch | Issues detected |
-| 0-19 | rejected | Do not bill |
-
-**Methods:**
-
-| Method | Return | Description |
-|--------|--------|-------------|
-| `score(Debtor $debtor)` | VopLog | Calculate and save VopLog |
-| `calculate(Debtor $debtor)` | array | Dry run with breakdown |
-| `getScoreBreakdown()` | array | Get scoring criteria |
-| `getResultThresholds()` | array | Get result ranges |
+| Method | Endpoint                 | Controller                 | Description                |
+| ------ | ------------------------ | -------------------------- | -------------------------- |
+| GET    | /uploads/{id}/vop-stats  | VopController@stats        | Get VOP verification stats |
+| POST   | /uploads/{id}/verify-vop | VopController@verify       | Start VOP verification     |
+| GET    | /uploads/{id}/vop-logs   | VopController@logs         | Get VOP logs for upload    |
+| POST   | /vop/verify-single       | VopController@verifySingle | Verify single IBAN         |
+| GET    | /vop-logs                | VopLogController@index     | List all VOP logs          |
+| GET    | /vop-logs/{id}           | VopLogController@show      | Get single VOP log         |
