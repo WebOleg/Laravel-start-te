@@ -718,3 +718,87 @@ $upload->debtors()->validationPending();
 // Get ready for sync (valid + pending status)
 $upload->debtors()->readyForSync();
 ```
+
+### IbanApiService
+
+Location: `app/Services/IbanApiService.php`
+
+IBAN.com API V4 integration for bank account validation and bank information lookup.
+
+**Configuration (`.env`):**
+```
+IBAN_API_KEY=your_api_key
+IBAN_API_URL=https://api.iban.com/clients/api/v4/iban/
+IBAN_API_MOCK=false
+```
+
+**Features:**
+- Bank name and BIC lookup via iban.com API
+- SEPA support detection (SCT, SDD, B2B, COR1)
+- Response caching (24 hours)
+- Retry logic with exponential backoff
+- Mock mode for development/testing
+
+**Methods:**
+
+| Method | Return | Description |
+|--------|--------|-------------|
+| `verify(string $iban)` | array | Full verification with bank data |
+| `getBankName(string $iban)` | ?string | Get bank name |
+| `getBic(string $iban)` | ?string | Get BIC/SWIFT code |
+| `isValid(string $iban)` | bool | Check IBAN validity via API |
+| `supportsSepaSdd(string $iban)` | bool | Check SEPA Direct Debit support |
+
+**Usage:**
+```php
+use App\Services\IbanApiService;
+
+$service = app(IbanApiService::class);
+
+// Full verification
+$result = $service->verify('DE89370400440532013000');
+// Returns: [
+//   'success' => true,
+//   'bank_data' => ['bank' => 'Commerzbank', 'bic' => 'COBADEFFXXX', ...],
+//   'sepa_data' => ['SDD' => 'YES', 'SCT' => 'YES', ...],
+//   'validations' => [...],
+//   'cached' => false
+// ]
+
+// Quick lookups
+$bankName = $service->getBankName($iban); // "Commerzbank"
+$bic = $service->getBic($iban);           // "COBADEFFXXX"
+
+// Check SEPA support
+if ($service->supportsSepaSdd($iban)) {
+    // Can process SEPA Direct Debit
+}
+```
+
+**API Response Structure:**
+```php
+[
+    'success' => true,
+    'bank_data' => [
+        'bic' => 'COBADEFFXXX',
+        'bank' => 'Commerzbank',
+        'address' => 'Venloer Str. 288',
+        'city' => 'Köln',
+        'zip' => '50447',
+        'country' => 'Germany',
+        'country_iso' => 'DE',
+    ],
+    'sepa_data' => [
+        'SCT' => 'YES',  // SEPA Credit Transfer
+        'SDD' => 'YES',  // SEPA Direct Debit
+        'COR1' => 'YES', // SEPA COR1
+        'B2B' => 'YES',  // SEPA Business to Business
+        'SCC' => 'YES',  // SEPA Card Clearing
+    ],
+    'validations' => [
+        'iban' => ['code' => '001', 'message' => 'IBAN Check digit is correct'],
+        // ...
+    ],
+    'cached' => false,
+]
+```
