@@ -1,7 +1,6 @@
 # Architecture Overview
 
 ## System Architecture
-
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                              CLIENTS                                     │
@@ -44,7 +43,6 @@
 ```
 
 ## Directory Structure
-
 ```
 tether-laravel/
 ├── app/
@@ -80,6 +78,7 @@ tether-laravel/
 │   │   ├── SpreadsheetParserService.php
 │   │   ├── FileUploadService.php
 │   │   ├── DebtorValidationService.php
+│   │   ├── DeduplicationService.php
 │   │   └── BlacklistService.php
 │   ├── Jobs/                          # Queue jobs
 │   │   ├── ProcessUploadJob.php
@@ -108,7 +107,6 @@ tether-laravel/
 ## Database Schema
 
 ### Entity Relationship Diagram
-
 ```
 ┌─────────────┐       ┌─────────────┐
 │    users    │       │   uploads   │
@@ -152,9 +150,12 @@ tether-laravel/
          │ id          │    │ id              │
          │ iban        │    │ country_iso     │
          │ iban_hash   │    │ bank_code       │
-         │ reason      │    │ bank_name       │
-         │ added_by    │    │ sepa_sdd        │
-         └─────────────┘    └─────────────────┘
+         │ first_name  │    │ bank_name       │
+         │ last_name   │    │ sepa_sdd        │
+         │ email       │    └─────────────────┘
+         │ reason      │
+         │ added_by    │
+         └─────────────┘
 ```
 
 ### Table Descriptions
@@ -280,18 +281,26 @@ SEPA Direct Debit payment attempts.
 
 #### `blacklists`
 
-Blocked IBANs that should be rejected during upload processing.
+Blocked IBANs, names, and emails that should be rejected during upload processing.
 
 | Column     | Type       | Description                                    |
 | ---------- | ---------- | ---------------------------------------------- |
 | id         | bigint     | Primary key                                    |
 | iban       | string     | Normalized IBAN (unique)                       |
 | iban_hash  | string(64) | SHA-256 hash for fast lookup (unique, indexed) |
+| first_name | string     | First name (nullable, indexed)                 |
+| last_name  | string     | Last name (nullable, indexed)                  |
+| email      | string     | Email address (nullable, indexed)              |
 | reason     | string     | Reason for blocking (nullable)                 |
 | source     | string     | Source: Manual, System, Chargeback (nullable)  |
 | added_by   | bigint     | FK to users (nullable)                         |
 | created_at | timestamp  | When added                                     |
 | updated_at | timestamp  | Last updated                                   |
+
+**Indexes:**
+- `iban_hash` (unique) — fast O(1) IBAN lookup
+- `(first_name, last_name)` — name-based lookup
+- `email` — email-based lookup
 
 #### `bank_references`
 
@@ -319,7 +328,6 @@ Local cache for bank information from iban.com API.
 **Unique constraint:** `country_iso` + `bank_code`
 
 ## Request Lifecycle
-
 ```
 1. HTTP Request
        │
@@ -383,7 +391,7 @@ Factories generate test data with realistic values and states.
 -   IBAN never exposed in API (masked)
 -   IBAN hash for duplicate detection
 -   Soft deletes preserve audit trail
--   Blacklist prevents processing of blocked IBANs
+-   Blacklist prevents processing of blocked IBANs, names, and emails
 
 ### Authorization (Future)
 
@@ -416,7 +424,6 @@ IBAN validation service wrapping `jschaedl/iban-validation` library for producti
 | `hash(string $iban)`           | string  | SHA-256 for deduplication    |
 
 **Usage:**
-
 ```php
 use App\Services\IbanValidator;
 
@@ -444,7 +451,6 @@ Location: `app/Services/IbanApiService.php`
 IBAN.com API V4 integration for bank account validation and bank information lookup. Uses **IBAN SUITE (UNLIMITED)** subscription.
 
 **Configuration (`.env`):**
-
 ```
 IBAN_API_KEY=your_api_key
 IBAN_API_URL=https://api.iban.com/clients/api/v4/iban/
@@ -471,7 +477,6 @@ IBAN_API_MOCK=false
 | `supportsSepaSdd(string $iban)`              | bool    | Check SEPA Direct Debit support  |
 
 **Cache Flow:**
-
 ```
 IBAN → extract country_iso + bank_code
          ↓
@@ -485,7 +490,6 @@ IBAN → extract country_iso + bank_code
 ```
 
 **Usage:**
-
 ```php
 use App\Services\IbanApiService;
 
@@ -550,7 +554,6 @@ VOP Scoring Engine for calculating debtor verification scores (0-100).
 | `getResultThresholds()`                     | array  | Get result ranges         |
 
 **Usage:**
-
 ```php
 use App\Services\VopScoringService;
 
@@ -597,7 +600,6 @@ Main orchestrator for VOP verification process. Manages caching, delegation to s
 | `getUploadStats(int $uploadId)`              | array   | Get verification stats for upload            |
 
 **Usage:**
-
 ```php
 use App\Services\VopVerificationService;
 
@@ -651,7 +653,7 @@ Validates debtor data in Stage B (after upload). Performs comprehensive validati
 | City      | Required, 2-100 chars, valid encoding | "City is required" / "City contains invalid characters" |
 | Postcode  | Required, 3-20 chars                  | "Postal code is required"                               |
 | Address   | Required, 5-200 chars, valid encoding | "Address is required"                                   |
-| Blacklist | IBAN not in blacklist                 | "IBAN is blacklisted"                                   |
+| Blacklist | IBAN, name, email not in blacklist    | "IBAN/Name/Email is blacklisted"                        |
 
 ---
 
@@ -659,15 +661,113 @@ Validates debtor data in Stage B (after upload). Performs comprehensive validati
 
 Location: `app/Services/BlacklistService.php`
 
-Manages IBAN blacklist for blocking fraudulent or problematic accounts.
+Manages IBAN, name, and email blacklist for blocking fraudulent or problematic accounts.
 
 **Methods:**
 
-| Method                                                              | Return    | Description                |
-| ------------------------------------------------------------------- | --------- | -------------------------- |
-| `add(string $iban, ?string $reason, ?string $source, ?int $userId)` | Blacklist | Add IBAN to blacklist      |
-| `remove(string $iban)`                                              | bool      | Remove IBAN from blacklist |
-| `isBlacklisted(string $iban)`                                       | bool      | Check if IBAN is blocked   |
+| Method                                              | Return    | Description                      |
+| --------------------------------------------------- | --------- | -------------------------------- |
+| `isBlacklisted(string $iban)`                       | bool      | Check if IBAN is blocked         |
+| `isNameBlacklisted(string $firstName, $lastName)`   | bool      | Check if name is blocked         |
+| `isEmailBlacklisted(string $email)`                 | bool      | Check if email is blocked        |
+| `checkDebtor(Debtor\|array $debtor)`                | array     | Check all criteria, return matches |
+| `isDebtorBlacklisted(Debtor\|array $debtor)`        | bool      | Check if debtor matches any blacklist |
+| `add(string $iban, ...)`                            | Blacklist | Add entry with IBAN only         |
+| `addDebtor(Debtor $debtor, $reason, $source)`       | Blacklist | Add full debtor data to blacklist |
+| `remove(string $iban)`                              | bool      | Remove IBAN from blacklist       |
+| `find(string $iban)`                                | ?Blacklist | Find entry by IBAN              |
+
+**Usage:**
+```php
+use App\Services\BlacklistService;
+
+$service = app(BlacklistService::class);
+
+// Check single criterion
+$service->isBlacklisted($iban);           // by IBAN
+$service->isNameBlacklisted('John', 'Doe'); // by name
+$service->isEmailBlacklisted('john@test.com'); // by email
+
+// Check all criteria at once
+$check = $service->checkDebtor($debtor);
+// Returns: [
+//   'iban' => true,
+//   'name' => false,
+//   'email' => false,
+//   'reasons' => ['IBAN is blacklisted']
+// ]
+
+// Add to blacklist with all data
+$service->addDebtor($debtor, 'chargeback', 'Auto-blacklisted: AC04');
+
+// Add manually with all fields
+$service->add(
+    iban: 'DE89...',
+    reason: 'manual',
+    source: 'Support request',
+    firstName: 'John',
+    lastName: 'Doe',
+    email: 'john@test.com'
+);
+```
+
+---
+
+### DeduplicationService
+
+Location: `app/Services/DeduplicationService.php`
+
+Service for IBAN/name/email deduplication during file upload. Implements skip logic for Stage 1.
+
+**Skip Reasons:**
+
+| Constant                  | Value                | Description                      |
+| ------------------------- | -------------------- | -------------------------------- |
+| `SKIP_BLACKLISTED`        | `blacklisted`        | IBAN in blacklist                |
+| `SKIP_BLACKLISTED_NAME`   | `blacklisted_name`   | Name in blacklist                |
+| `SKIP_BLACKLISTED_EMAIL`  | `blacklisted_email`  | Email in blacklist               |
+| `SKIP_CHARGEBACKED`       | `chargebacked`       | IBAN had chargeback              |
+| `SKIP_RECOVERED`          | `already_recovered`  | IBAN already recovered           |
+| `SKIP_RECENTLY_ATTEMPTED` | `recently_attempted` | IBAN attempted in last 30 days   |
+
+**Methods:**
+
+| Method                                           | Return | Description                               |
+| ------------------------------------------------ | ------ | ----------------------------------------- |
+| `checkIban(string $iban, ?int $excludeUploadId)` | ?array | Check single IBAN                         |
+| `checkDebtor(array $data, ?int $excludeUploadId)`| ?array | Check IBAN + name + email                 |
+| `checkBatch(array $ibanHashes, ?int $exclude)`   | array  | Batch check IBANs (legacy)                |
+| `checkDebtorBatch(array $debtors, ?int $exclude)`| array  | Batch check IBAN + name + email           |
+| `isBlacklisted(string $ibanHash)`                | bool   | Check if IBAN hash is blacklisted         |
+| `isChargebacked(string $ibanHash)`               | bool   | Check if IBAN has chargeback              |
+| `isRecovered(string $ibanHash, ?int $exclude)`   | bool   | Check if IBAN already recovered           |
+| `getRecentAttempt(string $ibanHash, ?int $exclude)` | ?array | Get recent billing attempt info       |
+
+**Usage:**
+```php
+use App\Services\DeduplicationService;
+
+$service = app(DeduplicationService::class);
+
+// Check single debtor (IBAN + name + email)
+$result = $service->checkDebtor([
+    'iban' => 'DE89...',
+    'first_name' => 'John',
+    'last_name' => 'Doe',
+    'email' => 'john@test.com'
+]);
+// Returns: ['reason' => 'blacklisted_name', 'permanent' => true] or null
+
+// Batch check for upload processing (optimized)
+$results = $service->checkDebtorBatch($debtorDataArray, $uploadId);
+// Returns: [0 => ['reason' => 'blacklisted', ...], 5 => ['reason' => 'chargebacked', ...]]
+```
+
+**Performance:**
+- Uses batch SQL queries for efficiency
+- Single query fetches all blacklisted IBANs, names, emails
+- O(1) lookup in PHP arrays
+- 1000 debtors = ~4 queries instead of 1000
 
 ---
 
@@ -702,14 +802,13 @@ Orchestrates file upload processing: parse, validate, create debtors.
 -   Name splitting (full name → first_name + last_name)
 -   Country extraction from IBAN
 -   IBAN validation and enrichment
--   Blacklist checking
+-   Blacklist checking (IBAN + name + email)
 -   European/US amount format parsing
 -   Date format detection
 
 ---
 
 ## VOP System Architecture
-
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                           FRONTEND                                       │
@@ -779,7 +878,6 @@ Orchestrates file upload processing: parse, validate, create debtors.
 ```
 
 ### VOP Verification Flow
-
 ```
 1. VopController receives POST /uploads/{id}/verify-vop
 2. Dispatches ProcessVopJob (background)
@@ -817,7 +915,7 @@ Orchestrates file upload processing: parse, validate, create debtors.
 
 Location: `app/Jobs/ProcessUploadJob.php`
 
-Background job for processing uploaded CSV/XLSX files.
+Background job for processing uploaded CSV/XLSX files with deduplication.
 
 **Configuration:**
 
@@ -826,6 +924,23 @@ Background job for processing uploaded CSV/XLSX files.
 | `$tries`   | 3             | Max retry attempts           |
 | `$timeout` | 300           | Max execution time (seconds) |
 | `$backoff` | [30, 60, 120] | Delay between retries        |
+
+**Deduplication:** Uses `DeduplicationService::checkDebtorBatch()` to skip blacklisted IBANs, names, and emails.
+
+### ProcessUploadChunkJob
+
+Location: `app/Jobs/ProcessUploadChunkJob.php`
+
+Processes chunk of rows for large file uploads with deduplication.
+
+**Configuration:**
+
+| Property   | Value | Description                  |
+| ---------- | ----- | ---------------------------- |
+| `$tries`   | 3     | Max retry attempts           |
+| `$timeout` | 120   | Max execution time (seconds) |
+
+**Deduplication:** Uses `DeduplicationService::checkDebtorBatch()` to skip blacklisted IBANs, names, and emails.
 
 ### ProcessVopJob
 
@@ -855,7 +970,6 @@ Processes chunk of debtors for VOP verification. Called by ProcessVopJob.
 | API_DELAY_MS | 500   | Delay between API calls      |
 
 ### Queue Worker Commands
-
 ```bash
 php artisan queue:work                      # Default queue
 php artisan queue:work --queue=vop,default  # VOP queue priority
@@ -864,19 +978,19 @@ php artisan queue:work --queue=default,vop  # Both queues
 
 ---
 
-## Two-Stage Upload Flow
-
+## Four-Stage Upload Flow
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                     STAGE A: UPLOAD                              │
 │                                                                  │
 │  1. Parse CSV/XLSX file                                         │
-│  2. Save ALL rows (even invalid)                                │
-│  3. Set validation_status = 'pending'                           │
-│  4. Store raw_data (original CSV row)                           │
-│  5. Store headers (column names)                                │
+│  2. Check deduplication (IBAN + name + email)                   │
+│  3. Skip blacklisted, chargebacked, recovered, recently attempted│
+│  4. Save valid rows with validation_status = 'pending'          │
+│  5. Store raw_data (original CSV row)                           │
+│  6. Store headers (column names)                                │
 │                                                                  │
-│  Result: User sees ALL data, can edit before validation         │
+│  Skipped rows saved to meta.skipped_rows with reason            │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -885,9 +999,10 @@ php artisan queue:work --queue=default,vop  # Both queues
 │                                                                  │
 │  1. User clicks "Validate" button                               │
 │  2. DebtorValidationService runs all rules                      │
-│  3. Update validation_status = 'valid' or 'invalid'             │
-│  4. Store validation_errors (if any)                            │
-│  5. Set validated_at timestamp                                  │
+│  3. Check blacklist again (IBAN + name + email)                 │
+│  4. Update validation_status = 'valid' or 'invalid'             │
+│  5. Store validation_errors (if any)                            │
+│  6. Set validated_at timestamp                                  │
 │                                                                  │
 │  Result: User sees validation results, can fix and re-validate  │
 └─────────────────────────────────────────────────────────────────┘
@@ -917,10 +1032,30 @@ php artisan queue:work --queue=default,vop  # Both queues
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+### Stage A Deduplication Flow
+```
+CSV Row
+   │
+   ▼
+┌─────────────────────────────────────────────────────────────────┐
+│               DeduplicationService.checkDebtorBatch()            │
+│                                                                  │
+│  1. Check IBAN against blacklist      → SKIP_BLACKLISTED        │
+│  2. Check IBAN against chargebacks    → SKIP_CHARGEBACKED       │
+│  3. Check IBAN against recovered      → SKIP_RECOVERED          │
+│  4. Check IBAN against recent (30d)   → SKIP_RECENTLY_ATTEMPTED │
+│  5. Check name against blacklist      → SKIP_BLACKLISTED_NAME   │
+│  6. Check email against blacklist     → SKIP_BLACKLISTED_EMAIL  │
+└─────────────────────────────────────────────────────────────────┘
+   │
+   ▼
+Pass? → Create Debtor
+Skip? → Add to meta.skipped_rows with reason
+```
+
 ---
 
 ## Debtor Constants
-
 ```php
 class Debtor extends Model
 {
@@ -938,7 +1073,6 @@ class Debtor extends Model
 ```
 
 ## VopLog Constants
-
 ```php
 class VopLog extends Model
 {
@@ -947,6 +1081,21 @@ class VopLog extends Model
     const RESULT_INCONCLUSIVE = 'inconclusive';
     const RESULT_MISMATCH = 'mismatch';
     const RESULT_REJECTED = 'rejected';
+}
+```
+
+## DeduplicationService Constants
+```php
+class DeduplicationService
+{
+    const SKIP_BLACKLISTED = 'blacklisted';
+    const SKIP_BLACKLISTED_NAME = 'blacklisted_name';
+    const SKIP_BLACKLISTED_EMAIL = 'blacklisted_email';
+    const SKIP_CHARGEBACKED = 'chargebacked';
+    const SKIP_RECOVERED = 'already_recovered';
+    const SKIP_RECENTLY_ATTEMPTED = 'recently_attempted';
+    
+    const COOLDOWN_DAYS = 30;
 }
 ```
 
