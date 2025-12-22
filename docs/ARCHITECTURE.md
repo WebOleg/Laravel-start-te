@@ -802,3 +802,47 @@ if ($service->supportsSepaSdd($iban)) {
     'cached' => false,
 ]
 ```
+
+### BankReference
+
+Location: `app/Models/BankReference.php`
+
+Local cache for bank information retrieved from iban.com API. Reduces API calls by storing bank data in database.
+
+**Table: `bank_references`**
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | bigint | Primary key |
+| country_iso | string(2) | Country code (DE, ES, FR...) |
+| bank_code | string(20) | National bank code from IBAN |
+| bic | string(11) | BIC/SWIFT code |
+| bank_name | string | Bank name |
+| branch | string | Branch name (optional) |
+| address | string | Bank address (optional) |
+| city | string | City (optional) |
+| zip | string | Postal code (optional) |
+| sepa_sct | boolean | SEPA Credit Transfer support |
+| sepa_sdd | boolean | SEPA Direct Debit support |
+| sepa_cor1 | boolean | SEPA COR1 support |
+| sepa_b2b | boolean | SEPA B2B support |
+| sepa_scc | boolean | SEPA Card Clearing support |
+
+**Unique constraint:** `country_iso` + `bank_code`
+
+**Static Methods:**
+
+| Method | Return | Description |
+|--------|--------|-------------|
+| `findByBankCode(string $countryIso, string $bankCode)` | ?self | Find by country and bank code |
+| `findByBic(string $bic)` | ?self | Find by BIC code |
+
+**Cache Flow:**
+```
+IBAN → extract country_iso + bank_code
+         ↓
+    Check bank_references table
+         ↓
+    Found? → return cached (source: database)
+    Not found? → call API → save to bank_references → return (source: api)
+```

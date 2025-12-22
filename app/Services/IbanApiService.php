@@ -4,11 +4,12 @@
  * IBAN.com API V4 integration service.
  * 
  * Provides bank account validation and bank information lookup via iban.com API.
- * Supports caching, retry logic, and mock mode for development.
+ * Uses local database cache (bank_references) to reduce API calls.
  */
 
 namespace App\Services;
 
+use App\Models\BankReference;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
@@ -37,16 +38,26 @@ class IbanApiService
      * Verify IBAN and retrieve bank information.
      *
      * @param string $iban
-     * @return array{success: bool, bank_data: ?array, sepa_data: ?array, validations: ?array, error: ?string, cached: bool}
+     * @param bool $skipLocalCache Skip local DB lookup (force API call)
+     * @return array{success: bool, bank_data: ?array, sepa_data: ?array, validations: ?array, error: ?string, cached: bool, source: string}
      */
-    public function verify(string $iban): array
+    public function verify(string $iban, bool $skipLocalCache = false): array
     {
         $normalized = $this->normalize($iban);
-        $cacheKey = self::CACHE_PREFIX . hash('sha256', $normalized);
+        $countryIso = substr($normalized, 0, 2);
+        $bankCode = $this->extractBankCode($normalized, $countryIso);
 
+        if (!$skipLocalCache && $bankCode) {
+            $local = $this->findInLocalCache($countryIso, $bankCode);
+            if ($local) {
+                return $local;
+            }
+        }
+
+        $cacheKey = self::CACHE_PREFIX . hash('sha256', $normalized);
         $cached = Cache::get($cacheKey);
         if ($cached !== null) {
-            return array_merge($cached, ['cached' => true]);
+            return array_merge($cached, ['cached' => true, 'source' => 'memory']);
         }
 
         $result = $this->mockMode 
@@ -55,9 +66,10 @@ class IbanApiService
 
         if ($result['success']) {
             Cache::put($cacheKey, $result, self::CACHE_TTL);
+            $this->saveToLocalCache($result, $countryIso);
         }
 
-        return array_merge($result, ['cached' => false]);
+        return array_merge($result, ['cached' => false, 'source' => 'api']);
     }
 
     /**
@@ -100,6 +112,105 @@ class IbanApiService
     {
         $sepa = $this->verify($iban)['sepa_data'] ?? [];
         return strtoupper($sepa['SDD'] ?? '') === 'YES';
+    }
+
+    /**
+     * @param string $countryIso
+     * @param string $bankCode
+     * @return ?array
+     */
+    private function findInLocalCache(string $countryIso, string $bankCode): ?array
+    {
+        $ref = BankReference::findByBankCode($countryIso, $bankCode);
+        if (!$ref) {
+            return null;
+        }
+
+        return [
+            'success' => true,
+            'bank_data' => [
+                'bic' => $ref->bic,
+                'bank' => $ref->bank_name,
+                'branch' => $ref->branch,
+                'address' => $ref->address,
+                'city' => $ref->city,
+                'zip' => $ref->zip,
+                'country_iso' => $ref->country_iso,
+                'bank_code' => $bankCode,
+            ],
+            'sepa_data' => [
+                'SCT' => $ref->sepa_sct ? 'YES' : 'NO',
+                'SDD' => $ref->sepa_sdd ? 'YES' : 'NO',
+                'COR1' => $ref->sepa_cor1 ? 'YES' : 'NO',
+                'B2B' => $ref->sepa_b2b ? 'YES' : 'NO',
+                'SCC' => $ref->sepa_scc ? 'YES' : 'NO',
+            ],
+            'validations' => null,
+            'error' => null,
+            'cached' => true,
+            'source' => 'database',
+        ];
+    }
+
+    /**
+     * @param array $result
+     * @param string $countryIso
+     * @return void
+     */
+    private function saveToLocalCache(array $result, string $countryIso): void
+    {
+        $bankData = $result['bank_data'] ?? [];
+        $sepaData = $result['sepa_data'] ?? [];
+        $bankCode = $bankData['bank_code'] ?? null;
+
+        if (!$bankCode || !($bankData['bank'] ?? null)) {
+            return;
+        }
+
+        try {
+            BankReference::updateOrCreate(
+                ['country_iso' => $countryIso, 'bank_code' => $bankCode],
+                [
+                    'bic' => $bankData['bic'] ?? null,
+                    'bank_name' => $bankData['bank'],
+                    'branch' => $bankData['branch'] ?? null,
+                    'address' => $bankData['address'] ?? null,
+                    'city' => $bankData['city'] ?? null,
+                    'zip' => $bankData['zip'] ?? null,
+                    'sepa_sct' => strtoupper($sepaData['SCT'] ?? '') === 'YES',
+                    'sepa_sdd' => strtoupper($sepaData['SDD'] ?? '') === 'YES',
+                    'sepa_cor1' => strtoupper($sepaData['COR1'] ?? '') === 'YES',
+                    'sepa_b2b' => strtoupper($sepaData['B2B'] ?? '') === 'YES',
+                    'sepa_scc' => strtoupper($sepaData['SCC'] ?? '') === 'YES',
+                ]
+            );
+        } catch (\Throwable $e) {
+            Log::warning('IbanApiService: failed to save bank reference', [
+                'error' => $e->getMessage(),
+                'country' => $countryIso,
+                'bank_code' => $bankCode,
+            ]);
+        }
+    }
+
+    /**
+     * @param string $iban
+     * @param string $countryIso
+     * @return ?string
+     */
+    private function extractBankCode(string $iban, string $countryIso): ?string
+    {
+        $lengths = [
+            'DE' => 8, 'AT' => 5, 'BE' => 3, 'ES' => 4, 'FR' => 5,
+            'IT' => 5, 'NL' => 4, 'PT' => 4, 'PL' => 8, 'GB' => 6,
+        ];
+
+        $length = $lengths[$countryIso] ?? null;
+        if (!$length || strlen($iban) < 4 + $length) {
+            return null;
+        }
+
+        return substr($iban, 4, $length);
     }
 
     /**
@@ -179,6 +290,7 @@ class IbanApiService
         ];
 
         $bankInfo = $banks[$country] ?? ['bank' => 'Mock Bank', 'bic' => 'MOCKXX00'];
+        $bankCode = $this->extractBankCode($iban, $country) ?? substr($iban, 4, 8);
 
         return [
             'success' => true,
@@ -191,7 +303,7 @@ class IbanApiService
                 'zip' => '',
                 'country_iso' => $country,
                 'account' => substr($iban, 4),
-                'bank_code' => substr($iban, 4, 8),
+                'bank_code' => $bankCode,
             ],
             'sepa_data' => [
                 'SCT' => 'YES',

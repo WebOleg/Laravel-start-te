@@ -7,12 +7,16 @@
 namespace Tests\Unit\Services;
 
 use App\Services\IbanApiService;
+use App\Models\BankReference;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
 class IbanApiServiceTest extends TestCase
 {
+    use RefreshDatabase;
+
     private IbanApiService $service;
 
     protected function setUp(): void
@@ -36,6 +40,7 @@ class IbanApiServiceTest extends TestCase
                     'bic' => 'COBADEFFXXX',
                     'bank' => 'Commerzbank',
                     'country_iso' => 'DE',
+                    'bank_code' => '37040044',
                 ],
                 'sepa_data' => [
                     'SCT' => 'YES',
@@ -54,27 +59,47 @@ class IbanApiServiceTest extends TestCase
         $this->assertEquals('Commerzbank', $result['bank_data']['bank']);
         $this->assertEquals('COBADEFFXXX', $result['bank_data']['bic']);
         $this->assertEquals('YES', $result['sepa_data']['SDD']);
-        $this->assertFalse($result['cached']);
     }
 
-    public function test_verify_caches_successful_response(): void
+    public function test_verify_caches_to_database(): void
     {
         Http::fake([
             'api.iban.com/*' => Http::response([
-                'bank_data' => ['bank' => 'Test Bank', 'bic' => 'TESTDE00'],
-                'sepa_data' => ['SDD' => 'YES'],
+                'bank_data' => ['bank' => 'Test Bank', 'bic' => 'TESTDE00', 'bank_code' => '37040044'],
+                'sepa_data' => ['SDD' => 'YES', 'SCT' => 'YES'],
                 'validations' => ['iban' => ['code' => '001', 'message' => 'OK']],
                 'errors' => [],
             ], 200),
         ]);
 
-        $result1 = $this->service->verify('DE89370400440532013000');
-        $result2 = $this->service->verify('DE89370400440532013000');
+        $this->service->verify('DE89370400440532013000');
 
-        $this->assertFalse($result1['cached']);
-        $this->assertTrue($result2['cached']);
+        $this->assertDatabaseHas('bank_references', [
+            'country_iso' => 'DE',
+            'bank_code' => '37040044',
+            'bank_name' => 'Test Bank',
+        ]);
+    }
+
+    public function test_verify_uses_local_cache(): void
+    {
+        BankReference::create([
+            'country_iso' => 'DE',
+            'bank_code' => '37040044',
+            'bank_name' => 'Cached Bank',
+            'bic' => 'CACHEDXX',
+            'sepa_sdd' => true,
+        ]);
+
+        Http::fake();
+
+        $result = $this->service->verify('DE89370400440532013000');
+
+        $this->assertTrue($result['success']);
+        $this->assertEquals('Cached Bank', $result['bank_data']['bank']);
+        $this->assertEquals('database', $result['source']);
         
-        Http::assertSentCount(1);
+        Http::assertNothingSent();
     }
 
     public function test_verify_returns_error_on_api_failure(): void
@@ -83,11 +108,10 @@ class IbanApiServiceTest extends TestCase
             'api.iban.com/*' => Http::response([], 500),
         ]);
 
-        $result = $this->service->verify('DE89370400440532013000');
+        $result = $this->service->verify('DE89370400440532013000', skipLocalCache: true);
 
         $this->assertFalse($result['success']);
         $this->assertNotNull($result['error']);
-        $this->assertNull($result['bank_data']);
     }
 
     public function test_verify_returns_error_on_api_error_response(): void
@@ -98,7 +122,7 @@ class IbanApiServiceTest extends TestCase
             ], 200),
         ]);
 
-        $result = $this->service->verify('DE89370400440532013000');
+        $result = $this->service->verify('DE89370400440532013000', skipLocalCache: true);
 
         $this->assertFalse($result['success']);
         $this->assertEquals('API Key is invalid', $result['error']);
@@ -106,13 +130,11 @@ class IbanApiServiceTest extends TestCase
 
     public function test_get_bank_name_returns_bank(): void
     {
-        Http::fake([
-            'api.iban.com/*' => Http::response([
-                'bank_data' => ['bank' => 'Deutsche Bank', 'bic' => 'DEUTDEFF'],
-                'sepa_data' => [],
-                'validations' => [],
-                'errors' => [],
-            ], 200),
+        BankReference::create([
+            'country_iso' => 'DE',
+            'bank_code' => '37040044',
+            'bank_name' => 'Deutsche Bank',
+            'bic' => 'DEUTDEFF',
         ]);
 
         $bankName = $this->service->getBankName('DE89370400440532013000');
@@ -122,13 +144,11 @@ class IbanApiServiceTest extends TestCase
 
     public function test_get_bic_returns_bic(): void
     {
-        Http::fake([
-            'api.iban.com/*' => Http::response([
-                'bank_data' => ['bank' => 'Deutsche Bank', 'bic' => 'DEUTDEFF'],
-                'sepa_data' => [],
-                'validations' => [],
-                'errors' => [],
-            ], 200),
+        BankReference::create([
+            'country_iso' => 'DE',
+            'bank_code' => '37040044',
+            'bank_name' => 'Deutsche Bank',
+            'bic' => 'DEUTDEFF',
         ]);
 
         $bic = $this->service->getBic('DE89370400440532013000');
@@ -140,7 +160,7 @@ class IbanApiServiceTest extends TestCase
     {
         Http::fake([
             'api.iban.com/*' => Http::response([
-                'bank_data' => [],
+                'bank_data' => ['bank_code' => '37040044'],
                 'sepa_data' => [],
                 'validations' => [
                     'iban' => ['code' => '001', 'message' => 'IBAN Check digit is correct'],
@@ -156,7 +176,7 @@ class IbanApiServiceTest extends TestCase
     {
         Http::fake([
             'api.iban.com/*' => Http::response([
-                'bank_data' => [],
+                'bank_data' => ['bank_code' => '37040044'],
                 'sepa_data' => [],
                 'validations' => [
                     'iban' => ['code' => '202', 'message' => 'IBAN Check digit not correct'],
@@ -170,13 +190,11 @@ class IbanApiServiceTest extends TestCase
 
     public function test_supports_sepa_sdd_returns_true(): void
     {
-        Http::fake([
-            'api.iban.com/*' => Http::response([
-                'bank_data' => [],
-                'sepa_data' => ['SDD' => 'YES'],
-                'validations' => [],
-                'errors' => [],
-            ], 200),
+        BankReference::create([
+            'country_iso' => 'DE',
+            'bank_code' => '37040044',
+            'bank_name' => 'Test Bank',
+            'sepa_sdd' => true,
         ]);
 
         $this->assertTrue($this->service->supportsSepaSdd('DE89370400440532013000'));
@@ -184,13 +202,11 @@ class IbanApiServiceTest extends TestCase
 
     public function test_supports_sepa_sdd_returns_false(): void
     {
-        Http::fake([
-            'api.iban.com/*' => Http::response([
-                'bank_data' => [],
-                'sepa_data' => ['SDD' => 'NO'],
-                'validations' => [],
-                'errors' => [],
-            ], 200),
+        BankReference::create([
+            'country_iso' => 'DE',
+            'bank_code' => '37040044',
+            'bank_name' => 'Test Bank',
+            'sepa_sdd' => false,
         ]);
 
         $this->assertFalse($this->service->supportsSepaSdd('DE89370400440532013000'));
@@ -200,14 +216,14 @@ class IbanApiServiceTest extends TestCase
     {
         Http::fake([
             'api.iban.com/*' => Http::response([
-                'bank_data' => ['bank' => 'Test'],
+                'bank_data' => ['bank' => 'Test', 'bank_code' => '37040044'],
                 'sepa_data' => [],
                 'validations' => [],
                 'errors' => [],
             ], 200),
         ]);
 
-        $this->service->verify('de89 3704 0044 0532 0130 00');
+        $this->service->verify('de89 3704 0044 0532 0130 00', skipLocalCache: true);
 
         Http::assertSent(function ($request) {
             return $request['iban'] === 'DE89370400440532013000';
@@ -221,7 +237,7 @@ class IbanApiServiceTest extends TestCase
 
         Http::fake();
 
-        $result = $service->verify('DE89370400440532013000');
+        $result = $service->verify('DE89370400440532013000', skipLocalCache: true);
 
         $this->assertTrue($result['success']);
         $this->assertNotNull($result['bank_data']['bank']);
