@@ -19,6 +19,8 @@ use Illuminate\Support\Facades\DB;
 class DeduplicationService
 {
     public const SKIP_BLACKLISTED = 'blacklisted';
+    public const SKIP_BLACKLISTED_NAME = 'blacklisted_name';
+    public const SKIP_BLACKLISTED_EMAIL = 'blacklisted_email';
     public const SKIP_CHARGEBACKED = 'chargebacked';
     public const SKIP_RECOVERED = 'already_recovered';
     public const SKIP_RECENTLY_ATTEMPTED = 'recently_attempted';
@@ -26,7 +28,8 @@ class DeduplicationService
     public const COOLDOWN_DAYS = 30;
 
     public function __construct(
-        private IbanValidator $ibanValidator
+        private IbanValidator $ibanValidator,
+        private BlacklistService $blacklistService
     ) {}
 
     /**
@@ -71,6 +74,50 @@ class DeduplicationService
                 'days_ago' => $recentAttempt['days_ago'],
                 'last_status' => $recentAttempt['status'],
             ];
+        }
+
+        return null;
+    }
+
+    /**
+     * Check if debtor should be skipped during upload (IBAN + name + email).
+     * 
+     * @param array $data Debtor data with iban, first_name, last_name, email
+     * @return array{reason: string, permanent: bool, days_ago?: int, last_status?: string}|null
+     */
+    public function checkDebtor(array $data, ?int $excludeUploadId = null): ?array
+    {
+        $iban = $data['iban'] ?? '';
+        $firstName = $data['first_name'] ?? '';
+        $lastName = $data['last_name'] ?? '';
+        $email = $data['email'] ?? '';
+
+        // First check IBAN-based rules (blacklist, chargeback, recovered, recent)
+        if (!empty($iban)) {
+            $ibanResult = $this->checkIban($iban, $excludeUploadId);
+            if ($ibanResult) {
+                return $ibanResult;
+            }
+        }
+
+        // Then check name blacklist
+        if (!empty($firstName) && !empty($lastName)) {
+            if ($this->blacklistService->isNameBlacklisted($firstName, $lastName)) {
+                return [
+                    'reason' => self::SKIP_BLACKLISTED_NAME,
+                    'permanent' => true,
+                ];
+            }
+        }
+
+        // Then check email blacklist
+        if (!empty($email)) {
+            if ($this->blacklistService->isEmailBlacklisted($email)) {
+                return [
+                    'reason' => self::SKIP_BLACKLISTED_EMAIL,
+                    'permanent' => true,
+                ];
+            }
         }
 
         return null;
@@ -125,6 +172,8 @@ class DeduplicationService
     }
 
     /**
+     * Batch check for IBANs only (legacy method).
+     * 
      * @param array<string> $ibanHashes
      * @return array<string, array{reason: string, permanent: bool, days_ago?: int, last_status?: string}>
      */
@@ -198,6 +247,95 @@ class DeduplicationService
                     'days_ago' => (int) $createdAt->diffInDays(now()),
                     'last_status' => $attempt->status,
                 ];
+            }
+        }
+
+        return $results;
+    }
+
+    /**
+     * Batch check for full debtor data (IBAN + name + email).
+     * 
+     * @param array<array{iban?: string, iban_hash?: string, first_name?: string, last_name?: string, email?: string}> $debtors
+     * @return array<int, array{reason: string, permanent: bool}>
+     */
+    public function checkDebtorBatch(array $debtors, ?int $excludeUploadId = null): array
+    {
+        if (empty($debtors)) {
+            return [];
+        }
+
+        $results = [];
+
+        // Collect all IBANs for batch check
+        $ibanHashes = [];
+        $ibanHashToIndex = [];
+        
+        foreach ($debtors as $index => $debtor) {
+            $iban = $debtor['iban'] ?? '';
+            if (!empty($iban)) {
+                $hash = $debtor['iban_hash'] ?? $this->ibanValidator->hash($iban);
+                $ibanHashes[] = $hash;
+                $ibanHashToIndex[$hash][] = $index;
+            }
+        }
+
+        // Batch check IBANs
+        $ibanResults = $this->checkBatch($ibanHashes, $excludeUploadId);
+
+        // Apply IBAN results
+        foreach ($ibanResults as $hash => $result) {
+            if (isset($ibanHashToIndex[$hash])) {
+                foreach ($ibanHashToIndex[$hash] as $index) {
+                    $results[$index] = $result;
+                }
+            }
+        }
+
+        // Collect blacklisted names and emails for batch lookup
+        $blacklistedNames = Blacklist::whereNotNull('first_name')
+            ->whereNotNull('last_name')
+            ->get(['first_name', 'last_name'])
+            ->map(fn($b) => strtolower($b->first_name) . '|' . strtolower($b->last_name))
+            ->flip()
+            ->all();
+
+        $blacklistedEmails = Blacklist::whereNotNull('email')
+            ->pluck('email')
+            ->map(fn($e) => strtolower($e))
+            ->flip()
+            ->all();
+
+        // Check name and email for debtors not already flagged
+        foreach ($debtors as $index => $debtor) {
+            if (isset($results[$index])) {
+                continue; // Already flagged by IBAN
+            }
+
+            $firstName = $debtor['first_name'] ?? '';
+            $lastName = $debtor['last_name'] ?? '';
+            $email = $debtor['email'] ?? '';
+
+            // Check name
+            if (!empty($firstName) && !empty($lastName)) {
+                $nameKey = strtolower($firstName) . '|' . strtolower($lastName);
+                if (isset($blacklistedNames[$nameKey])) {
+                    $results[$index] = [
+                        'reason' => self::SKIP_BLACKLISTED_NAME,
+                        'permanent' => true,
+                    ];
+                    continue;
+                }
+            }
+
+            // Check email
+            if (!empty($email)) {
+                if (isset($blacklistedEmails[strtolower($email)])) {
+                    $results[$index] = [
+                        'reason' => self::SKIP_BLACKLISTED_EMAIL,
+                        'permanent' => true,
+                    ];
+                }
             }
         }
 

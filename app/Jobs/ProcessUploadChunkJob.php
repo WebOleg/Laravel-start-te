@@ -9,6 +9,7 @@ namespace App\Jobs;
 use App\Models\Upload;
 use App\Models\Debtor;
 use App\Services\IbanValidator;
+use App\Services\DeduplicationService;
 use Illuminate\Bus\Batchable;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -35,7 +36,7 @@ class ProcessUploadChunkJob implements ShouldQueue
         $this->onQueue('default');
     }
 
-    public function handle(IbanValidator $ibanValidator): void
+    public function handle(IbanValidator $ibanValidator, DeduplicationService $deduplicationService): void
     {
         if ($this->batch()?->cancelled()) {
             return;
@@ -49,14 +50,39 @@ class ProcessUploadChunkJob implements ShouldQueue
 
         $created = 0;
         $failed = 0;
+        $skippedCount = 0;
         $errors = [];
+
+        // Prepare debtor data for batch check
+        $debtorDataList = [];
+        foreach ($this->rows as $index => $row) {
+            $debtorData = $this->mapRowToDebtor($row);
+            $this->validateAndEnrichIban($debtorData, $ibanValidator);
+            $debtorDataList[$index] = $debtorData;
+        }
+
+        // Batch check IBAN + name + email
+        $dedupeResults = $deduplicationService->checkDebtorBatch($debtorDataList, $this->upload->id);
 
         foreach ($this->rows as $index => $row) {
             try {
-                $debtorData = $this->mapRowToDebtor($row);
-                $debtorData['upload_id'] = $this->upload->id;
+                $debtorData = $debtorDataList[$index];
 
-                $this->validateAndEnrichIban($debtorData, $ibanValidator);
+                // Check deduplication result
+                if (isset($dedupeResults[$index])) {
+                    $skippedCount++;
+                    Log::debug("Row skipped due to deduplication", [
+                        'upload_id' => $this->upload->id,
+                        'row' => $this->startRow + $index + 1,
+                        'reason' => $dedupeResults[$index]['reason'],
+                    ]);
+                    continue;
+                }
+
+                $debtorData['upload_id'] = $this->upload->id;
+                $debtorData['raw_data'] = $row;
+                $debtorData['validation_status'] = Debtor::VALIDATION_PENDING;
+
                 $this->validateRequiredFields($debtorData);
 
                 Debtor::create($debtorData);
@@ -73,32 +99,39 @@ class ProcessUploadChunkJob implements ShouldQueue
             }
         }
 
-        $this->updateUploadProgress($created, $failed, $errors);
+        $this->updateUploadProgress($created, $failed, $skippedCount, $errors);
 
         Log::info("ProcessUploadChunkJob completed", [
             'upload_id' => $this->upload->id,
             'chunk' => $this->chunkIndex,
             'created' => $created,
             'failed' => $failed,
+            'skipped' => $skippedCount,
         ]);
     }
 
-    private function updateUploadProgress(int $created, int $failed, array $errors): void
+    private function updateUploadProgress(int $created, int $failed, int $skipped, array $errors): void
     {
         $this->upload->increment('processed_records', $created);
         $this->upload->increment('failed_records', $failed);
 
+        $existingMeta = $this->upload->meta ?? [];
+        
+        // Update skipped count
+        $existingSkipped = $existingMeta['skipped'] ?? ['total' => 0];
+        $existingSkipped['total'] = ($existingSkipped['total'] ?? 0) + $skipped;
+
+        $updates = ['skipped' => $existingSkipped];
+
         if (!empty($errors)) {
-            $existingMeta = $this->upload->meta ?? [];
             $existingErrors = $existingMeta['errors'] ?? [];
             $mergedErrors = array_merge($existingErrors, $errors);
-            
-            $this->upload->update([
-                'meta' => array_merge($existingMeta, [
-                    'errors' => array_slice($mergedErrors, 0, 100),
-                ]),
-            ]);
+            $updates['errors'] = array_slice($mergedErrors, 0, 100);
         }
+
+        $this->upload->update([
+            'meta' => array_merge($existingMeta, $updates),
+        ]);
     }
 
     private function mapRowToDebtor(array $row): array
@@ -113,6 +146,14 @@ class ProcessUploadChunkJob implements ShouldQueue
                 $field = $this->columnMapping[$header];
                 $data[$field] = $this->castValue($field, $value);
             }
+        }
+
+        // Split full name if present
+        if (isset($data['name']) && !isset($data['first_name'])) {
+            $parts = preg_split('/\s+/', trim($data['name']), 2);
+            $data['first_name'] = $parts[0] ?? '';
+            $data['last_name'] = $parts[1] ?? '';
+            unset($data['name']);
         }
 
         return $data;
@@ -181,6 +222,9 @@ class ProcessUploadChunkJob implements ShouldQueue
     private function validateAndEnrichIban(array &$data, IbanValidator $ibanValidator): void
     {
         if (empty($data['iban'])) {
+            $data['iban'] = '';
+            $data['iban_hash'] = null;
+            $data['iban_valid'] = false;
             return;
         }
 
@@ -199,12 +243,6 @@ class ProcessUploadChunkJob implements ShouldQueue
     private function validateRequiredFields(array $data): void
     {
         $errors = [];
-
-        if (empty($data['iban'])) {
-            $errors[] = 'IBAN is required';
-        } elseif (!($data['iban_valid'] ?? false)) {
-            $errors[] = 'IBAN is invalid';
-        }
 
         if (empty($data['first_name']) && empty($data['last_name'])) {
             $errors[] = 'Name is required';

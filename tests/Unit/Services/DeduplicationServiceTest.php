@@ -27,7 +27,7 @@ class DeduplicationServiceTest extends TestCase
         parent::setUp();
         
         $this->ibanValidator = new IbanValidator();
-        $this->service = new DeduplicationService($this->ibanValidator);
+        $this->service = app(DeduplicationService::class);
     }
 
     public function test_returns_null_for_new_iban(): void

@@ -27,7 +27,7 @@ class FileUploadServiceTest extends TestCase
     {
         $ibanValidator = new IbanValidator();
         $blacklistService = new BlacklistService($ibanValidator);
-        $deduplicationService = new DeduplicationService($ibanValidator);
+        $deduplicationService = app(DeduplicationService::class);
 
         return new FileUploadService(
             new SpreadsheetParserService(),

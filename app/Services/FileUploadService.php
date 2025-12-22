@@ -200,7 +200,7 @@ class FileUploadService
     }
 
     /**
-     * Process rows with deduplication.
+     * Process rows with deduplication (IBAN + name + email).
      * 
      * @return array{created: int, failed: int, skipped: array, skipped_rows: array, errors: array}
      */
@@ -218,30 +218,42 @@ class FileUploadService
         $skipped = [
             'total' => 0,
             DeduplicationService::SKIP_BLACKLISTED => 0,
+            DeduplicationService::SKIP_BLACKLISTED_NAME => 0,
+            DeduplicationService::SKIP_BLACKLISTED_EMAIL => 0,
             DeduplicationService::SKIP_CHARGEBACKED => 0,
             DeduplicationService::SKIP_RECOVERED => 0,
             DeduplicationService::SKIP_RECENTLY_ATTEMPTED => 0,
         ];
         $skippedRows = [];
 
-        $ibanHashes = $this->extractIbanHashes($rows, $columnMapping);
-        $dedupeResults = $this->deduplicationService->checkBatch($ibanHashes, $upload->id);
+        // Prepare debtor data for batch check
+        $debtorDataList = [];
+        foreach ($rows as $index => $row) {
+            $debtorData = $this->mapRowToDebtor($row, $columnMapping);
+            $this->normalizeIban($debtorData);
+            $debtorDataList[$index] = $debtorData;
+        }
+
+        // Batch check IBAN + name + email
+        $dedupeResults = $this->deduplicationService->checkDebtorBatch($debtorDataList, $upload->id);
 
         foreach ($rows as $index => $row) {
             try {
-                $debtorData = $this->mapRowToDebtor($row, $columnMapping);
-                $this->normalizeIban($debtorData);
+                $debtorData = $debtorDataList[$index];
                 
-                $ibanHash = $debtorData['iban_hash'] ?? null;
-                
-                if ($ibanHash && isset($dedupeResults[$ibanHash])) {
-                    $skipInfo = $dedupeResults[$ibanHash];
+                if (isset($dedupeResults[$index])) {
+                    $skipInfo = $dedupeResults[$index];
                     $skipped['total']++;
-                    $skipped[$skipInfo['reason']]++;
+                    
+                    if (isset($skipped[$skipInfo['reason']])) {
+                        $skipped[$skipInfo['reason']]++;
+                    }
                     
                     $skippedRows[] = [
                         'row' => $index + 2,
                         'iban_masked' => $this->ibanValidator->mask($debtorData['iban'] ?? ''),
+                        'name' => trim(($debtorData['first_name'] ?? '') . ' ' . ($debtorData['last_name'] ?? '')),
+                        'email' => $debtorData['email'] ?? null,
                         'reason' => $skipInfo['reason'],
                         'days_ago' => $skipInfo['days_ago'] ?? null,
                         'last_status' => $skipInfo['last_status'] ?? null,
@@ -275,32 +287,6 @@ class FileUploadService
             'skipped_rows' => $skippedRows,
             'errors' => $errors,
         ];
-    }
-
-    /**
-     * Extract IBAN hashes from rows for batch deduplication check.
-     * 
-     * @return array<string>
-     */
-    private function extractIbanHashes(array $rows, array $columnMapping): array
-    {
-        $hashes = [];
-
-        foreach ($rows as $row) {
-            $iban = null;
-            foreach ($row as $header => $value) {
-                if (isset($columnMapping[$header]) && $columnMapping[$header] === 'iban' && !empty($value)) {
-                    $iban = $this->ibanValidator->normalize($value);
-                    break;
-                }
-            }
-
-            if ($iban) {
-                $hashes[] = $this->ibanValidator->hash($iban);
-            }
-        }
-
-        return array_unique($hashes);
     }
 
     private function mapRowToDebtor(array $row, array $columnMapping): array

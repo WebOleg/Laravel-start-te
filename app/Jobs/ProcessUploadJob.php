@@ -11,6 +11,7 @@ use App\Models\Debtor;
 use App\Services\SpreadsheetParserService;
 use App\Services\IbanValidator;
 use App\Services\BlacklistService;
+use App\Services\DeduplicationService;
 use App\Traits\ParsesDebtorData;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
@@ -47,7 +48,8 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
     public function handle(
         SpreadsheetParserService $parser,
         IbanValidator $ibanValidator,
-        BlacklistService $blacklistService
+        BlacklistService $blacklistService,
+        DeduplicationService $deduplicationService
     ): void {
         Log::info("ProcessUploadJob started", ['upload_id' => $this->upload->id]);
 
@@ -69,7 +71,7 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
             if (count($rows) > self::BATCH_THRESHOLD) {
                 $this->processWithBatching($rows);
             } else {
-                $this->processDirectly($rows, $ibanValidator);
+                $this->processDirectly($rows, $ibanValidator, $deduplicationService);
             }
 
         } catch (\Exception $e) {
@@ -147,20 +149,64 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
         ]);
     }
 
-    private function processDirectly(array $rows, IbanValidator $ibanValidator): void
-    {
+    private function processDirectly(
+        array $rows,
+        IbanValidator $ibanValidator,
+        DeduplicationService $deduplicationService
+    ): void {
         $created = 0;
         $failed = 0;
         $errors = [];
+        
+        $skipped = [
+            'total' => 0,
+            DeduplicationService::SKIP_BLACKLISTED => 0,
+            DeduplicationService::SKIP_BLACKLISTED_NAME => 0,
+            DeduplicationService::SKIP_BLACKLISTED_EMAIL => 0,
+            DeduplicationService::SKIP_CHARGEBACKED => 0,
+            DeduplicationService::SKIP_RECOVERED => 0,
+            DeduplicationService::SKIP_RECENTLY_ATTEMPTED => 0,
+        ];
+        $skippedRows = [];
+
+        // Prepare debtor data for batch check
+        $debtorDataList = [];
+        foreach ($rows as $index => $row) {
+            $debtorData = $this->mapRowToDebtor($row);
+            $this->normalizeIban($debtorData, $ibanValidator);
+            $debtorDataList[$index] = $debtorData;
+        }
+
+        // Batch check IBAN + name + email
+        $dedupeResults = $deduplicationService->checkDebtorBatch($debtorDataList, $this->upload->id);
 
         foreach ($rows as $index => $row) {
             try {
-                $debtorData = $this->mapRowToDebtor($row);
+                $debtorData = $debtorDataList[$index];
+
+                // Check deduplication result
+                if (isset($dedupeResults[$index])) {
+                    $skipInfo = $dedupeResults[$index];
+                    $skipped['total']++;
+                    
+                    if (isset($skipped[$skipInfo['reason']])) {
+                        $skipped[$skipInfo['reason']]++;
+                    }
+                    
+                    $skippedRows[] = [
+                        'row' => $index + 2,
+                        'iban_masked' => $ibanValidator->mask($debtorData['iban'] ?? ''),
+                        'name' => trim(($debtorData['first_name'] ?? '') . ' ' . ($debtorData['last_name'] ?? '')),
+                        'email' => $debtorData['email'] ?? null,
+                        'reason' => $skipInfo['reason'],
+                    ];
+                    continue;
+                }
+
                 $debtorData['upload_id'] = $this->upload->id;
                 $debtorData['raw_data'] = $row;
 
                 $this->validateBasicStructure($debtorData);
-                $this->normalizeIban($debtorData, $ibanValidator);
                 $this->enrichCountryFromIban($debtorData);
 
                 $debtorData['validation_status'] = Debtor::VALIDATION_PENDING;
@@ -179,12 +225,13 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
             }
         }
 
-        $this->finalizeUpload($created, $failed, $errors);
+        $this->finalizeUpload($created, $failed, $errors, $skipped, $skippedRows);
 
         Log::info("ProcessUploadJob completed directly", [
             'upload_id' => $this->upload->id,
             'created' => $created,
             'failed' => $failed,
+            'skipped' => $skipped['total'],
         ]);
     }
 
@@ -255,7 +302,7 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
         }
     }
 
-    private function finalizeUpload(int $created, int $failed, array $errors): void
+    private function finalizeUpload(int $created, int $failed, array $errors, array $skipped = [], array $skippedRows = []): void
     {
         $status = $failed === 0
             ? Upload::STATUS_COMPLETED
@@ -268,6 +315,8 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
             'processing_completed_at' => now(),
             'meta' => array_merge($this->upload->meta ?? [], [
                 'errors' => $errors,
+                'skipped' => $skipped,
+                'skipped_rows' => array_slice($skippedRows, 0, 100),
             ]),
         ]);
     }
