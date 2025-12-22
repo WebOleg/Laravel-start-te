@@ -7,7 +7,6 @@
 namespace App\Services;
 
 use App\Models\Debtor;
-use App\Models\Blacklist;
 use App\Models\Upload;
 
 class DebtorValidationService
@@ -16,7 +15,8 @@ class DebtorValidationService
     public const INVALID_NAME_PATTERN = '/[0-9*#@$%^&+=\[\]{}|\\\\<>áàâäçèéêëîïíóòôöúùûüÿñÁÀÂÄÇÈÉÊËÎÏÍÓÒÔÖÚÙÛÜŸÑ]/';
 
     public function __construct(
-        private IbanValidator $ibanValidator
+        private IbanValidator $ibanValidator,
+        private BlacklistService $blacklistService
     ) {}
 
     public function validateDebtor(Debtor $debtor): array
@@ -257,20 +257,18 @@ class DebtorValidationService
         return false;
     }
 
+    /**
+     * Validate against blacklist (IBAN + name + email).
+     */
     protected function validateBlacklist(Debtor $debtor): array
     {
         $errors = [];
 
-        if (empty($debtor->iban)) {
-            return $errors;
-        }
+        $check = $this->blacklistService->checkDebtor($debtor);
 
-        $ibanHash = $this->ibanValidator->hash($debtor->iban);
-        
-        $isBlacklisted = Blacklist::where('iban_hash', $ibanHash)->exists();
-        
-        if ($isBlacklisted) {
-            $errors[] = 'IBAN is blacklisted';
+        // Add all blacklist reasons as validation errors
+        foreach ($check['reasons'] as $reason) {
+            $errors[] = $reason;
         }
 
         return $errors;

@@ -84,19 +84,21 @@ class EmpWebhookController extends Controller
             ]),
         ]);
 
-        // Auto-blacklist IBAN if error code matches
+        // Auto-blacklist debtor (IBAN + name + email) if error code matches
         $blacklisted = false;
         if ($errorCode && $this->shouldBlacklistCode($errorCode)) {
             $debtor = $billingAttempt->debtor;
             if ($debtor && $debtor->iban) {
-                $this->blacklistService->add(
-                    $debtor->iban,
+                $this->blacklistService->addDebtor(
+                    $debtor,
                     'chargeback',
                     "Auto-blacklisted: {$errorCode}"
                 );
                 $blacklisted = true;
-                Log::info('IBAN auto-blacklisted due to chargeback', [
+                Log::info('Debtor auto-blacklisted due to chargeback', [
                     'debtor_id' => $debtor->id,
+                    'iban' => $debtor->iban,
+                    'name' => $debtor->first_name . ' ' . $debtor->last_name,
                     'error_code' => $errorCode,
                 ]);
             }
