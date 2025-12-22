@@ -846,3 +846,38 @@ IBAN → extract country_iso + bank_code
     Found? → return cached (source: database)
     Not found? → call API → save to bank_references → return (source: api)
 ```
+
+### VopScoringService
+
+Location: `app/Services/VopScoringService.php`
+
+VOP Scoring Engine for calculating debtor verification scores (0-100).
+
+**Score Breakdown:**
+
+| Criterion | Points | Description |
+|-----------|--------|-------------|
+| IBAN Valid | +20 | Local checksum validation |
+| Bank Identified | +25 | Bank found via API |
+| SEPA SDD Support | +25 | Bank supports Direct Debit |
+| Country Supported | +15 | Country in SEPA zone |
+| Name Match | +15 | Reserved for future BAV |
+
+**Result Thresholds:**
+
+| Score | Result | Action |
+|-------|--------|--------|
+| 80-100 | verified | Safe to bill |
+| 60-79 | likely_verified | Probably safe |
+| 40-59 | inconclusive | Review needed |
+| 20-39 | mismatch | Issues detected |
+| 0-19 | rejected | Do not bill |
+
+**Methods:**
+
+| Method | Return | Description |
+|--------|--------|-------------|
+| `score(Debtor $debtor)` | VopLog | Calculate and save VopLog |
+| `calculate(Debtor $debtor)` | array | Dry run with breakdown |
+| `getScoreBreakdown()` | array | Get scoring criteria |
+| `getResultThresholds()` | array | Get result ranges |
