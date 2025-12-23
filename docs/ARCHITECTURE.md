@@ -645,15 +645,12 @@ Validates debtor data in Stage B (after upload). Performs comprehensive validati
 
 **Validation Rules:**
 
-| Field     | Rule                                  | Error Message                                           |
-| --------- | ------------------------------------- | ------------------------------------------------------- |
-| IBAN      | Required, valid checksum              | "IBAN is required" / "IBAN is invalid"                  |
-| Name      | first_name OR last_name               | "Name is required"                                      |
-| Amount    | Required, > 0, ≤ 50000                | "Amount is required" / "Amount must be positive"        |
-| City      | Required, 2-100 chars, valid encoding | "City is required" / "City contains invalid characters" |
-| Postcode  | Required, 3-20 chars                  | "Postal code is required"                               |
-| Address   | Required, 5-200 chars, valid encoding | "Address is required"                                   |
-| Blacklist | IBAN, name, email not in blacklist    | "IBAN/Name/Email is blacklisted"                        |
+| Field     | Rule                               | Error Message                          |
+| --------- | ---------------------------------- | -------------------------------------- |
+| IBAN      | Required, valid checksum           | "IBAN is required" / "IBAN is invalid" |
+| Name      | first_name OR last_name            | "Name is required"                     |
+| Amount    | Required, > 0, ≤ 50000             | "Amount is required" / "Amount must be positive" |
+| Blacklist | IBAN, name, email not in blacklist | "IBAN/Name/Email is blacklisted"       |
 
 ---
 

@@ -885,8 +885,7 @@ Authorization: Bearer {token}
         "id": 101,
         "validation_status": "invalid",
         "validation_errors": [
-            "IBAN is required",
-            "City is required"
+            "IBAN is required"
         ],
         "validated_at": "2025-12-11T10:00:00Z"
     }
@@ -904,10 +903,7 @@ Authorization: Bearer {token}
         "first_name": "Johann",
         "last_name": "Mueller",
         "iban": "DE89370400440532013000",
-        "amount": "200.00",
-        "city": "Berlin",
-        "postcode": "10115",
-        "address": "Main St 1"
+        "amount": "200.00"
     }
 }
 ```
@@ -929,9 +925,6 @@ Debtors are validated against these rules:
 | Name | Max 35 characters each | "First/Last name cannot exceed 35 characters" |
 | Name | No numbers or symbols | "First/Last name contains numbers or symbols" |
 | Amount | Required, > 0, ≤ 50000 | "Amount is required" / "Amount must be positive" |
-| City | Required | "City is required" |
-| Postcode | Required | "Postal code is required" |
-| Address | street OR address required | "Address is required" |
 | Email | Valid format (if provided) | "Email format is invalid" |
 | Encoding | No broken UTF-8 characters | "Field contains encoding issues" |
 | Blacklist | IBAN not in blacklist | "IBAN is blacklisted" |
