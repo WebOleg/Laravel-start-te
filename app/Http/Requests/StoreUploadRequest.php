@@ -33,7 +33,7 @@ class StoreUploadRequest extends FormRequest
             'file.required' => 'Please select a file to upload.',
             'file.file' => 'The upload must be a valid file.',
             'file.max' => 'File size cannot exceed 50MB.',
-            'file.mimes' => 'Only CSV and Excel files (xlsx, xls) are allowed.',
+            'file.mimes' => 'Only CSV, TXT and Excel files (xlsx, xls) are allowed.',
         ];
     }
 }

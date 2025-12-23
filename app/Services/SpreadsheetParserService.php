@@ -25,7 +25,7 @@ class SpreadsheetParserService
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' => self::TYPE_XLSX,
     ];
 
-    private const SUPPORTED_EXTENSIONS = ['csv', 'xlsx', 'xls'];
+    private const SUPPORTED_EXTENSIONS = ['csv', 'txt', 'xlsx', 'xls'];
 
     /**
      * Parse uploaded file and return rows with headers as keys.
@@ -117,6 +117,11 @@ class SpreadsheetParserService
     {
         $extension = strtolower($file->getClientOriginalExtension());
         
+        // TXT files are parsed as CSV
+        if ($extension === 'txt') {
+            return self::TYPE_CSV;
+        }
+        
         if (in_array($extension, self::SUPPORTED_EXTENSIONS)) {
             return $extension === 'xls' ? self::TYPE_XLS : $extension;
         }
@@ -124,7 +129,7 @@ class SpreadsheetParserService
         $mime = $file->getMimeType();
         
         return self::SUPPORTED_TYPES[$mime] ?? throw new InvalidArgumentException(
-            "Unsupported file type. Allowed: CSV, XLSX, XLS"
+            "Unsupported file type. Allowed: CSV, TXT, XLSX, XLS"
         );
     }
 
@@ -143,7 +148,7 @@ class SpreadsheetParserService
             $mime = $file->getMimeType();
             if (!isset(self::SUPPORTED_TYPES[$mime])) {
                 throw new InvalidArgumentException(
-                    "Unsupported file type. Allowed: CSV, XLSX, XLS"
+                    "Unsupported file type. Allowed: CSV, TXT, XLSX, XLS"
                 );
             }
         }
