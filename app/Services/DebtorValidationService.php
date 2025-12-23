@@ -93,17 +93,7 @@ class DebtorValidationService
             $errors[] = 'Amount is required';
         }
 
-        if (empty($debtor->postcode)) {
-            $errors[] = 'Postal Code is required';
-        }
-
-        if (empty($debtor->city)) {
-            $errors[] = 'City is required';
-        }
-
-        if (empty($debtor->street) && empty($debtor->address)) {
-            $errors[] = 'Address is required';
-        }
+        // THR-9: postcode, city, address removed from required fields
 
         return $errors;
     }
@@ -266,7 +256,6 @@ class DebtorValidationService
 
         $check = $this->blacklistService->checkDebtor($debtor);
 
-        // Add all blacklist reasons as validation errors
         foreach ($check['reasons'] as $reason) {
             $errors[] = $reason;
         }
