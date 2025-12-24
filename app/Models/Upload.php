@@ -10,10 +10,11 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Upload extends Model
 {
-    use HasFactory;
+    use HasFactory, SoftDeletes;
 
     public const STATUS_PENDING = 'pending';
     public const STATUS_PROCESSING = 'processing';
@@ -60,6 +61,11 @@ class Upload extends Model
         return $this->hasMany(Debtor::class);
     }
 
+    public function billingAttempts(): HasMany
+    {
+        return $this->hasMany(BillingAttempt::class);
+    }
+
     public function getSuccessRateAttribute(): float
     {
         if ($this->processed_records === 0) {
@@ -68,5 +74,20 @@ class Upload extends Model
 
         $successful = $this->processed_records - $this->failed_records;
         return round(($successful / $this->processed_records) * 100, 1);
+    }
+
+    public function canBeSoftDeleted(): bool
+    {
+        return !$this->billingAttempts()->exists();
+    }
+
+    public function canBeHardDeleted(): bool
+    {
+        return !$this->debtors()->exists();
+    }
+
+    public function isDeletable(): bool
+    {
+        return $this->canBeSoftDeleted() || $this->canBeHardDeleted();
     }
 }

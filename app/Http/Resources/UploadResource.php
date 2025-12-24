@@ -37,6 +37,7 @@ class UploadResource extends JsonResource
             'skipped' => $this->when(isset($meta['skipped']), $meta['skipped'] ?? null),
             'skipped_rows' => $this->when(isset($meta['skipped_rows']), $meta['skipped_rows'] ?? null),
             'uploader' => new UserResource($this->whenLoaded('uploader')),
+            'is_deletable' => $this->isDeletable(),
         ];
     }
 }

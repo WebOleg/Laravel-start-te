@@ -19,6 +19,8 @@ use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 
 class UploadController extends Controller
 {
@@ -227,6 +229,32 @@ class UploadController extends Controller
                 'skipped' => $skipped,
             ],
         ]);
+    }
+
+    public function destroy(Upload $upload): JsonResponse
+    {
+        if ($upload->canBeHardDeleted()) {
+            Storage::disk('local')->delete('uploads/'.$upload->filename);
+            $upload->forceDelete();
+            return response()->json([
+                'success'   => true,
+                'message'   => 'Uploaded File deleted successfully.',
+            ], 200);
+        }
+
+        if ($upload->canBeSoftDeleted()) {
+            $upload->debtors()->delete();
+            $upload->delete();
+            return response()->json([
+                'success' => true,
+                'message' => 'Upload and associated debtors deleted successfully.',
+            ], 200);
+        }
+
+        return response()->json([
+            'success' => false,
+            'message' => 'Upload cannot be deleted as it has associated debtors.',
+        ], 403);
     }
 
     /**
