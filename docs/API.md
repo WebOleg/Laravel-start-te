@@ -374,6 +374,37 @@ Authorization: Bearer {token}
 file: (binary)
 ```
 
+**Pre-Validation (Stage 0):**
+
+Before any processing starts, files undergo lightweight pre-validation:
+- Check headers exist
+- Validate required columns: IBAN, amount, name
+- Sample validation (first 10 rows)
+
+**Pre-Validation Error Response (422):**
+```json
+{
+    "message": "File validation failed.",
+    "errors": [
+        "Missing required column: IBAN.",
+        "Row 3: Invalid IBAN format."
+    ]
+}
+```
+
+**Pre-Validation Error Types:**
+
+| Error | Description |
+|-------|-------------|
+| `File is empty or has no headers.` | File has no rows |
+| `Missing required column: IBAN.` | No IBAN/iban column found |
+| `Missing required column: amount.` | No amount/sum/total/price column |
+| `Missing required column: name.` | No name/first_name/last_name column |
+| `File has headers but no data rows.` | Headers only, no data |
+| `Row N: Invalid IBAN format.` | IBAN doesn't match pattern |
+| `Row N: Invalid amount format.` | Amount is not numeric |
+| `Row N: Duplicate IBAN in file.` | Same IBAN appears twice |
+
 **Response (sync, ≤100 rows):**
 ```json
 {
@@ -413,6 +444,29 @@ file: (binary)
         "queued": true,
         "message": "File queued for processing. Check status for updates."
     }
+}
+```
+
+#### Delete Upload
+```
+DELETE /api/admin/uploads/{id}
+Authorization: Bearer {token}
+```
+
+Deletes an upload and all associated debtors. Only uploads with status `pending`, `completed`, or `failed` can be deleted. Processing uploads cannot be deleted.
+
+**Response:**
+```json
+{
+    "message": "Upload deleted successfully"
+}
+```
+
+**Error (upload is processing):**
+```json
+{
+    "message": "Cannot delete upload while processing",
+    "status": 422
 }
 ```
 
@@ -650,6 +704,123 @@ GET /api/admin/billing-attempts
 
 ---
 
+### Blacklist
+
+#### List Blacklist Entries
+```
+GET /api/admin/blacklist
+Authorization: Bearer {token}
+```
+
+**Query Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `search` | string | Search by IBAN, name, or email |
+| `reason` | string | Filter by reason |
+| `source` | string | Filter by source |
+| `per_page` | integer | Items per page (default: 50) |
+
+**Response:**
+```json
+{
+    "data": [
+        {
+            "id": 1,
+            "iban_masked": "DE89****3000",
+            "first_name": "Max",
+            "last_name": "Mustermann",
+            "email": "max@example.com",
+            "reason": "chargeback",
+            "source": "Auto-blacklisted: AC04",
+            "created_at": "2025-12-15T10:00:00Z"
+        }
+    ],
+    "meta": { ... }
+}
+```
+
+#### Add to Blacklist
+```
+POST /api/admin/blacklist
+Authorization: Bearer {token}
+Content-Type: application/json
+
+{
+    "iban": "DE89370400440532013000",
+    "first_name": "Max",
+    "last_name": "Mustermann",
+    "email": "max@example.com",
+    "reason": "fraud"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `iban` | string | Yes | Valid IBAN |
+| `first_name` | string | No | First name |
+| `last_name` | string | No | Last name |
+| `email` | string | No | Email address |
+| `reason` | string | No | Reason for blacklisting |
+
+**Response (201):**
+```json
+{
+    "message": "Added to blacklist",
+    "data": {
+        "id": 5,
+        "iban_masked": "DE89****3000",
+        ...
+    }
+}
+```
+
+**Error (already exists):**
+```json
+{
+    "message": "IBAN is already blacklisted",
+    "status": 422
+}
+```
+
+#### Remove from Blacklist
+```
+DELETE /api/admin/blacklist/{id}
+Authorization: Bearer {token}
+```
+
+**Response:**
+```json
+{
+    "message": "Removed from blacklist"
+}
+```
+
+#### Check if Blacklisted
+```
+POST /api/admin/blacklist/check
+Authorization: Bearer {token}
+Content-Type: application/json
+
+{
+    "iban": "DE89370400440532013000"
+}
+```
+
+**Response:**
+```json
+{
+    "data": {
+        "blacklisted": true,
+        "reason": "chargeback",
+        "source": "Auto-blacklisted: AC04",
+        "created_at": "2025-12-15T10:00:00Z"
+    }
+}
+```
+
+---
+
 ## Webhooks
 
 ### EMP (emerchantpay) Webhook
@@ -730,12 +901,30 @@ When a chargeback is received with one of these codes, the debtor's IBAN is auto
 | 202 | Accepted (async upload queued) |
 | 401 | Unauthorized (missing/invalid token) |
 | 404 | Resource not found |
-| 422 | Validation error |
+| 422 | Validation error (including pre-validation failures) |
 | 500 | Server error |
 
 ---
 
-## Two-Stage Processing Flow
+## Three-Stage Processing Flow
+
+### Stage 0: Pre-Validation (NEW)
+
+Before any processing, files undergo lightweight validation using `FilePreValidationService`:
+
+**Checks Performed:**
+- Headers exist
+- Required columns present (IBAN, amount, name)
+- Sample rows (first 10) have valid format
+
+**Performance:**
+- Reads only headers + 10 rows
+- 0 database queries
+- ~50ms execution time
+
+**Result:**
+- ❌ FAIL → Return 422 immediately (no processing starts)
+- ✅ PASS → Continue to Stage 1
 
 ### Stage 1: Upload (Deduplication)
 
@@ -753,6 +942,21 @@ During CSV upload, IBANs are checked against deduplication rules. Records that m
 ### Stage 2: Validation
 
 After upload, records are validated for data quality. This happens automatically when viewing upload details.
+
+**Validation Rules:**
+
+| Field | Rule |
+|-------|------|
+| IBAN | Valid checksum, SEPA country |
+| Name | At least first_name or last_name |
+| Amount | Positive, ≤ €50,000 |
+| Email | Valid format (if provided) |
+
+**Result:**
+- `validation_status` = `valid` or `invalid`
+- `validation_errors` = array of error messages
+
+---
 
 #### Get Upload Debtors
 ```
