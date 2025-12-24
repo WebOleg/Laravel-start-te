@@ -407,25 +407,25 @@ Factories generate test data with realistic values and states.
 
 Location: `app/Services/FilePreValidationService.php`
 
-Lightweight pre-validation service that runs BEFORE heavy file processing. Prevents wasted compute, queue congestion, and partial system pollution.
+Lightweight pre-validation service that runs BEFORE heavy file processing. Validates file structure only — prevents wasted compute, queue congestion, and partial system pollution.
 
 **Purpose:**
 - Fast-fail for obviously invalid files
 - No database queries (pure file validation)
-- Reads only headers + first 10 rows (sample)
+- Reads only headers + sample rows to verify data exists
 
-**Validation Rules:**
+**Validation Rules (Structure Only):**
 
 | Check | Description | Error Message |
 |-------|-------------|---------------|
+| File type | CSV/XLSX/XLS/TXT supported | "Unsupported file type." |
 | Headers exist | File has at least one row | "File is empty or has no headers." |
 | IBAN column | Required column present | "Missing required column: IBAN." |
 | Amount column | amount/sum/total/price present | "Missing required column: amount." |
 | Name column | name/first_name/last_name present | "Missing required column: name." |
 | Data rows | At least one data row after headers | "File has headers but no data rows." |
-| IBAN format | Sample rows have valid IBAN format | "Row N: Invalid IBAN format." |
-| Amount format | Sample rows have numeric amount | "Row N: Invalid amount format." |
-| No duplicates | No duplicate IBANs in sample | "Row N: Duplicate IBAN in file." |
+
+> **Note:** IBAN format validation, amount format validation, and duplicate checking are handled in Stage A/B, not pre-validation. Pre-validation only checks file structure.
 
 **Methods:**
 
@@ -458,7 +458,7 @@ if (!$result['valid']) {
 
 **Performance:**
 - O(1) header check — reads 1 row only
-- O(10) sample validation — reads 10 rows only
+- O(10) sample count — reads up to 10 rows to verify data exists
 - 0 database queries
 - ~50ms for any file size
 
@@ -695,7 +695,7 @@ $stats = $service->getUploadStats($uploadId);
 
 Location: `app/Services/DebtorValidationService.php`
 
-Validates debtor data in Stage B (after upload). Performs comprehensive validation including IBAN, required fields, encoding, and blacklist checks.
+Validates debtor data in Stage B (after upload). Performs comprehensive validation including IBAN format, required fields, encoding, and blacklist checks.
 
 **Methods:**
 
@@ -776,7 +776,7 @@ $service->add(
 
 Location: `app/Services/DeduplicationService.php`
 
-Service for IBAN/name/email deduplication during file upload. Implements skip logic for Stage 1.
+Service for IBAN/name/email deduplication during file upload. Implements skip logic for Stage A.
 
 **Skip Reasons:**
 
@@ -787,7 +787,7 @@ Service for IBAN/name/email deduplication during file upload. Implements skip lo
 | `SKIP_BLACKLISTED_EMAIL`  | `blacklisted_email`  | Email in blacklist               |
 | `SKIP_CHARGEBACKED`       | `chargebacked`       | IBAN had chargeback              |
 | `SKIP_RECOVERED`          | `already_recovered`  | IBAN already recovered           |
-| `SKIP_RECENTLY_ATTEMPTED` | `recently_attempted` | IBAN attempted in last 30 days   |
+| `SKIP_RECENTLY_ATTEMPTED` | `recently_attempted` | IBAN attempted in last 7 days    |
 
 **Methods:**
 
@@ -1043,9 +1043,10 @@ php artisan queue:work --queue=default,vop  # Both queues
 │                  STAGE 0: PRE-VALIDATION                         │
 │                                                                  │
 │  FilePreValidationService runs BEFORE processing:               │
-│  - Check headers (1 row only)                                   │
+│  - Check file type (CSV/XLSX supported)                         │
+│  - Check headers exist                                          │
 │  - Validate required columns: IBAN, amount, name                │
-│  - Sample validation (first 10 rows)                            │
+│  - Check data rows exist                                        │
 │                                                                  │
 │  ❌ FAIL → Return 422 (no processing starts)                    │
 │  ✅ PASS → Continue to Stage A                                  │
@@ -1115,7 +1116,7 @@ CSV Row
 │  1. Check IBAN against blacklist      → SKIP_BLACKLISTED        │
 │  2. Check IBAN against chargebacks    → SKIP_CHARGEBACKED       │
 │  3. Check IBAN against recovered      → SKIP_RECOVERED          │
-│  4. Check IBAN against recent (30d)   → SKIP_RECENTLY_ATTEMPTED │
+│  4. Check IBAN against recent (7d)    → SKIP_RECENTLY_ATTEMPTED │
 │  5. Check name against blacklist      → SKIP_BLACKLISTED_NAME   │
 │  6. Check email against blacklist     → SKIP_BLACKLISTED_EMAIL  │
 └─────────────────────────────────────────────────────────────────┘
@@ -1167,7 +1168,7 @@ class DeduplicationService
     const SKIP_RECOVERED = 'already_recovered';
     const SKIP_RECENTLY_ATTEMPTED = 'recently_attempted';
     
-    const COOLDOWN_DAYS = 30;
+    const COOLDOWN_DAYS = 7;
 }
 ```
 
