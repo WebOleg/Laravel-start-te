@@ -1,9 +1,5 @@
 <?php
 
-/**
- * Admin controller for uploads management.
- */
-
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
@@ -14,6 +10,7 @@ use App\Models\Upload;
 use App\Models\Debtor;
 use App\Models\BillingAttempt;
 use App\Services\FileUploadService;
+use App\Services\FilePreValidationService;
 use App\Services\DebtorValidationService;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
@@ -28,6 +25,7 @@ class UploadController extends Controller
 
     public function __construct(
         private FileUploadService $uploadService,
+        private FilePreValidationService $preValidationService,
         private DebtorValidationService $validationService
     ) {}
 
@@ -72,6 +70,15 @@ class UploadController extends Controller
     {
         try {
             $file = $request->file('file');
+
+            $preValidation = $this->preValidationService->validate($file);
+            if (!$preValidation['valid']) {
+                return response()->json([
+                    'message' => 'File validation failed.',
+                    'errors' => $preValidation['errors'],
+                ], 422);
+            }
+
             $forceAsync = $request->boolean('async', false);
 
             if ($forceAsync || $this->shouldProcessAsync($file)) {
@@ -207,7 +214,6 @@ class UploadController extends Controller
                 ->count();
         }
 
-        // Count debtors with chargebacked billing attempts
         $chargebacked = $upload->debtors()
             ->whereHas('billingAttempts', function ($query) {
                 $query->where('status', BillingAttempt::STATUS_CHARGEBACKED);
@@ -257,9 +263,6 @@ class UploadController extends Controller
         ], 403);
     }
 
-    /**
-     * Filter (delete) chargebacked debtors from upload.
-     */
     public function filterChargebacks(Upload $upload): JsonResponse
     {
         $chargebackedDebtors = $upload->debtors()
@@ -277,7 +280,6 @@ class UploadController extends Controller
             ]);
         }
 
-        // Delete chargebacked debtors
         foreach ($chargebackedDebtors as $debtor) {
             $debtor->delete();
         }
