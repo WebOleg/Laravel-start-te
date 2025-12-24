@@ -10,6 +10,10 @@ use Illuminate\Database\Eloquent\Model;
 
 class BankReference extends Model
 {
+    public const RISK_LEVEL_LOW = 'low';
+    public const RISK_LEVEL_MEDIUM = 'medium';
+    public const RISK_LEVEL_HIGH = 'high';
+
     protected $fillable = [
         'country_iso',
         'bank_code',
@@ -24,6 +28,7 @@ class BankReference extends Model
         'sepa_cor1',
         'sepa_b2b',
         'sepa_scc',
+        'risk_level'
     ];
 
     protected $casts = [
