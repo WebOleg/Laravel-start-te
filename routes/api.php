@@ -34,7 +34,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('uploads/{upload}/validate', [AdminUploadController::class, 'validate']);
         Route::get('uploads/{upload}/validation-stats', [AdminUploadController::class, 'validationStats']);
         Route::post('uploads/{upload}/filter-chargebacks', [AdminUploadController::class, 'filterChargebacks']);
-        Route::apiResource('uploads', AdminUploadController::class)->only(['index', 'show', 'store']);
+        Route::apiResource('uploads', AdminUploadController::class)->only(['index', 'show', 'store', 'destroy']);
 
         // VOP routes
         Route::get('uploads/{upload}/vop-stats', [AdminVopController::class, 'stats']);
