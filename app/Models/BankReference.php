@@ -1,15 +1,16 @@
 <?php
-
 /**
  * Bank reference model for caching bank information from iban.com API.
  */
-
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
 class BankReference extends Model
 {
+    use HasFactory;
+    
     public const RISK_LEVEL_LOW = 'low';
     public const RISK_LEVEL_MEDIUM = 'medium';
     public const RISK_LEVEL_HIGH = 'high';

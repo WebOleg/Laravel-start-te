@@ -46,7 +46,10 @@ class DebtorController extends Controller
 
     public function index(Request $request): AnonymousResourceCollection
     {
-        $query = Debtor::with(['upload', 'latestVopLog', 'latestBillingAttempt']);
+        $query = Debtor::with(['upload', 'latestVopLog', 'latestBillingAttempt'])
+                    ->leftJoin('vop_logs', 'vop_logs.debtor_id', '=', 'debtors.id')
+                    ->leftJoin('bank_references', 'bank_references.bic', '=', 'vop_logs.bic')
+                    ->selectRaw('debtors.*, bank_references.bank_name AS bank_name_reference, bank_references.country_iso AS bank_country_iso_reference');
 
         if ($request->has('upload_id')) {
             $query->where('upload_id', $request->input('upload_id'));

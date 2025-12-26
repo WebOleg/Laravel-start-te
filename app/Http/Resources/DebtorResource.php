@@ -44,6 +44,8 @@ class DebtorResource extends JsonResource
             'bank_name' => $this->bank_name,
             'bic' => $this->bic,
             'raw_data' => $this->raw_data,
+            'bank_name_reference' => $this->bank_name_reference,
+            'bank_country_iso_reference' => $this->bank_country_iso_reference,
             'created_at' => $this->created_at->toISOString(),
             'updated_at' => $this->updated_at->toISOString(),
             'upload' => new UploadResource($this->whenLoaded('upload')),
