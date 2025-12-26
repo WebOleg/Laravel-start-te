@@ -1,9 +1,7 @@
 <?php
-
 /**
  * Bank reference model for caching bank information from iban.com API.
  */
-
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -13,6 +11,10 @@ class BankReference extends Model
 {
     use HasFactory;
     
+    public const RISK_LEVEL_LOW = 'low';
+    public const RISK_LEVEL_MEDIUM = 'medium';
+    public const RISK_LEVEL_HIGH = 'high';
+
     protected $fillable = [
         'country_iso',
         'bank_code',
@@ -27,6 +29,7 @@ class BankReference extends Model
         'sepa_cor1',
         'sepa_b2b',
         'sepa_scc',
+        'risk_level'
     ];
 
     protected $casts = [
