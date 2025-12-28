@@ -99,6 +99,50 @@ make help            # Show all available commands
 make status          # Check ports and container status
 ```
 
+### Debugging with Xdebug (Optional)
+
+Xdebug is available for developers who need step debugging. It's disabled by default to avoid performance overhead.
+
+**Setup:**
+
+1. Copy the example override file:
+   ```bash
+   cp docker-compose.override.yml.example docker-compose.override.yml
+   ```
+
+2. Rebuild the containers:
+   ```bash
+   docker-compose down
+   docker-compose build --build-arg INSTALL_XDEBUG=true
+   docker-compose up -d
+   ```
+
+3. Configure your IDE to listen on port 9009
+
+**VS Code configuration** ([.vscode/launch.json](.vscode/launch.json)):
+```json
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Listen for Xdebug",
+      "type": "php",
+      "request": "launch",
+      "port": 9009,
+      "pathMappings": {
+        "/var/www": "${workspaceFolder}"
+      }
+    }
+  ]
+}
+```
+
+**PhpStorm:**
+- Go to Settings → PHP → Debug
+- Set Xdebug port to 9009
+- Enable "Break at first line in PHP scripts"
+- Create a server with path mapping: `/var/www` → your project root
+
 ### Available Make Commands
 
 #### Docker Management

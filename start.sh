@@ -1,9 +1,9 @@
 #!/bin/bash
 
-# Tether Laravel - Startup Script
+# Tether Laravel - Startup Script (Docker Engine via APT + Docker Compose v2)
 # This script handles port conflicts and starts Docker services safely
 
-set -e
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
@@ -15,145 +15,184 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+# ---- Compose v2 wrapper ----
+compose() {
+  docker compose "$@"
+}
+
+# ---- Preflight checks ----
+ensure_docker_running() {
+  if ! docker info >/dev/null 2>&1; then
+    echo -e "${YELLOW}Docker daemon is not reachable. Starting docker service...${NC}"
+    sudo systemctl enable --now docker >/dev/null 2>&1 || true
+    sudo systemctl start docker >/dev/null 2>&1 || true
+
+    # Re-check
+    if ! docker info >/dev/null 2>&1; then
+      echo -e "${RED}Error: Docker daemon is not running or not reachable.${NC}"
+      echo -e "${YELLOW}Try:${NC} sudo systemctl status docker --no-pager -l"
+      exit 1
+    fi
+  fi
+
+  if ! docker compose version >/dev/null 2>&1; then
+    echo -e "${RED}Error: Docker Compose v2 plugin not found.${NC}"
+    echo -e "${YELLOW}Install:${NC} sudo apt install docker-compose-plugin"
+    exit 1
+  fi
+}
+
+ensure_compose_file_exists() {
+  if [ ! -f "docker-compose.yml" ] && [ ! -f "docker-compose.yaml" ] && \
+     [ ! -f "compose.yml" ] && [ ! -f "compose.yaml" ]; then
+    echo -e "${RED}Error: No Compose file found in:${NC} $SCRIPT_DIR"
+    echo -e "${YELLOW}Expected one of:${NC} docker-compose.yml / compose.yml"
+    exit 1
+  fi
+}
+
 # Function to check if a port is in use
 check_port() {
-    local port=$1
-    if lsof -i ":$port" >/dev/null 2>&1 || ss -tln 2>/dev/null | grep -q ":$port "; then
-        return 0  # Port is in use
-    else
-        return 1  # Port is free
-    fi
+  local port=$1
+  if lsof -i ":$port" >/dev/null 2>&1 || ss -tln 2>/dev/null | grep -q ":$port "; then
+    return 0  # Port is in use
+  else
+    return 1  # Port is free
+  fi
 }
 
 # Function to display port status
 display_port_status() {
-    echo -e "${BLUE}Checking port availability...${NC}"
-    echo ""
+  echo -e "${BLUE}Checking port availability...${NC}"
+  echo ""
 
-    local issues=0
+  local issues=0
 
-    # Check PostgreSQL port
-    if check_port 5432; then
-        echo -e "${RED}✗${NC} Port 5432 (PostgreSQL) is in use"
-        lsof -i :5432 2>/dev/null | head -2 || ss -tlnp 2>/dev/null | grep :5432 || true
-        issues=$((issues + 1))
-    else
-        echo -e "${GREEN}✓${NC} Port 5432 (PostgreSQL) is available"
-    fi
+  # Check PostgreSQL port
+  if check_port 5432; then
+    echo -e "${RED}✗${NC} Port 5432 (PostgreSQL) is in use"
+    lsof -i :5432 2>/dev/null | head -2 || ss -tlnp 2>/dev/null | grep :5432 || true
+    issues=$((issues + 1))
+  else
+    echo -e "${GREEN}✓${NC} Port 5432 (PostgreSQL) is available"
+  fi
 
-    # Check Redis port
-    if check_port 6379; then
-        echo -e "${RED}✗${NC} Port 6379 (Redis) is in use"
-        issues=$((issues + 1))
-    else
-        echo -e "${GREEN}✓${NC} Port 6379 (Redis) is available"
-    fi
+  # Check Redis port
+  if check_port 6379; then
+    echo -e "${RED}✗${NC} Port 6379 (Redis) is in use"
+    issues=$((issues + 1))
+  else
+    echo -e "${GREEN}✓${NC} Port 6379 (Redis) is available"
+  fi
 
-    # Check Nginx port
-    if check_port 8000; then
-        echo -e "${RED}✗${NC} Port 8000 (Nginx) is in use"
-        issues=$((issues + 1))
-    else
-        echo -e "${GREEN}✓${NC} Port 8000 (Nginx) is available"
-    fi
+  # Check Nginx port
+  if check_port 8000; then
+    echo -e "${RED}✗${NC} Port 8000 (Nginx) is in use"
+    issues=$((issues + 1))
+  else
+    echo -e "${GREEN}✓${NC} Port 8000 (Nginx) is available"
+  fi
 
-    echo ""
-    return $issues
+  echo ""
+  return $issues
 }
 
 # Function to stop host PostgreSQL
 stop_host_postgres() {
-    echo -e "${YELLOW}Stopping PostgreSQL on host machine...${NC}"
+  echo -e "${YELLOW}Stopping PostgreSQL on host machine...${NC}"
 
-    if systemctl is-active --quiet postgresql 2>/dev/null; then
-        sudo systemctl stop postgresql
-        echo -e "${GREEN}✓${NC} PostgreSQL service stopped"
-    elif systemctl is-active --quiet postgresql@* 2>/dev/null; then
-        sudo systemctl stop 'postgresql@*'
-        echo -e "${GREEN}✓${NC} PostgreSQL service stopped"
-    else
-        echo -e "${YELLOW}ℹ${NC}  PostgreSQL service not found via systemctl"
-    fi
+  if systemctl is-active --quiet postgresql 2>/dev/null; then
+    sudo systemctl stop postgresql
+    echo -e "${GREEN}✓${NC} PostgreSQL service stopped"
+  elif systemctl list-units --type=service --all 2>/dev/null | grep -qE '^postgresql@'; then
+    sudo systemctl stop 'postgresql@*' || true
+    echo -e "${GREEN}✓${NC} PostgreSQL service stopped"
+  else
+    echo -e "${YELLOW}ℹ${NC}  PostgreSQL service not found via systemctl"
+  fi
 }
 
 # Main script
 echo ""
 echo "╔════════════════════════════════════════╗"
-echo "║   Tether Laravel - Startup Manager    ║"
+echo "║   Tether Laravel - Startup Manager     ║"
 echo "╚════════════════════════════════════════╝"
 echo ""
 
+ensure_docker_running
+ensure_compose_file_exists
+
 # Display current status
 if ! display_port_status; then
-    echo -e "${YELLOW}⚠ Port conflicts detected!${NC}"
-    echo ""
-    echo "Options:"
-    echo "  1) Stop host PostgreSQL and continue"
-    echo "  2) Clean up and retry"
-    echo "  3) Use alternative ports (5433, 6380)"
-    echo "  4) Exit and fix manually"
-    echo ""
-    read -p "Choose an option (1-4): " choice
+  echo -e "${YELLOW}⚠ Port conflicts detected!${NC}"
+  echo ""
+  echo "Options:"
+  echo "  1) Stop host PostgreSQL and continue"
+  echo "  2) Clean up and retry"
+  echo "  3) Use alternative ports (5433, 6380)"
+  echo "  4) Exit and fix manually"
+  echo ""
+  read -r -p "Choose an option (1-4): " choice
 
-    case $choice in
-        1)
-            stop_host_postgres
-            echo ""
-            echo -e "${BLUE}Cleaning up Docker resources...${NC}"
-            docker-compose down --remove-orphans 2>/dev/null || true
-            echo ""
-            echo -e "${BLUE}Starting services...${NC}"
-            docker-compose up -d
-            ;;
-        2)
-            echo -e "${BLUE}Cleaning up Docker resources...${NC}"
-            docker-compose down --remove-orphans 2>/dev/null || true
-            echo ""
-            echo -e "${BLUE}Retrying startup...${NC}"
-            if check_port 5432; then
-                echo -e "${RED}Error: Port 5432 still in use. Please stop the conflicting service.${NC}"
-                exit 1
-            fi
-            docker-compose up -d
-            ;;
-        3)
-            echo -e "${BLUE}Using alternative ports...${NC}"
-            if [ -f "docker-compose.alt.yml" ]; then
-                docker-compose -f docker-compose.alt.yml down --remove-orphans 2>/dev/null || true
-                docker-compose -f docker-compose.alt.yml up -d
-                echo -e "${GREEN}Services started with alternative ports:${NC}"
-                echo "  - PostgreSQL: 5433"
-                echo "  - Redis: 6380"
-                echo "  - Nginx: 8000"
-            else
-                echo -e "${RED}Error: docker-compose.alt.yml not found${NC}"
-                exit 1
-            fi
-            ;;
-        4)
-            echo "Exiting. Please resolve port conflicts manually."
-            exit 0
-            ;;
-        *)
-            echo -e "${RED}Invalid option${NC}"
-            exit 1
-            ;;
-    esac
+  case $choice in
+    1)
+      stop_host_postgres
+      echo ""
+      echo -e "${BLUE}Cleaning up Docker resources...${NC}"
+      compose down --remove-orphans 2>/dev/null || true
+      echo ""
+      echo -e "${BLUE}Starting services...${NC}"
+      compose up -d
+      ;;
+    2)
+      echo -e "${BLUE}Cleaning up Docker resources...${NC}"
+      compose down --remove-orphans 2>/dev/null || true
+      echo ""
+      echo -e "${BLUE}Retrying startup...${NC}"
+      if check_port 5432; then
+        echo -e "${RED}Error: Port 5432 still in use. Please stop the conflicting service.${NC}"
+        exit 1
+      fi
+      compose up -d
+      ;;
+    3)
+      echo -e "${BLUE}Using alternative ports...${NC}"
+      if [ -f "docker-compose.alt.yml" ]; then
+        compose -f docker-compose.alt.yml down --remove-orphans 2>/dev/null || true
+        compose -f docker-compose.alt.yml up -d
+        echo -e "${GREEN}Services started with alternative ports:${NC}"
+        echo "  - PostgreSQL: 5433"
+        echo "  - Redis: 6380"
+        echo "  - Nginx: 8000"
+      else
+        echo -e "${RED}Error: docker-compose.alt.yml not found${NC}"
+        exit 1
+      fi
+      ;;
+    4)
+      echo "Exiting. Please resolve port conflicts manually."
+      exit 0
+      ;;
+    *)
+      echo -e "${RED}Invalid option${NC}"
+      exit 1
+      ;;
+  esac
 else
-    echo -e "${GREEN}All ports available!${NC}"
-    echo ""
-    echo -e "${BLUE}Cleaning up Docker resources...${NC}"
-    docker-compose down --remove-orphans 2>/dev/null || true
-    echo ""
-    echo -e "${BLUE}Starting services...${NC}"
-    docker-compose up -d
+  echo -e "${GREEN}All ports available!${NC}"
+  echo ""
+  echo -e "${BLUE}Cleaning up Docker resources...${NC}"
+  compose down --remove-orphans 2>/dev/null || true
+  echo ""
+  echo -e "${BLUE}Starting services...${NC}"
+  compose up -d
 fi
 
 echo ""
 echo -e "${GREEN}✓ Startup complete!${NC}"
 echo ""
 echo "Container status:"
-docker-compose ps
+compose ps
 echo ""
 echo "Useful commands:"
 echo "  make logs      - View all logs"

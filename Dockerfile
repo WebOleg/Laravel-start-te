@@ -21,11 +21,23 @@ RUN docker-php-ext-install pdo pdo_pgsql pgsql mbstring exif pcntl bcmath gd zip
 # Install Redis extension
 RUN pecl install redis && docker-php-ext-enable redis
 
+# Install Xdebug conditionally for development (opt-in via build arg)
+ARG INSTALL_XDEBUG=false
+RUN if [ "$INSTALL_XDEBUG" = "true" ]; then \
+    pecl install xdebug && docker-php-ext-enable xdebug; \
+    fi
+
 # Get latest Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
 # Set working directory
 WORKDIR /var/www
+
+# Copy Xdebug configuration if Xdebug is installed
+COPY docker/php/xdebug.ini* /tmp/
+RUN if [ "$INSTALL_XDEBUG" = "true" ] && [ -f /tmp/xdebug.ini ]; then \
+    cp /tmp/xdebug.ini /usr/local/etc/php/conf.d/docker-php-ext-xdebug.ini; \
+    fi
 
 # Copy existing application directory
 COPY . .
