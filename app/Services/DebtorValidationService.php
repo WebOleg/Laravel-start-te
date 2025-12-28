@@ -102,19 +102,20 @@ class DebtorValidationService
     {
         $errors = [];
 
+        // Validate full name length (first_name + last_name combined)
+        $fullName = trim(($debtor->first_name ?? '') . ' ' . ($debtor->last_name ?? ''));
+        if (mb_strlen($fullName) > self::NAME_MAX_LENGTH) {
+            $errors[] = 'Full name cannot exceed ' . self::NAME_MAX_LENGTH . ' characters';
+        }
+
+        // Validate individual fields for invalid characters
         if (!empty($debtor->first_name)) {
-            if (mb_strlen($debtor->first_name) > self::NAME_MAX_LENGTH) {
-                $errors[] = 'First name cannot exceed ' . self::NAME_MAX_LENGTH . ' characters';
-            }
             if (preg_match(self::INVALID_NAME_PATTERN, $debtor->first_name)) {
                 $errors[] = 'First name contains numbers or symbols';
             }
         }
 
         if (!empty($debtor->last_name)) {
-            if (mb_strlen($debtor->last_name) > self::NAME_MAX_LENGTH) {
-                $errors[] = 'Last name cannot exceed ' . self::NAME_MAX_LENGTH . ' characters';
-            }
             if (preg_match(self::INVALID_NAME_PATTERN, $debtor->last_name)) {
                 $errors[] = 'Last name contains numbers or symbols';
             }
