@@ -13,9 +13,6 @@ class FilePreValidationService
     private const NAME_HEADERS = ['name', 'full_name', 'fullname', 'first_name', 'last_name'];
     private const SAMPLE_SIZE = 10;
 
-    private const IBAN_PATTERN = '/^[A-Z]{2}[0-9]{2}[A-Z0-9]{4,30}$/';
-    private const AMOUNT_PATTERN = '/^[\d\s.,]+$/';
-
     public function validate(UploadedFile $file): array
     {
         $extension = strtolower($file->getClientOriginalExtension());
@@ -46,26 +43,31 @@ class FilePreValidationService
         $headers = $this->normalizeHeaders($headers);
         $errors = array_merge($errors, $this->validateHeaders($headers));
 
-        $csv->setHeaderOffset(0);
-        $sample = [];
-        $count = 0;
-        foreach ($csv->getRecords($headers) as $record) {
-            if ($count >= self::SAMPLE_SIZE) break;
-            $sample[] = $record;
-            $count++;
+        if (!empty($errors)) {
+            return [
+                'valid' => false,
+                'errors' => $errors,
+                'headers' => $headers,
+                'sample_count' => 0,
+            ];
         }
 
-        if (empty($sample)) {
+        $csv->setHeaderOffset(0);
+        $sampleCount = 0;
+        foreach ($csv->getRecords($headers) as $record) {
+            if ($sampleCount >= self::SAMPLE_SIZE) break;
+            $sampleCount++;
+        }
+
+        if ($sampleCount === 0) {
             $errors[] = 'File has headers but no data rows.';
-        } else {
-            $errors = array_merge($errors, $this->validateSampleRows($sample, $headers));
         }
 
         return [
             'valid' => empty($errors),
             'errors' => $errors,
             'headers' => $headers,
-            'sample_count' => count($sample),
+            'sample_count' => $sampleCount,
         ];
     }
 
@@ -84,25 +86,31 @@ class FilePreValidationService
         $headers = $this->normalizeHeaders($data[0]);
         $errors = array_merge($errors, $this->validateHeaders($headers));
 
-        $sample = [];
+        if (!empty($errors)) {
+            return [
+                'valid' => false,
+                'errors' => $errors,
+                'headers' => $headers,
+                'sample_count' => 0,
+            ];
+        }
+
+        $sampleCount = 0;
         for ($i = 1; $i <= min(self::SAMPLE_SIZE, count($data) - 1); $i++) {
-            $row = array_combine($headers, array_pad($data[$i], count($headers), null));
-            if ($this->isRowNotEmpty($row)) {
-                $sample[] = $row;
+            if ($this->isRowNotEmpty($data[$i])) {
+                $sampleCount++;
             }
         }
 
-        if (empty($sample)) {
+        if ($sampleCount === 0) {
             $errors[] = 'File has headers but no data rows.';
-        } else {
-            $errors = array_merge($errors, $this->validateSampleRows($sample, $headers));
         }
 
         return [
             'valid' => empty($errors),
             'errors' => $errors,
             'headers' => $headers,
-            'sample_count' => count($sample),
+            'sample_count' => $sampleCount,
         ];
     }
 
@@ -123,50 +131,6 @@ class FilePreValidationService
         }
 
         return $errors;
-    }
-
-    private function validateSampleRows(array $rows, array $headers): array
-    {
-        $errors = [];
-        $ibans = [];
-        $ibanColumn = $this->findColumn($headers, self::REQUIRED_HEADERS);
-        $amountColumn = $this->findColumn($headers, self::AMOUNT_HEADERS);
-
-        foreach ($rows as $index => $row) {
-            $rowNum = $index + 2;
-
-            if ($ibanColumn && isset($row[$ibanColumn])) {
-                $iban = strtoupper(preg_replace('/\s+/', '', $row[$ibanColumn] ?? ''));
-                
-                if (empty($iban)) {
-                    $errors[] = "Row {$rowNum}: IBAN is empty.";
-                } elseif (!preg_match(self::IBAN_PATTERN, $iban)) {
-                    $errors[] = "Row {$rowNum}: Invalid IBAN format.";
-                } elseif (in_array($iban, $ibans)) {
-                    $errors[] = "Row {$rowNum}: Duplicate IBAN in file.";
-                }
-                $ibans[] = $iban;
-            }
-
-            if ($amountColumn && isset($row[$amountColumn])) {
-                $amount = $row[$amountColumn] ?? '';
-                if (!empty($amount) && !preg_match(self::AMOUNT_PATTERN, $amount)) {
-                    $errors[] = "Row {$rowNum}: Invalid amount format.";
-                }
-            }
-        }
-
-        return $errors;
-    }
-
-    private function findColumn(array $headers, array $possibleNames): ?string
-    {
-        foreach ($possibleNames as $name) {
-            if (in_array($name, $headers)) {
-                return $name;
-            }
-        }
-        return null;
     }
 
     private function detectDelimiter(string $path): string

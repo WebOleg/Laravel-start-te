@@ -73,8 +73,10 @@ class UploadStoreTest extends TestCase
         ]);
     }
 
-    public function test_store_rejects_invalid_iban_format(): void
+    public function test_store_accepts_invalid_iban_format_for_later_validation(): void
     {
+        // Pre-validation no longer checks IBAN format
+        // Validation happens in Stage B
         $file = UploadedFile::fake()->createWithContent(
             'test.csv',
             "iban,first_name,last_name,amount\nINVALID_IBAN,John,Doe,100\n"
@@ -83,8 +85,9 @@ class UploadStoreTest extends TestCase
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
             ->postJson('/api/admin/uploads', ['file' => $file]);
 
-        $response->assertStatus(422)
-            ->assertJsonPath('message', 'File validation failed.');
+        $response->assertStatus(201);
+        $this->assertEquals(1, Debtor::count());
+        $this->assertEquals(Debtor::VALIDATION_PENDING, Debtor::first()->validation_status);
     }
 
     public function test_store_rejects_missing_amount_column(): void

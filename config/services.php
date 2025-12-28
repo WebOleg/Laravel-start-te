@@ -30,15 +30,25 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | emerchantpay Configuration
+    | emerchantpay Genesis API Configuration
     |--------------------------------------------------------------------------
     */
-
     'emp' => [
-        'username' => env('EMP_USERNAME'),
-        'password' => env('EMP_PASSWORD'),
-        'terminal_token' => env('EMP_TERMINAL_TOKEN'),
-        'endpoint' => env('EMP_ENDPOINT', 'https://gate.emerchantpay.net'),
+        'endpoint' => env('EMP_GENESIS_ENDPOINT', 'gate.emerchantpay.net'),
+        'username' => env('EMP_GENESIS_USERNAME'),
+        'password' => env('EMP_GENESIS_PASSWORD'),
+        'terminal_token' => env('EMP_GENESIS_TERMINAL_TOKEN'),
+        
+        // Rate limiting
+        'rate_limit' => [
+            'requests_per_second' => 50,
+            'max_retries' => 3,
+            'retry_delay_ms' => 1000,
+        ],
+        
+        // Timeouts
+        'timeout' => 30,
+        'connect_timeout' => 10,
     ],
 
     /*
@@ -46,10 +56,9 @@ return [
     | IBAN.com BAV API Configuration
     |--------------------------------------------------------------------------
     */
-
     'iban' => [
         'api_key' => env('IBAN_API_KEY'),
-        'api_url' => env('IBAN_API_URL', 'https://api.iban.com/clients/verify/v3/'),
+        'api_url' => env('IBAN_API_URL', 'https://api.iban.com/clients/api/v4/iban/'),
         'mock' => env('IBAN_API_MOCK', true),
     ],
 ];

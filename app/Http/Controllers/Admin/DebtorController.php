@@ -52,26 +52,26 @@ class DebtorController extends Controller
                     ->selectRaw('debtors.*, bank_references.bank_name AS bank_name_reference, bank_references.country_iso AS bank_country_iso_reference');
 
         if ($request->has('upload_id')) {
-            $query->where('upload_id', $request->input('upload_id'));
+            $query->where('debtors.upload_id', $request->input('upload_id'));
         }
 
         if ($request->has('status')) {
-            $query->where('status', $request->input('status'));
+            $query->where('debtors.status', $request->input('status'));
         }
 
         if ($request->has('validation_status')) {
-            $query->where('validation_status', $request->input('validation_status'));
+            $query->where('debtors.validation_status', $request->input('validation_status'));
         }
 
         if ($request->has('country')) {
-            $query->where('country', $request->input('country'));
+            $query->where('debtors.country', $request->input('country'));
         }
 
         if ($request->has('risk_class')) {
-            $query->where('risk_class', $request->input('risk_class'));
+            $query->where('debtors.risk_class', $request->input('risk_class'));
         }
 
-        $debtors = $query->latest()->paginate($request->input('per_page', 20));
+        $debtors = $query->latest('debtors.created_at')->paginate($request->input('per_page', 20));
 
         return DebtorResource::collection($debtors);
     }

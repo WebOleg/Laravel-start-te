@@ -1,6 +1,9 @@
+cat > docs/ARCHITECTURE.md << 'EOF'
+
 # Architecture Overview
 
 ## System Architecture
+
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                              CLIENTS                                     │
@@ -43,6 +46,7 @@
 ```
 
 ## Directory Structure
+
 ```
 tether-laravel/
 ├── app/
@@ -55,8 +59,10 @@ tether-laravel/
 │   │   │   │   ├── VopController.php
 │   │   │   │   ├── VopLogController.php
 │   │   │   │   └── BillingAttemptController.php
-│   │   │   └── Api/                   # Public API controllers
-│   │   │       └── AuthController.php
+│   │   │   ├── Api/                   # Public API controllers
+│   │   │   │   └── AuthController.php
+│   │   │   └── Webhook/               # External webhook handlers
+│   │   │       └── EmpWebhookController.php
 │   │   └── Resources/                 # JSON transformers
 │   │       ├── UploadResource.php
 │   │       ├── DebtorResource.php
@@ -80,12 +86,17 @@ tether-laravel/
 │   │   ├── FileUploadService.php
 │   │   ├── DebtorValidationService.php
 │   │   ├── DeduplicationService.php
-│   │   └── BlacklistService.php
+│   │   ├── BlacklistService.php
+│   │   └── Emp/                       # emerchantpay integration
+│   │       ├── EmpClient.php          # HTTP client for Genesis API
+│   │       └── EmpBillingService.php  # Business logic for billing
 │   ├── Jobs/                          # Queue jobs
 │   │   ├── ProcessUploadJob.php
 │   │   ├── ProcessUploadChunkJob.php
 │   │   ├── ProcessVopJob.php
-│   │   └── ProcessVopChunkJob.php
+│   │   ├── ProcessVopChunkJob.php
+│   │   ├── ProcessBillingJob.php      # Billing dispatcher
+│   │   └── ProcessBillingChunkJob.php # Billing worker
 │   └── Traits/                        # Shared traits
 │       └── ParsesDebtorData.php
 ├── bootstrap/
@@ -108,6 +119,7 @@ tether-laravel/
 ## Database Schema
 
 ### Entity Relationship Diagram
+
 ```
 ┌─────────────┐       ┌─────────────┐
 │    users    │       │   uploads   │
@@ -262,23 +274,29 @@ IBAN verification results from VOP (Verification of Payee) service.
 
 #### `billing_attempts`
 
-SEPA Direct Debit payment attempts.
+SEPA Direct Debit payment attempts via emerchantpay Genesis API.
 
-| Column         | Type      | Description                                              |
-| -------------- | --------- | -------------------------------------------------------- |
-| id             | bigint    | Primary key                                              |
-| debtor_id      | bigint    | FK to debtors                                            |
-| upload_id      | bigint    | FK to uploads                                            |
-| transaction_id | string    | Internal transaction ID                                  |
-| unique_id      | string    | Payment gateway ID                                       |
-| amount         | decimal   | Amount charged                                           |
-| currency       | string    | Currency code                                            |
-| status         | enum      | pending, approved, declined, error, voided, chargebacked |
-| attempt_number | integer   | Retry counter                                            |
-| error_code     | string    | Bank error code                                          |
-| error_message  | string    | Human-readable error                                     |
-| can_retry      | boolean   | Eligible for retry                                       |
-| processed_at   | timestamp | When processed                                           |
+| Column            | Type      | Description                                              |
+| ----------------- | --------- | -------------------------------------------------------- |
+| id                | bigint    | Primary key                                              |
+| debtor_id         | bigint    | FK to debtors                                            |
+| upload_id         | bigint    | FK to uploads                                            |
+| transaction_id    | string    | Internal transaction ID (unique, indexed)                |
+| unique_id         | string    | emerchantpay Gateway ID (nullable)                       |
+| amount            | decimal   | Amount charged                                           |
+| currency          | string    | Currency code (EUR)                                      |
+| status            | enum      | pending, approved, declined, error, voided, chargebacked |
+| attempt_number    | integer   | Retry counter                                            |
+| mid_reference     | string    | Merchant ID reference (nullable)                         |
+| error_code        | string    | Bank/Gateway error code (nullable)                       |
+| error_message     | string    | Human-readable error (nullable)                          |
+| technical_message | string    | Technical error details (nullable)                       |
+| request_payload   | jsonb     | Original request sent to Gateway                         |
+| response_payload  | jsonb     | Gateway response                                         |
+| meta              | jsonb     | Additional metadata (redirect_url, descriptor)           |
+| processed_at      | timestamp | When processed                                           |
+| created_at        | timestamp | When created                                             |
+| updated_at        | timestamp | Last updated                                             |
 
 #### `blacklists`
 
@@ -299,9 +317,10 @@ Blocked IBANs, names, and emails that should be rejected during upload processin
 | updated_at | timestamp  | Last updated                                   |
 
 **Indexes:**
-- `iban_hash` (unique) — fast O(1) IBAN lookup
-- `(first_name, last_name)` — name-based lookup
-- `email` — email-based lookup
+
+-   `iban_hash` (unique) — fast O(1) IBAN lookup
+-   `(first_name, last_name)` — name-based lookup
+-   `email` — email-based lookup
 
 #### `bank_references`
 
@@ -329,6 +348,7 @@ Local cache for bank information from iban.com API.
 **Unique constraint:** `country_iso` + `bank_code`
 
 ## Request Lifecycle
+
 ```
 1. HTTP Request
        │
@@ -410,30 +430,32 @@ Location: `app/Services/FilePreValidationService.php`
 Lightweight pre-validation service that runs BEFORE heavy file processing. Validates file structure only — prevents wasted compute, queue congestion, and partial system pollution.
 
 **Purpose:**
-- Fast-fail for obviously invalid files
-- No database queries (pure file validation)
-- Reads only headers + sample rows to verify data exists
+
+-   Fast-fail for obviously invalid files
+-   No database queries (pure file validation)
+-   Reads only headers + sample rows to verify data exists
 
 **Validation Rules (Structure Only):**
 
-| Check | Description | Error Message |
-|-------|-------------|---------------|
-| File type | CSV/XLSX/XLS/TXT supported | "Unsupported file type." |
-| Headers exist | File has at least one row | "File is empty or has no headers." |
-| IBAN column | Required column present | "Missing required column: IBAN." |
-| Amount column | amount/sum/total/price present | "Missing required column: amount." |
-| Name column | name/first_name/last_name present | "Missing required column: name." |
-| Data rows | At least one data row after headers | "File has headers but no data rows." |
+| Check         | Description                         | Error Message                        |
+| ------------- | ----------------------------------- | ------------------------------------ |
+| File type     | CSV/XLSX/XLS/TXT supported          | "Unsupported file type."             |
+| Headers exist | File has at least one row           | "File is empty or has no headers."   |
+| IBAN column   | Required column present             | "Missing required column: IBAN."     |
+| Amount column | amount/sum/total/price present      | "Missing required column: amount."   |
+| Name column   | name/first_name/last_name present   | "Missing required column: name."     |
+| Data rows     | At least one data row after headers | "File has headers but no data rows." |
 
 > **Note:** IBAN format validation, amount format validation, and duplicate checking are handled in Stage A/B, not pre-validation. Pre-validation only checks file structure.
 
 **Methods:**
 
-| Method | Return | Description |
-|--------|--------|-------------|
-| `validate(UploadedFile $file)` | array | Full pre-validation |
+| Method                         | Return | Description         |
+| ------------------------------ | ------ | ------------------- |
+| `validate(UploadedFile $file)` | array  | Full pre-validation |
 
 **Return Format:**
+
 ```php
 [
     'valid' => true|false,
@@ -444,6 +466,7 @@ Lightweight pre-validation service that runs BEFORE heavy file processing. Valid
 ```
 
 **Usage:**
+
 ```php
 $service = app(FilePreValidationService::class);
 $result = $service->validate($uploadedFile);
@@ -457,10 +480,11 @@ if (!$result['valid']) {
 ```
 
 **Performance:**
-- O(1) header check — reads 1 row only
-- O(10) sample count — reads up to 10 rows to verify data exists
-- 0 database queries
-- ~50ms for any file size
+
+-   O(1) header check — reads 1 row only
+-   O(10) sample count — reads up to 10 rows to verify data exists
+-   0 database queries
+-   ~50ms for any file size
 
 ---
 
@@ -486,6 +510,7 @@ IBAN validation service wrapping `jschaedl/iban-validation` library for producti
 | `hash(string $iban)`           | string  | SHA-256 for deduplication    |
 
 **Usage:**
+
 ```php
 use App\Services\IbanValidator;
 
@@ -513,6 +538,7 @@ Location: `app/Services/IbanApiService.php`
 IBAN.com API V4 integration for bank account validation and bank information lookup. Uses **IBAN SUITE (UNLIMITED)** subscription.
 
 **Configuration (`.env`):**
+
 ```
 IBAN_API_KEY=your_api_key
 IBAN_API_URL=https://api.iban.com/clients/api/v4/iban/
@@ -539,6 +565,7 @@ IBAN_API_MOCK=false
 | `supportsSepaSdd(string $iban)`              | bool    | Check SEPA Direct Debit support  |
 
 **Cache Flow:**
+
 ```
 IBAN → extract country_iso + bank_code
          ↓
@@ -552,6 +579,7 @@ IBAN → extract country_iso + bank_code
 ```
 
 **Usage:**
+
 ```php
 use App\Services\IbanApiService;
 
@@ -616,6 +644,7 @@ VOP Scoring Engine for calculating debtor verification scores (0-100).
 | `getResultThresholds()`                     | array  | Get result ranges         |
 
 **Usage:**
+
 ```php
 use App\Services\VopScoringService;
 
@@ -662,6 +691,7 @@ Main orchestrator for VOP verification process. Manages caching, delegation to s
 | `getUploadStats(int $uploadId)`              | array   | Get verification stats for upload            |
 
 **Usage:**
+
 ```php
 use App\Services\VopVerificationService;
 
@@ -707,12 +737,12 @@ Validates debtor data in Stage B (after upload). Performs comprehensive validati
 
 **Validation Rules:**
 
-| Field     | Rule                               | Error Message                          |
-| --------- | ---------------------------------- | -------------------------------------- |
-| IBAN      | Required, valid checksum           | "IBAN is required" / "IBAN is invalid" |
-| Name      | first_name OR last_name            | "Name is required"                     |
+| Field     | Rule                               | Error Message                                    |
+| --------- | ---------------------------------- | ------------------------------------------------ |
+| IBAN      | Required, valid checksum           | "IBAN is required" / "IBAN is invalid"           |
+| Name      | first_name OR last_name            | "Name is required"                               |
 | Amount    | Required, > 0, ≤ 50000             | "Amount is required" / "Amount must be positive" |
-| Blacklist | IBAN, name, email not in blacklist | "IBAN/Name/Email is blacklisted"       |
+| Blacklist | IBAN, name, email not in blacklist | "IBAN/Name/Email is blacklisted"                 |
 
 ---
 
@@ -724,19 +754,20 @@ Manages IBAN, name, and email blacklist for blocking fraudulent or problematic a
 
 **Methods:**
 
-| Method                                              | Return    | Description                      |
-| --------------------------------------------------- | --------- | -------------------------------- |
-| `isBlacklisted(string $iban)`                       | bool      | Check if IBAN is blocked         |
-| `isNameBlacklisted(string $firstName, $lastName)`   | bool      | Check if name is blocked         |
-| `isEmailBlacklisted(string $email)`                 | bool      | Check if email is blocked        |
-| `checkDebtor(Debtor\|array $debtor)`                | array     | Check all criteria, return matches |
-| `isDebtorBlacklisted(Debtor\|array $debtor)`        | bool      | Check if debtor matches any blacklist |
-| `add(string $iban, ...)`                            | Blacklist | Add entry with IBAN only         |
-| `addDebtor(Debtor $debtor, $reason, $source)`       | Blacklist | Add full debtor data to blacklist |
-| `remove(string $iban)`                              | bool      | Remove IBAN from blacklist       |
-| `find(string $iban)`                                | ?Blacklist | Find entry by IBAN              |
+| Method                                            | Return     | Description                           |
+| ------------------------------------------------- | ---------- | ------------------------------------- |
+| `isBlacklisted(string $iban)`                     | bool       | Check if IBAN is blocked              |
+| `isNameBlacklisted(string $firstName, $lastName)` | bool       | Check if name is blocked              |
+| `isEmailBlacklisted(string $email)`               | bool       | Check if email is blocked             |
+| `checkDebtor(Debtor\|array $debtor)`              | array      | Check all criteria, return matches    |
+| `isDebtorBlacklisted(Debtor\|array $debtor)`      | bool       | Check if debtor matches any blacklist |
+| `add(string $iban, ...)`                          | Blacklist  | Add entry with IBAN only              |
+| `addDebtor(Debtor $debtor, $reason, $source)`     | Blacklist  | Add full debtor data to blacklist     |
+| `remove(string $iban)`                            | bool       | Remove IBAN from blacklist            |
+| `find(string $iban)`                              | ?Blacklist | Find entry by IBAN                    |
 
 **Usage:**
+
 ```php
 use App\Services\BlacklistService;
 
@@ -780,29 +811,30 @@ Service for IBAN/name/email deduplication during file upload. Implements skip lo
 
 **Skip Reasons:**
 
-| Constant                  | Value                | Description                      |
-| ------------------------- | -------------------- | -------------------------------- |
-| `SKIP_BLACKLISTED`        | `blacklisted`        | IBAN in blacklist                |
-| `SKIP_BLACKLISTED_NAME`   | `blacklisted_name`   | Name in blacklist                |
-| `SKIP_BLACKLISTED_EMAIL`  | `blacklisted_email`  | Email in blacklist               |
-| `SKIP_CHARGEBACKED`       | `chargebacked`       | IBAN had chargeback              |
-| `SKIP_RECOVERED`          | `already_recovered`  | IBAN already recovered           |
-| `SKIP_RECENTLY_ATTEMPTED` | `recently_attempted` | IBAN attempted in last 7 days    |
+| Constant                  | Value                | Description                   |
+| ------------------------- | -------------------- | ----------------------------- |
+| `SKIP_BLACKLISTED`        | `blacklisted`        | IBAN in blacklist             |
+| `SKIP_BLACKLISTED_NAME`   | `blacklisted_name`   | Name in blacklist             |
+| `SKIP_BLACKLISTED_EMAIL`  | `blacklisted_email`  | Email in blacklist            |
+| `SKIP_CHARGEBACKED`       | `chargebacked`       | IBAN had chargeback           |
+| `SKIP_RECOVERED`          | `already_recovered`  | IBAN already recovered        |
+| `SKIP_RECENTLY_ATTEMPTED` | `recently_attempted` | IBAN attempted in last 7 days |
 
 **Methods:**
 
-| Method                                           | Return | Description                               |
-| ------------------------------------------------ | ------ | ----------------------------------------- |
-| `checkIban(string $iban, ?int $excludeUploadId)` | ?array | Check single IBAN                         |
-| `checkDebtor(array $data, ?int $excludeUploadId)`| ?array | Check IBAN + name + email                 |
-| `checkBatch(array $ibanHashes, ?int $exclude)`   | array  | Batch check IBANs (legacy)                |
-| `checkDebtorBatch(array $debtors, ?int $exclude)`| array  | Batch check IBAN + name + email           |
-| `isBlacklisted(string $ibanHash)`                | bool   | Check if IBAN hash is blacklisted         |
-| `isChargebacked(string $ibanHash)`               | bool   | Check if IBAN has chargeback              |
-| `isRecovered(string $ibanHash, ?int $exclude)`   | bool   | Check if IBAN already recovered           |
-| `getRecentAttempt(string $ibanHash, ?int $exclude)` | ?array | Get recent billing attempt info       |
+| Method                                              | Return | Description                       |
+| --------------------------------------------------- | ------ | --------------------------------- |
+| `checkIban(string $iban, ?int $excludeUploadId)`    | ?array | Check single IBAN                 |
+| `checkDebtor(array $data, ?int $excludeUploadId)`   | ?array | Check IBAN + name + email         |
+| `checkBatch(array $ibanHashes, ?int $exclude)`      | array  | Batch check IBANs (legacy)        |
+| `checkDebtorBatch(array $debtors, ?int $exclude)`   | array  | Batch check IBAN + name + email   |
+| `isBlacklisted(string $ibanHash)`                   | bool   | Check if IBAN hash is blacklisted |
+| `isChargebacked(string $ibanHash)`                  | bool   | Check if IBAN has chargeback      |
+| `isRecovered(string $ibanHash, ?int $exclude)`      | bool   | Check if IBAN already recovered   |
+| `getRecentAttempt(string $ibanHash, ?int $exclude)` | ?array | Get recent billing attempt info   |
 
 **Usage:**
+
 ```php
 use App\Services\DeduplicationService;
 
@@ -823,10 +855,11 @@ $results = $service->checkDebtorBatch($debtorDataArray, $uploadId);
 ```
 
 **Performance:**
-- Uses batch SQL queries for efficiency
-- Single query fetches all blacklisted IBANs, names, emails
-- O(1) lookup in PHP arrays
-- 1000 debtors = ~4 queries instead of 1000
+
+-   Uses batch SQL queries for efficiency
+-   Single query fetches all blacklisted IBANs, names, emails
+-   O(1) lookup in PHP arrays
+-   1000 debtors = ~4 queries instead of 1000
 
 ---
 
@@ -867,7 +900,296 @@ Orchestrates file upload processing: parse, validate, create debtors.
 
 ---
 
+## EMP Billing System Architecture
+
+### emerchantpay Integration
+
+Location: `app/Services/Emp/`
+
+Integration with emerchantpay Genesis API for SEPA Direct Debit processing. Handles XML transactions, webhooks, and async billing at scale.
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           ADMIN PANEL                                    │
+│                                                                          │
+│   Upload Detail Page                    Billing Attempts Page            │
+│   ┌─────────────────┐                  ┌─────────────────┐              │
+│   │ [Sync to GW]    │                  │ Status | Amount │              │
+│   │                 │                  │ approved| €99   │              │
+│   │ Stats:          │                  │ pending | €50   │              │
+│   │ - Approved: 85  │                  │ declined| €25   │              │
+│   │ - Pending: 15   │                  └─────────────────┘              │
+│   └─────────────────┘                                                    │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                          API LAYER                                       │
+│                                                                          │
+│   POST /uploads/{id}/sync  →  BillingController::sync()                 │
+│   GET  /billing-attempts   →  BillingAttemptController::index()         │
+│   POST /webhooks/emp       →  EmpWebhookController::handle()            │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                       JOB LAYER (Async)                                  │
+│                                                                          │
+│   ┌─────────────────────────────────────────────────────────────────┐   │
+│   │              ProcessBillingJob (Dispatcher)                      │   │
+│   │                                                                  │   │
+│   │   - Get all valid debtors from upload                           │   │
+│   │   - Split into chunks of 50                                     │   │
+│   │   - Dispatch Bus::batch() to Redis queue                        │   │
+│   └─────────────────────────────────────────────────────────────────┘   │
+│                                    │                                     │
+│                                    ▼                                     │
+│   ┌─────────────────────────────────────────────────────────────────┐   │
+│   │              ProcessBillingChunkJob (Worker)                     │   │
+│   │                                                                  │   │
+│   │   - Process 50 debtors per job                                  │   │
+│   │   - Rate limiting (50 req/sec)                                  │   │
+│   │   - Circuit breaker (10+ failures → pause)                     │   │
+│   │   - 3 retries with exponential backoff                         │   │
+│   └─────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                       SERVICE LAYER                                      │
+│                                                                          │
+│   ┌─────────────────────────────────────────────────────────────────┐   │
+│   │                   EmpBillingService                              │   │
+│   │                                                                  │   │
+│   │   - billDebtor(debtor) → BillingAttempt                         │   │
+│   │   - billBatch(debtors) → array results                          │   │
+│   │   - canBill(debtor) → bool                                      │   │
+│   │   - retry(attempt) → BillingAttempt                             │   │
+│   │   - reconcile(attempt) → array                                  │   │
+│   └─────────────────────────────────────────────────────────────────┘   │
+│                                    │                                     │
+│                                    ▼                                     │
+│   ┌─────────────────────────────────────────────────────────────────┐   │
+│   │                      EmpClient                                   │   │
+│   │                                                                  │   │
+│   │   - sddSale(data) → array (XML → HTTP → XML)                    │   │
+│   │   - reconcile(uniqueId) → array                                 │   │
+│   │   - verifySignature(id, signature) → bool                       │   │
+│   │   - buildXml(), parseResponse(), rateLimit()                    │   │
+│   └─────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    emerchantpay Genesis API                              │
+│                                                                          │
+│   Endpoint: staging.gate.emerchantpay.net                               │
+│   Auth: Basic (username:password)                                       │
+│   Format: XML Request/Response                                           │
+│   Transaction: sdd_sale (SEPA Direct Debit)                             │
+│   Flow: Click (instant billing without redirect)                        │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼ (async webhook)
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        WEBHOOK HANDLER                                   │
+│                                                                          │
+│   POST /api/webhooks/emp → EmpWebhookController                          │
+│                                                                          │
+│   - Verify signature (SHA1)                                             │
+│   - Update BillingAttempt status                                        │
+│   - Handle chargebacks (auto-blacklist)                                 │
+│   - Return notification_echo XML                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### EMP Billing Flow
+
+**Target Scale:** 3-5 million transactions/month
+
+```
+1. Admin clicks "Sync to Gateway"
+   │
+   ▼
+2. ProcessBillingJob dispatched
+   - Finds eligible debtors (valid + pending)
+   - Splits into chunks of 50
+   - Creates Bus::batch() jobs
+   │
+   ▼
+3. ProcessBillingChunkJob workers (parallel)
+   - Check circuit breaker (10+ failures → pause 5 min)
+   - Rate limit (50 requests/second)
+   - For each debtor:
+     │
+     ▼
+4. EmpBillingService.billDebtor(debtor)
+   - Check canBill() → validation_status='valid', no pending attempts
+   - Generate unique transaction_id: "tether_123_20251228_abc"
+   - Create BillingAttempt record (status='pending')
+   - Call EmpClient.sddSale()
+   │
+   ▼
+5. EmpClient.sddSale(data)
+   - Build XML request (amount in cents, IBAN, name)
+   - POST to https://staging.gate.emerchantpay.net/process/{terminal}
+   - Basic Auth (username:password)
+   - Parse XML response
+   │
+   ▼
+6. EMP Response (synchronous)
+   - approved → Bill successful
+   - declined → Bank rejected (insufficient funds, etc.)
+   - pending_async → Waiting for bank confirmation (most common)
+   - error → Technical error
+   │
+   ▼
+7. Update BillingAttempt
+   - Save unique_id from EMP
+   - Update status based on response
+   - Store response_payload
+   │
+   ▼
+8. EMP Webhook (async, 2-48h later)
+   - POST to /api/webhooks/emp
+   - Verify signature: SHA1(unique_id + api_password)
+   - Final status: approved/declined/chargebacked
+   - Update BillingAttempt
+   │
+   ▼
+9. Chargeback Handling (if occurs)
+   - Auto-blacklist IBAN
+   - Set status='chargebacked'
+   - Log reason code (AC01, AC04, etc.)
+```
+
+### EmpClient
+
+Location: `app/Services/Emp/EmpClient.php`
+
+HTTP client for emerchantpay Genesis API. Handles XML building, Basic Auth, request/response parsing.
+
+**Configuration:**
+
+```env
+EMP_GENESIS_ENDPOINT=staging.gate.emerchantpay.net
+EMP_GENESIS_USERNAME=32a174d6bdbe31b03a337b65900fe96271c9f4a8
+EMP_GENESIS_PASSWORD=948d93cb68916cc893d234f549a825fa0c91c826
+EMP_GENESIS_TERMINAL_TOKEN=585b1650138599b7861e129030c91fe0ecc79bd5
+```
+
+**Methods:**
+
+| Method                                                 | Return | Description                    |
+| ------------------------------------------------------ | ------ | ------------------------------ |
+| `sddSale(array $data)`                                 | array  | Send SEPA Direct Debit request |
+| `reconcile(string $uniqueId)`                          | array  | Get transaction status         |
+| `verifySignature(string $uniqueId, string $signature)` | bool   | Verify webhook signature       |
+| `getTerminalToken()`                                   | string | Get terminal token             |
+
+**XML Request Structure:**
+
+```xml
+<payment_transaction>
+    <transaction_type>sdd_sale</transaction_type>
+    <transaction_id>tether_123_20251228_abc12345</transaction_id>
+    <amount>9999</amount>  <!-- €99.99 in cents -->
+    <currency>EUR</currency>
+    <iban>DE89370400440532013000</iban>
+    <bic>COBADEFFXXX</bic>
+    <usage>Debt recovery - 123</usage>
+    <notification_url>https://api.tether/webhooks/emp</notification_url>
+    <billing_address>
+        <first_name>Max</first_name>
+        <last_name>Mustermann</last_name>
+        <country>DE</country>
+    </billing_address>
+</payment_transaction>
+```
+
+**Response Statuses:**
+
+| Status        | Description        | Next Action            |
+| ------------- | ------------------ | ---------------------- |
+| approved      | Payment successful | Settlement in 2-5 days |
+| declined      | Bank rejected      | Review reason code     |
+| pending_async | Waiting for bank   | Wait for webhook       |
+| error         | Technical error    | Check request          |
+| voided        | Cancelled          | No further action      |
+
+### EmpBillingService
+
+Location: `app/Services/Emp/EmpBillingService.php`
+
+Business logic service for billing operations. Orchestrates EmpClient calls with database operations.
+
+**Methods:**
+
+| Method                                                   | Return         | Description                      |
+| -------------------------------------------------------- | -------------- | -------------------------------- |
+| `billDebtor(Debtor $debtor, ?string $notificationUrl)`   | BillingAttempt | Bill single debtor               |
+| `billBatch(iterable $debtors, ?string $notificationUrl)` | array          | Bill multiple debtors            |
+| `billUpload(Upload $upload, ?string $notificationUrl)`   | array          | Bill all ready debtors in upload |
+| `retry(BillingAttempt $attempt)`                         | BillingAttempt | Retry failed attempt             |
+| `reconcile(BillingAttempt $attempt)`                     | array          | Check status with EMP            |
+| `canBill(Debtor $debtor)`                                | bool           | Check if debtor is eligible      |
+
+**Billing Eligibility Rules:**
+
+-   validation_status = 'valid'
+-   status = 'pending' OR 'ready_for_sync'
+-   Has IBAN and amount > 0
+-   No pending billing attempts
+-   No approved billing attempts
+
+**Usage:**
+
+```php
+use App\Services\Emp\EmpBillingService;
+
+$service = app(EmpBillingService::class);
+
+// Bill single debtor
+$attempt = $service->billDebtor($debtor);
+// Returns: BillingAttempt with status 'approved', 'pending', 'declined', 'error'
+
+// Bill batch (for jobs)
+$results = $service->billBatch($debtors);
+// Returns: ['success' => 85, 'failed' => 10, 'skipped' => 5, 'attempts' => [...]]
+
+// Check eligibility
+if ($service->canBill($debtor)) {
+    // Debtor can be billed
+}
+```
+
+### Performance Optimizations
+
+**For 3-5M transactions/month:**
+
+| Feature              | Implementation                  | Benefit                 |
+| -------------------- | ------------------------------- | ----------------------- |
+| **Async Processing** | `Bus::batch()` + Redis queue    | Non-blocking requests   |
+| **Chunking**         | 50 debtors per job              | Memory efficiency       |
+| **Rate Limiting**    | 50 req/sec with cache           | Respect API limits      |
+| **Circuit Breaker**  | 10 failures → 5min pause        | Prevent DDoS on errors  |
+| **Parallel Workers** | 10+ queue workers               | 10x faster processing   |
+| **Idempotency**      | Unique transaction_id format    | Prevent duplicates      |
+| **Retry Logic**      | 3 attempts, exponential backoff | Handle transient errors |
+| **Batch Operations** | Bulk database inserts           | Reduce DB load          |
+
+**Processing Speed Example:**
+
+```
+5000 debtors upload:
+- Without optimization: 5000 × 1 sec = 83 minutes (blocking)
+- With optimization: 5000 ÷ 50 ÷ 10 workers = ~8 minutes (async)
+```
+
+---
+
 ## VOP System Architecture
+
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                           FRONTEND                                       │
@@ -937,6 +1259,7 @@ Orchestrates file upload processing: parse, validate, create debtors.
 ```
 
 ### VOP Verification Flow
+
 ```
 1. VopController receives POST /uploads/{id}/verify-vop
 2. Dispatches ProcessVopJob (background)
@@ -1028,16 +1351,67 @@ Processes chunk of debtors for VOP verification. Called by ProcessVopJob.
 | `$timeout`   | 180   | Max execution time (seconds) |
 | API_DELAY_MS | 500   | Delay between API calls      |
 
+### ProcessBillingJob
+
+Location: `app/Jobs/ProcessBillingJob.php`
+
+Main job for batch billing of upload. Filters eligible debtors and dispatches chunk jobs using `Bus::batch()`.
+
+**Configuration:**
+
+| Property   | Value | Description                  |
+| ---------- | ----- | ---------------------------- |
+| `$tries`   | 3     | Max retry attempts           |
+| `$timeout` | 600   | Max execution time (seconds) |
+| CHUNK_SIZE | 50    | Debtors per chunk            |
+
+**Eligibility Filter:**
+
+```sql
+WHERE validation_status = 'valid'
+  AND status = 'pending'
+  AND debtor_id NOT IN (
+    SELECT debtor_id FROM billing_attempts
+    WHERE status IN ('pending', 'approved')
+  )
+```
+
+### ProcessBillingChunkJob
+
+Location: `app/Jobs/ProcessBillingChunkJob.php`
+
+Processes chunk of debtors for billing via emerchantpay. Implements rate limiting and circuit breaker patterns.
+
+**Configuration:**
+
+| Property   | Value        | Description                  |
+| ---------- | ------------ | ---------------------------- |
+| `$tries`   | 3            | Max retry attempts           |
+| `$timeout` | 120          | Max execution time (seconds) |
+| `$backoff` | [10, 30, 60] | Delay between retries        |
+
+**Rate Limiting & Circuit Breaker:**
+
+| Feature            | Configuration                        | Description              |
+| ------------------ | ------------------------------------ | ------------------------ |
+| Rate Limit         | 50 req/sec                           | Prevents API overload    |
+| Circuit Breaker    | 10 failures → 5min pause             | Stops cascade failures   |
+| Retry Logic        | 3 attempts, exponential backoff      | Handles transient errors |
+| Batch Cancellation | Check `$this->batch()?->cancelled()` | Graceful shutdown        |
+
 ### Queue Worker Commands
+
 ```bash
-php artisan queue:work                      # Default queue
-php artisan queue:work --queue=vop,default  # VOP queue priority
-php artisan queue:work --queue=default,vop  # Both queues
+php artisan queue:work                               # Default queue
+php artisan queue:work --queue=billing,vop,default  # Billing priority
+php artisan queue:work --queue=vop,default          # VOP priority
+php artisan queue:work --tries=5 --timeout=300      # Custom config
 ```
 
 ---
 
 ## Five-Stage Upload Flow
+
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                  STAGE 0: PRE-VALIDATION                         │
@@ -1094,18 +1468,24 @@ php artisan queue:work --queue=default,vop  # Both queues
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                    STAGE D: SYNC (Future)                        │
+│                    STAGE D: SYNC TO GATEWAY                      │
+│                                                                  │
+│  1. User clicks "Sync to Gateway" button                        │
+│  2. ProcessBillingJob dispatched                                │
+│  3. EmpBillingService bills each eligible debtor                │
+│  4. BillingAttempt created with EMP response                    │
 │                                                                  │
 │  Only debtors with:                                             │
 │    - validation_status = 'valid'                                │
-│    - vop_result = 'verified' or 'likely_verified'               │
 │    - status = 'pending'                                         │
+│    - No existing pending/approved billing attempts              │
 │                                                                  │
-│  Are sent to payment gateway                                    │
+│  Result: User sees billing results, tracks payment status       │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 ### Stage A Deduplication Flow
+
 ```
 CSV Row
    │
@@ -1129,6 +1509,7 @@ Skip? → Add to meta.skipped_rows with reason
 ---
 
 ## Debtor Constants
+
 ```php
 class Debtor extends Model
 {
@@ -1146,6 +1527,7 @@ class Debtor extends Model
 ```
 
 ## VopLog Constants
+
 ```php
 class VopLog extends Model
 {
@@ -1157,7 +1539,22 @@ class VopLog extends Model
 }
 ```
 
+## BillingAttempt Constants
+
+```php
+class BillingAttempt extends Model
+{
+    const STATUS_PENDING = 'pending';
+    const STATUS_APPROVED = 'approved';
+    const STATUS_DECLINED = 'declined';
+    const STATUS_ERROR = 'error';
+    const STATUS_VOIDED = 'voided';
+    const STATUS_CHARGEBACKED = 'chargebacked';
+}
+```
+
 ## DeduplicationService Constants
+
 ```php
 class DeduplicationService
 {
@@ -1167,14 +1564,35 @@ class DeduplicationService
     const SKIP_CHARGEBACKED = 'chargebacked';
     const SKIP_RECOVERED = 'already_recovered';
     const SKIP_RECENTLY_ATTEMPTED = 'recently_attempted';
-    
+
     const COOLDOWN_DAYS = 7;
 }
 ```
 
 ---
 
-## API Endpoints (VOP)
+## API Endpoints
+
+### Upload Management
+
+| Method | Endpoint      | Controller               | Description        |
+| ------ | ------------- | ------------------------ | ------------------ |
+| GET    | /uploads      | UploadController@index   | List uploads       |
+| POST   | /uploads      | UploadController@store   | Create upload      |
+| GET    | /uploads/{id} | UploadController@show    | Get upload details |
+| DELETE | /uploads/{id} | UploadController@destroy | Delete upload      |
+
+### Debtor Management
+
+| Method | Endpoint               | Controller                | Description            |
+| ------ | ---------------------- | ------------------------- | ---------------------- |
+| GET    | /debtors               | DebtorController@index    | List debtors           |
+| GET    | /debtors/{id}          | DebtorController@show     | Get debtor details     |
+| PUT    | /debtors/{id}          | DebtorController@update   | Update debtor          |
+| DELETE | /debtors/{id}          | DebtorController@destroy  | Delete debtor          |
+| POST   | /debtors/{id}/validate | DebtorController@validate | Validate single debtor |
+
+### VOP Verification
 
 | Method | Endpoint                 | Controller                 | Description                |
 | ------ | ------------------------ | -------------------------- | -------------------------- |
@@ -1184,3 +1602,72 @@ class DeduplicationService
 | POST   | /vop/verify-single       | VopController@verifySingle | Verify single IBAN         |
 | GET    | /vop-logs                | VopLogController@index     | List all VOP logs          |
 | GET    | /vop-logs/{id}           | VopLogController@show      | Get single VOP log         |
+
+### Billing Management
+
+| Method | Endpoint                     | Controller                     | Description                 |
+| ------ | ---------------------------- | ------------------------------ | --------------------------- |
+| POST   | /uploads/{id}/sync           | BillingController@sync         | Start billing process       |
+| GET    | /billing-attempts            | BillingAttemptController@index | List billing attempts       |
+| GET    | /billing-attempts/{id}       | BillingAttemptController@show  | Get billing attempt details |
+| POST   | /billing-attempts/{id}/retry | BillingAttemptController@retry | Retry failed attempt        |
+
+### Webhook Endpoints
+
+| Method | Endpoint      | Controller                  | Description                |
+| ------ | ------------- | --------------------------- | -------------------------- |
+| POST   | /webhooks/emp | EmpWebhookController@handle | emerchantpay notifications |
+
+---
+
+## Configuration Files
+
+### EMP Genesis API
+
+Location: `config/services.php`
+
+```php
+'emp' => [
+    'endpoint' => env('EMP_GENESIS_ENDPOINT', 'gate.emerchantpay.net'),
+    'username' => env('EMP_GENESIS_USERNAME'),
+    'password' => env('EMP_GENESIS_PASSWORD'),
+    'terminal_token' => env('EMP_GENESIS_TERMINAL_TOKEN'),
+
+    // Rate limiting
+    'rate_limit' => [
+        'requests_per_second' => 50,
+        'max_retries' => 3,
+        'retry_delay_ms' => 1000,
+    ],
+
+    // Timeouts
+    'timeout' => 30,
+    'connect_timeout' => 10,
+],
+```
+
+### Environment Variables
+
+```env
+# emerchantpay Genesis API
+EMP_GENESIS_ENDPOINT=staging.gate.emerchantpay.net
+EMP_GENESIS_USERNAME=32a174d6bdbe31b03a337b65900fe96271c9f4a8
+EMP_GENESIS_PASSWORD=948d93cb68916cc893d234f549a825fa0c91c826
+EMP_GENESIS_TERMINAL_TOKEN=585b1650138599b7861e129030c91fe0ecc79bd5
+
+# IBAN.com API
+IBAN_API_KEY=your_api_key
+IBAN_API_URL=https://api.iban.com/clients/api/v4/iban/
+IBAN_API_MOCK=false
+
+# Queue Configuration
+QUEUE_CONNECTION=redis
+REDIS_HOST=127.0.0.1
+REDIS_PASSWORD=null
+REDIS_PORT=6379
+```
+
+---
+
+This completes the comprehensive architecture documentation covering all major system components, from file upload through VOP verification to billing and payment processing.
+EOF
