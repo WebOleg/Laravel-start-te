@@ -102,10 +102,12 @@ class DebtorValidationService
     {
         $errors = [];
 
-        // Validate full name length (first_name + last_name combined)
-        $fullName = trim(($debtor->first_name ?? '') . ' ' . ($debtor->last_name ?? ''));
-        if (mb_strlen($fullName) > self::NAME_MAX_LENGTH) {
-            $errors[] = 'Full name cannot exceed ' . self::NAME_MAX_LENGTH . ' characters';
+        // Validate individual name lengths
+        if (!empty($debtor->first_name) && strlen($debtor->first_name) > self::NAME_MAX_LENGTH) {
+            $errors[] = 'First name cannot exceed ' . self::NAME_MAX_LENGTH . ' characters';
+        }
+        if (!empty($debtor->last_name) && strlen($debtor->last_name) > self::NAME_MAX_LENGTH) {
+            $errors[] = 'Last name cannot exceed ' . self::NAME_MAX_LENGTH . ' characters';
         }
 
         // Validate individual fields for invalid characters

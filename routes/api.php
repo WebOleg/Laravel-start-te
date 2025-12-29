@@ -9,6 +9,7 @@ use App\Http\Controllers\Admin\DebtorController as AdminDebtorController;
 use App\Http\Controllers\Admin\VopLogController as AdminVopLogController;
 use App\Http\Controllers\Admin\BillingAttemptController as AdminBillingAttemptController;
 use App\Http\Controllers\Admin\BillingController as AdminBillingController;
+use App\Http\Controllers\Admin\ReconciliationController as AdminReconciliationController;
 use App\Http\Controllers\Admin\UploadController as AdminUploadController;
 use App\Http\Controllers\Admin\StatsController as AdminStatsController;
 use App\Http\Controllers\Admin\VopController as AdminVopController;
@@ -48,9 +49,15 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('uploads/{upload}/billing-stats', [AdminBillingController::class, 'stats']);
         Route::post('billing-attempts/{billing_attempt}/retry', [AdminBillingAttemptController::class, 'retry']);
 
+        // Reconciliation routes
+        Route::post('billing-attempts/{billing_attempt}/reconcile', [AdminReconciliationController::class, 'reconcileAttempt']);
+        Route::post('uploads/{upload}/reconcile', [AdminReconciliationController::class, 'reconcileUpload']);
+        Route::get('uploads/{upload}/reconciliation-stats', [AdminReconciliationController::class, 'uploadStats']);
+        Route::get('reconciliation/stats', [AdminReconciliationController::class, 'stats']);
+        Route::post('reconciliation/bulk', [AdminReconciliationController::class, 'bulk']);
+
         Route::post('debtors/{debtor}/validate', [AdminDebtorController::class, 'validate']);
         Route::apiResource('debtors', AdminDebtorController::class)->only(['index', 'show', 'update', 'destroy']);
-
         Route::apiResource('vop-logs', AdminVopLogController::class)->only(['index', 'show']);
         Route::apiResource('billing-attempts', AdminBillingAttemptController::class)->only(['index', 'show']);
     });

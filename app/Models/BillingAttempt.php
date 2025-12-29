@@ -24,6 +24,21 @@ class BillingAttempt extends Model
         self::STATUS_ERROR,
     ];
 
+    public const FINAL_STATUSES = [
+        self::STATUS_APPROVED,
+        self::STATUS_VOIDED,
+        self::STATUS_CHARGEBACKED,
+    ];
+
+    public const RETRIABLE_STATUSES = [
+        self::STATUS_DECLINED,
+        self::STATUS_ERROR,
+    ];
+
+    // Reconciliation settings
+    public const RECONCILIATION_MIN_AGE_HOURS = 2;
+    public const RECONCILIATION_MAX_ATTEMPTS = 10;
+
     protected $fillable = [
         'debtor_id',
         'upload_id',
@@ -41,6 +56,8 @@ class BillingAttempt extends Model
         'response_payload',
         'meta',
         'processed_at',
+        'last_reconciled_at',
+        'reconciliation_attempts',
     ];
 
     protected $casts = [
@@ -49,7 +66,9 @@ class BillingAttempt extends Model
         'response_payload' => 'array',
         'amount' => 'decimal:2',
         'attempt_number' => 'integer',
+        'reconciliation_attempts' => 'integer',
         'processed_at' => 'datetime',
+        'last_reconciled_at' => 'datetime',
     ];
 
     protected $hidden = [
@@ -67,6 +86,7 @@ class BillingAttempt extends Model
         return $this->belongsTo(Upload::class);
     }
 
+    // Status checks
     public function isPending(): bool
     {
         return $this->status === self::STATUS_PENDING;
@@ -99,18 +119,75 @@ class BillingAttempt extends Model
 
     public function isFinal(): bool
     {
-        return in_array($this->status, [
-            self::STATUS_APPROVED,
-            self::STATUS_VOIDED,
-            self::STATUS_CHARGEBACKED,
-        ]);
+        return in_array($this->status, self::FINAL_STATUSES);
     }
 
     public function canRetry(): bool
     {
-        return in_array($this->status, [
-            self::STATUS_DECLINED,
-            self::STATUS_ERROR,
+        return in_array($this->status, self::RETRIABLE_STATUSES);
+    }
+
+    // Reconciliation methods
+    public function canReconcile(): bool
+    {
+        if (!$this->isPending()) {
+            return false;
+        }
+
+        if (empty($this->unique_id)) {
+            return false;
+        }
+
+        if ($this->reconciliation_attempts >= self::RECONCILIATION_MAX_ATTEMPTS) {
+            return false;
+        }
+
+        return true;
+    }
+
+    public function needsReconciliation(): bool
+    {
+        if (!$this->canReconcile()) {
+            return false;
+        }
+
+        $minAge = now()->subHours(self::RECONCILIATION_MIN_AGE_HOURS);
+        if ($this->created_at > $minAge) {
+            return false;
+        }
+
+        return true;
+    }
+
+    public function markReconciled(): void
+    {
+        $this->update([
+            'last_reconciled_at' => now(),
+            'reconciliation_attempts' => $this->reconciliation_attempts + 1,
         ]);
+    }
+
+    // Scopes
+    public function scopePending($query)
+    {
+        return $query->where('status', self::STATUS_PENDING);
+    }
+
+    public function scopeNeedsReconciliation($query)
+    {
+        $minAge = now()->subHours(self::RECONCILIATION_MIN_AGE_HOURS);
+
+        return $query
+            ->where('status', self::STATUS_PENDING)
+            ->whereNotNull('unique_id')
+            ->where('created_at', '<', $minAge)
+            ->where('reconciliation_attempts', '<', self::RECONCILIATION_MAX_ATTEMPTS);
+    }
+
+    public function scopeStale($query, int $hours = 48)
+    {
+        return $query
+            ->where('status', self::STATUS_PENDING)
+            ->where('created_at', '<', now()->subHours($hours));
     }
 }
