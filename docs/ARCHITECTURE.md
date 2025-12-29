@@ -41,7 +41,7 @@
 │   :5432     │      │   :6379     │           │ APIs        │
 │             │      │             │           │             │
 │ - uploads   │      │ - queues    │           │ - EMP       │
-│ - debtors   │      │ - cache     │           │ - IBAN.com  │
+│ - debtors   │      │ - cache     │           │ - Sumsub    │
 │ - billing   │      │ - locks     │           │             │
 └─────────────┘      └─────────────┘           └─────────────┘
 ```
@@ -52,7 +52,7 @@
 - **Queue:** Redis + Laravel Horizon
 - **Frontend:** Next.js 16, TypeScript, Tailwind CSS
 - **Payments:** emerchantpay Genesis API (SEPA DD)
-- **VOP:** iban.com BAV API
+- **VOP:** Sumsub BAV API
 
 ---
 
@@ -67,6 +67,7 @@ tether-laravel/
 │   │   │   │   ├── BillingController.php         # Sync/stats endpoints
 │   │   │   │   ├── DashboardController.php       # Dashboard stats
 │   │   │   │   ├── DebtorController.php          # CRUD debtors
+│   │   │   │   ├── ReconciliationController.php  # Reconcile transactions
 │   │   │   │   ├── StatsController.php           # Chargeback stats
 │   │   │   │   ├── UploadController.php          # File upload/validation
 │   │   │   │   ├── VopController.php             # VOP verification
@@ -83,7 +84,9 @@ tether-laravel/
 │   │   ├── ProcessVopJob.php                     # VOP batch dispatcher
 │   │   ├── ProcessVopChunkJob.php                # VOP worker
 │   │   ├── ProcessBillingJob.php                 # Billing dispatcher
-│   │   └── ProcessBillingChunkJob.php            # Billing worker
+│   │   ├── ProcessBillingChunkJob.php            # Billing worker
+│   │   ├── ProcessReconciliationJob.php          # Reconciliation dispatcher
+│   │   └── ProcessReconciliationChunkJob.php     # Reconciliation worker
 │   │
 │   ├── Models/
 │   │   ├── BillingAttempt.php
@@ -97,11 +100,12 @@ tether-laravel/
 │   └── Services/
 │       ├── BlacklistService.php                  # Blacklist management
 │       ├── DebtorValidationService.php           # Validation rules
-│       ├── DeduplicationService.php              # Skip logic
+│       ├── DeduplicationService.php              # Skip logic (30-day cooldown)
 │       ├── FilePreValidationService.php          # Pre-upload checks
 │       ├── FileUploadService.php                 # Upload orchestration
-│       ├── IbanApiService.php                    # iban.com integration
+│       ├── IbanApiService.php                    # Sumsub VOP integration
 │       ├── IbanValidator.php                     # IBAN checksum
+│       ├── ReconciliationService.php             # EMP status sync
 │       ├── SpreadsheetParserService.php          # CSV/XLSX parsing
 │       ├── VopScoringService.php                 # Score calculation
 │       ├── VopVerificationService.php            # VOP orchestration
@@ -167,8 +171,8 @@ tether-laravel/
 | upload_id | bigint | FK to uploads |
 | iban | string | Bank account (encrypted at rest) |
 | iban_hash | string | SHA256 for deduplication |
-| first_name | string | First name |
-| last_name | string | Last name |
+| first_name | string | First name (max 35 chars) |
+| last_name | string | Last name (max 35 chars) |
 | amount | decimal | Debt amount |
 | status | enum | pending, processing, recovered, failed |
 | validation_status | enum | pending, valid, invalid |
@@ -184,10 +188,12 @@ tether-laravel/
 | transaction_id | string | Internal ID (unique) |
 | unique_id | string | EMP gateway ID |
 | amount | decimal | Amount charged |
-| status | enum | pending, approved, declined, error, voided, chargebacked |
+| status | enum | pending, pending_async, approved, declined, error, voided, chargebacked |
 | attempt_number | int | Retry counter |
 | error_code | string | SEPA error code |
 | error_message | string | Human-readable error |
+| last_reconciled_at | timestamp | Last reconciliation time |
+| reconciliation_attempts | int | Reconciliation counter (max 10) |
 
 #### `vop_logs`
 | Column | Type | Description |
@@ -237,7 +243,7 @@ tether-laravel/
 │  • Blacklisted IBAN/name/email → SKIP                           │
 │  • Previous chargeback → SKIP                                   │
 │  • Already recovered → SKIP                                      │
-│  • Attempted in last 7 days → SKIP                              │
+│  • Attempted in last 30 days → SKIP (cooldown)                  │
 │                                                                  │
 │  Creates Debtor records (validation_status='pending')           │
 └─────────────────────────────────────────────────────────────────┘
@@ -248,7 +254,8 @@ tether-laravel/
 │                                                                  │
 │  DebtorValidationService:                                        │
 │  ✓ IBAN checksum valid                                          │
-│  ✓ Name format (no numbers/symbols)                             │
+│  ✓ First name max 35 chars, no numbers/symbols                  │
+│  ✓ Last name max 35 chars, no numbers/symbols                   │
 │  ✓ Amount > 0 and ≤ 50000                                       │
 │  ✓ Not blacklisted                                              │
 │  ✓ No encoding issues                                           │
@@ -263,7 +270,7 @@ tether-laravel/
 │  User clicks "Verify VOP" button                                │
 │  ProcessVopJob → ProcessVopChunkJob                             │
 │                                                                  │
-│  VopScoringService calculates score:                            │
+│  VopScoringService calculates score via Sumsub:                 │
 │  +20 IBAN valid | +25 Bank found | +25 SEPA SDD | +15 Country   │
 │                                                                  │
 │  Creates VopLog with score and result                           │
@@ -282,6 +289,7 @@ tether-laravel/
 │  • validation_status='valid'                                    │
 │  • status='pending'                                             │
 │  • No pending/approved billing attempts                         │
+│  • Not in 30-day cooldown                                       │
 │                                                                  │
 │  Creates BillingAttempt (status='pending')                      │
 │  Sends SDD transaction to emerchantpay                          │
@@ -289,14 +297,18 @@ tether-laravel/
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│              STAGE 5: WEBHOOK UPDATES (async)                    │
+│              STAGE 5: STATUS UPDATES                             │
 │                                                                  │
-│  EMP sends POST /webhooks/emp (2-48h later)                     │
+│  PRIMARY: Webhook from EMP (async, 2-48h)                       │
+│  POST /webhooks/emp                                              │
+│  → Updates status: approved/declined/chargebacked               │
+│  → Auto-blacklist on certain error codes                        │
 │                                                                  │
-│  Updates BillingAttempt status:                                 │
-│  • approved → Payment successful                                │
-│  • declined → Bank rejected                                     │
-│  • chargebacked → Auto-blacklist IBAN                           │
+│  BACKUP: Reconciliation (if webhook missed)                     │
+│  POST /billing-attempts/{id}/reconcile                          │
+│  → Queries EMP Reconcile API directly                           │
+│  → Updates status from actual gateway response                  │
+│  → Eligible: pending > 2h, < 10 reconciliation attempts         │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -337,7 +349,7 @@ tether-laravel/
 │                                                                  │
 │  billDebtor():                                                  │
 │  1. Create BillingAttempt (status='pending')                    │
-│  2. Build XML request                                           │
+│  2. Build XML request with notification_url                     │
 │  3. Call EmpClient.sddSale()                                    │
 │  4. Update with EMP response (unique_id, status)                │
 └─────────────────────────────────────────────────────────────────┘
@@ -353,6 +365,42 @@ tether-laravel/
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+### Reconciliation Flow
+```
+┌─────────────────────────────────────────────────────────────────┐
+│              ReconciliationController                            │
+│                                                                  │
+│  Single: POST /billing-attempts/{id}/reconcile                  │
+│  Bulk:   POST /uploads/{id}/reconcile                           │
+│  All:    POST /reconciliation/bulk                              │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│              ReconciliationService                               │
+│                                                                  │
+│  reconcile(BillingAttempt):                                     │
+│  1. Check eligibility (pending, >2h, <10 attempts)              │
+│  2. Call EmpClient.reconcile(unique_id)                         │
+│  3. Parse EMP response                                          │
+│  4. Update billing_attempt status                               │
+│  5. Increment reconciliation_attempts                           │
+│  6. Set last_reconciled_at                                      │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    EmpClient.reconcile()                         │
+│                                                                  │
+│  POST https://staging.gate.emerchantpay.net/reconcile/{terminal}│
+│                                                                  │
+│  Request:                                                       │
+│  <reconcile><unique_id>xxx</unique_id></reconcile>             │
+│                                                                  │
+│  Response contains actual transaction status from bank          │
+└─────────────────────────────────────────────────────────────────┘
+```
+
 ---
 
 ## Services
@@ -364,16 +412,17 @@ tether-laravel/
 | **FilePreValidationService** | Quick structure check before processing |
 | **SpreadsheetParserService** | Parse CSV/XLSX into arrays |
 | **FileUploadService** | Orchestrate upload + deduplication |
-| **DeduplicationService** | Skip blacklisted/chargebacked/recent |
-| **DebtorValidationService** | Validate IBAN, name, amount |
+| **DeduplicationService** | Skip blacklisted/chargebacked/30-day cooldown |
+| **DebtorValidationService** | Validate IBAN, name (35 char limit), amount |
 | **BlacklistService** | Manage blocked IBANs/names/emails |
+| **ReconciliationService** | Query EMP for actual transaction status |
 
 ### VOP Services
 
 | Service | Purpose |
 |---------|---------|
 | **IbanValidator** | Local IBAN checksum validation |
-| **IbanApiService** | iban.com API integration |
+| **IbanApiService** | Sumsub BAV API integration |
 | **VopScoringService** | Calculate VOP score (0-100) |
 | **VopVerificationService** | Orchestrate VOP process |
 
@@ -381,7 +430,7 @@ tether-laravel/
 
 | Service | Purpose |
 |---------|---------|
-| **EmpClient** | HTTP client for emerchantpay |
+| **EmpClient** | HTTP client for emerchantpay (billing + reconcile) |
 | **EmpBillingService** | Billing business logic |
 
 ### VOP Score Calculation
@@ -392,7 +441,7 @@ IBAN Valid               +20       Checksum passes
 Bank Identified          +25       Bank found in registry
 SEPA SDD Support         +25       Bank supports Direct Debit
 Country Supported        +15       Country in SEPA zone
-Name Match (future)      +15       Reserved for BAV API
+Name Match (Sumsub)      +15       BAV name verification
 ─────────────────────────────────────────────
 Total                    100
 
@@ -411,12 +460,13 @@ Result Thresholds:
 ### Queue Configuration
 ```bash
 # Queues (priority order)
-billing    # Billing jobs (highest priority)
-vop        # VOP verification
-default    # Upload processing
+billing        # Billing jobs (highest priority)
+reconciliation # Reconciliation jobs
+vop            # VOP verification
+default        # Upload processing
 
 # Workers
-php artisan queue:work --queue=billing,vop,default
+php artisan queue:work --queue=billing,reconciliation,vop,default
 ```
 
 ### Job Configuration
@@ -429,6 +479,8 @@ php artisan queue:work --queue=billing,vop,default
 | ProcessVopChunkJob | vop | 180s | 3 | 50 debtors |
 | ProcessBillingJob | billing | 600s | 3 | N/A |
 | ProcessBillingChunkJob | billing | 120s | 3 | 50 debtors |
+| ProcessReconciliationJob | reconciliation | 600s | 3 | N/A |
+| ProcessReconciliationChunkJob | reconciliation | 120s | 3 | 50 attempts |
 
 ### Rate Limiting & Protection
 
@@ -438,6 +490,8 @@ php artisan queue:work --queue=billing,vop,default
 | Circuit Breaker | 10 fails → 5min pause | Stop cascade failures |
 | Cache Lock | 5 minutes | Prevent duplicate dispatches |
 | Retry Backoff | 10s, 30s, 60s | Handle transient errors |
+| Reconciliation Min Age | 2 hours | Don't reconcile too soon |
+| Reconciliation Max Attempts | 10 | Stop infinite retries |
 
 ---
 
@@ -481,6 +535,15 @@ php artisan queue:work --queue=billing,vop,default
 | GET | /admin/billing-attempts/{id} | Get attempt |
 | POST | /admin/billing-attempts/{id}/retry | Retry failed |
 
+### Reconciliation
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | /admin/reconciliation/stats | Global reconciliation stats |
+| GET | /admin/uploads/{id}/reconciliation-stats | Upload reconciliation stats |
+| POST | /admin/billing-attempts/{id}/reconcile | Reconcile single |
+| POST | /admin/uploads/{id}/reconcile | Reconcile upload (202) |
+| POST | /admin/reconciliation/bulk | Bulk reconcile all (202) |
+
 ### Debtors
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -521,15 +584,18 @@ QUEUE_CONNECTION=redis
 REDIS_HOST=redis
 
 # emerchantpay Genesis API
-EMP_GENESIS_ENDPOINT=staging.gate.emerchantpay.net
-EMP_GENESIS_USERNAME=your_username
-EMP_GENESIS_PASSWORD=your_password
-EMP_GENESIS_TERMINAL_TOKEN=your_token
+EMP_API_LOGIN=your_api_login
+EMP_API_PASSWORD=your_api_password
+EMP_TERMINAL_TOKEN=your_terminal_token
+EMP_ENVIRONMENT=staging  # or production
 
-# IBAN.com VOP API
-IBAN_API_KEY=your_api_key
-IBAN_API_URL=https://api.iban.com/clients/api/v4/iban/
-IBAN_API_MOCK=true
+# Sumsub VOP API
+SUMSUB_APP_TOKEN=your_app_token
+SUMSUB_SECRET_KEY=your_secret_key
+
+# Reconciliation
+RECONCILIATION_MIN_AGE_HOURS=2
+RECONCILIATION_MAX_ATTEMPTS=10
 ```
 
 ### Constants Reference
@@ -546,12 +612,17 @@ Debtor::VALIDATION_VALID   = 'valid'
 Debtor::VALIDATION_INVALID = 'invalid'
 
 // Billing Status
-BillingAttempt::STATUS_PENDING      = 'pending'
-BillingAttempt::STATUS_APPROVED     = 'approved'
-BillingAttempt::STATUS_DECLINED     = 'declined'
-BillingAttempt::STATUS_ERROR        = 'error'
-BillingAttempt::STATUS_VOIDED       = 'voided'
-BillingAttempt::STATUS_CHARGEBACKED = 'chargebacked'
+BillingAttempt::STATUS_PENDING       = 'pending'
+BillingAttempt::STATUS_PENDING_ASYNC = 'pending_async'
+BillingAttempt::STATUS_APPROVED      = 'approved'
+BillingAttempt::STATUS_DECLINED      = 'declined'
+BillingAttempt::STATUS_ERROR         = 'error'
+BillingAttempt::STATUS_VOIDED        = 'voided'
+BillingAttempt::STATUS_CHARGEBACKED  = 'chargebacked'
+
+// Reconciliation
+BillingAttempt::RECONCILIATION_MIN_AGE_HOURS = 2
+BillingAttempt::RECONCILIATION_MAX_ATTEMPTS  = 10
 
 // VOP Result
 VopLog::RESULT_VERIFIED        = 'verified'
@@ -564,7 +635,7 @@ VopLog::RESULT_REJECTED        = 'rejected'
 DeduplicationService::SKIP_BLACKLISTED        = 'blacklisted'
 DeduplicationService::SKIP_CHARGEBACKED       = 'chargebacked'
 DeduplicationService::SKIP_RECOVERED          = 'already_recovered'
-DeduplicationService::SKIP_RECENTLY_ATTEMPTED = 'recently_attempted'
+DeduplicationService::SKIP_RECENTLY_ATTEMPTED = 'recently_attempted'  // 30-day cooldown
 ```
 
 ### SEPA Error Codes (Auto-Blacklist)
@@ -589,3 +660,4 @@ DeduplicationService::SKIP_RECENTLY_ATTEMPTED = 'recently_attempted'
 | Billing throughput | 50 req/sec |
 | VOP verification | 500ms delay between calls |
 | Webhook response | <200ms |
+| Reconciliation | After 2h, max 10 attempts |

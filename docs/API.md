@@ -16,9 +16,10 @@ Tether API uses REST architecture with JSON responses. All endpoints require aut
 6. [Validation](#validation)
 7. [VOP Verification](#vop-verification)
 8. [Billing](#billing)
-9. [Statistics](#statistics)
-10. [Webhooks](#webhooks)
-11. [Processing Flow](#processing-flow)
+9. [Reconciliation](#reconciliation)
+10. [Statistics](#statistics)
+11. [Webhooks](#webhooks)
+12. [Processing Flow](#processing-flow)
 
 ---
 
@@ -508,8 +509,9 @@ Authorization: Bearer {token}
 | Field | Rule | Error |
 |-------|------|-------|
 | IBAN | Required, valid checksum, SEPA country | "IBAN is required/invalid" |
+| First Name | Max 35 chars, no numbers/symbols | "First name cannot exceed 35 characters" |
+| Last Name | Max 35 chars, no numbers/symbols | "Last name cannot exceed 35 characters" |
 | Name | first_name OR last_name required | "Name is required" |
-| Name | Max 35 chars, no numbers/symbols | "Name contains invalid characters" |
 | Amount | Required, > 0, ≤ 50000 | "Amount must be positive" |
 | Email | Valid format (if provided) | "Email format is invalid" |
 | Encoding | Valid UTF-8 | "Field contains encoding issues" |
@@ -518,7 +520,7 @@ Authorization: Bearer {token}
 
 ## VOP Verification
 
-VOP (Verification of Payee) verifies IBAN ownership via bank APIs.
+VOP (Verification of Payee) verifies IBAN ownership via bank APIs (Sumsub integration).
 
 **Supported Countries:** AT, BE, CY, DE, EE, ES, FI, FR, GR, HR, IE, IT, LT, LU, LV, MT, NL, PT, SI, SK
 
@@ -632,7 +634,7 @@ Content-Type: application/json
 
 ## Billing
 
-Billing sends SEPA Direct Debit transactions to emerchantpay gateway.
+Billing sends SEPA Direct Debit transactions to emerchantpay Genesis gateway.
 
 ### Start Billing (Sync to Gateway)
 ```
@@ -646,6 +648,8 @@ Dispatches async billing job for all eligible debtors.
 - `validation_status = valid`
 - `status = pending`
 - No existing `pending` or `approved` billing attempt
+- Not blacklisted or chargebacked
+- No billing attempt within 30-day cooldown
 
 **Response (202 Accepted):**
 ```json
@@ -750,6 +754,8 @@ Authorization: Bearer {token}
             "is_approved": false,
             "is_final": false,
             "can_retry": false,
+            "last_reconciled_at": null,
+            "reconciliation_attempts": 0,
             "processed_at": "2025-12-29T07:44:00Z",
             "created_at": "2025-12-29T07:44:00Z"
         }
@@ -803,6 +809,7 @@ Retries a failed billing attempt (declined/error status only).
 | Status | Description | Final | Can Retry |
 |--------|-------------|-------|-----------|
 | `pending` | Sent to gateway, awaiting bank | No | No |
+| `pending_async` | Awaiting 3DS/redirect completion | No | No |
 | `approved` | Successfully processed | Yes | No |
 | `declined` | Rejected by bank | Yes | Yes |
 | `error` | Technical error | Yes | Yes |
@@ -819,6 +826,186 @@ Retries a failed billing attempt (declined/error status only).
 | MD01 | No mandate | Yes |
 | AM04 | Insufficient funds | No |
 | MS03 | Reason not specified | No |
+
+---
+
+## Reconciliation
+
+Reconciliation is a backup mechanism to retrieve transaction status from emerchantpay when webhooks are missed (network issues, server downtime, etc.).
+
+### How It Works
+
+1. Transactions stay `pending` after being sent to EMP
+2. EMP sends webhook to `/webhooks/emp` when status changes (primary)
+3. If webhook missed, reconciliation queries EMP directly (backup)
+4. EMP returns actual status via Reconcile API
+
+### Get Global Reconciliation Stats
+```
+GET /api/admin/reconciliation/stats
+Authorization: Bearer {token}
+```
+
+**Response:**
+```json
+{
+    "data": {
+        "pending_total": 100,
+        "pending_stale": 15,
+        "never_reconciled": 85,
+        "maxed_out_attempts": 0,
+        "eligible": 100
+    }
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `pending_total` | All pending billing attempts |
+| `pending_stale` | Pending > 48 hours (likely stuck) |
+| `never_reconciled` | Never been reconciled |
+| `maxed_out_attempts` | Reached max reconciliation attempts (10) |
+| `eligible` | Ready for reconciliation (> 2 hours old, < 10 attempts) |
+
+### Get Upload Reconciliation Stats
+```
+GET /api/admin/uploads/{id}/reconciliation-stats
+Authorization: Bearer {token}
+```
+
+Same response format as global stats, filtered by upload.
+
+### Reconcile Single Billing Attempt
+```
+POST /api/admin/billing-attempts/{id}/reconcile
+Authorization: Bearer {token}
+```
+
+Queries EMP for actual transaction status and updates locally.
+
+**Response:**
+```json
+{
+    "message": "Status updated",
+    "data": {
+        "id": 40,
+        "success": true,
+        "changed": true,
+        "previous_status": "pending",
+        "new_status": "pending_async"
+    }
+}
+```
+
+**Response (No change):**
+```json
+{
+    "message": "Status unchanged",
+    "data": {
+        "id": 40,
+        "success": true,
+        "changed": false,
+        "previous_status": "pending",
+        "new_status": "pending"
+    }
+}
+```
+
+**Response (422 - Not eligible):**
+```json
+{
+    "message": "Transaction cannot be reconciled",
+    "data": {
+        "reason": "Transaction is not pending"
+    }
+}
+```
+
+### Reconcile Upload
+```
+POST /api/admin/uploads/{id}/reconcile
+Authorization: Bearer {token}
+```
+
+Dispatches async job to reconcile all eligible billing attempts for an upload.
+
+**Response (202 Accepted):**
+```json
+{
+    "message": "Reconciliation queued for 25 transactions",
+    "data": {
+        "upload_id": 31,
+        "eligible": 25,
+        "queued": true
+    }
+}
+```
+
+**Response (409 Conflict):**
+```json
+{
+    "message": "Reconciliation already in progress",
+    "data": {
+        "upload_id": 31,
+        "queued": true,
+        "duplicate": true
+    }
+}
+```
+
+### Bulk Reconciliation
+```
+POST /api/admin/reconciliation/bulk
+Authorization: Bearer {token}
+Content-Type: application/json
+
+{
+    "max_age_hours": 24,
+    "limit": 1000
+}
+```
+
+Reconciles all eligible transactions system-wide.
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `max_age_hours` | integer | 24 | Only reconcile transactions older than X hours |
+| `limit` | integer | 1000 | Maximum transactions to process |
+
+**Response:**
+```json
+{
+    "message": "Bulk reconciliation queued for 150 transactions",
+    "data": {
+        "eligible": 150,
+        "queued": true
+    }
+}
+```
+
+### Reconciliation Eligibility
+
+A billing attempt is eligible for reconciliation when:
+- Status is `pending`
+- Has `unique_id` (was sent to EMP)
+- Created > 2 hours ago (configurable)
+- `reconciliation_attempts` < 10 (max attempts)
+
+### EMP Reconcile API
+
+Tether uses EMP's Reconcile endpoint:
+```xml
+POST https://staging.gate.emerchantpay.net/reconcile/{terminal_token}
+
+<?xml version="1.0" encoding="UTF-8"?>
+<reconcile>
+    <unique_id>44177a21403427eb96664a6d7e5d5d48</unique_id>
+</reconcile>
+```
+
+Response includes actual transaction status from EMP.
 
 ---
 
@@ -924,43 +1111,50 @@ Authorization: Bearer {token}
 ### EMP Webhook
 ```
 POST /api/webhooks/emp
-Content-Type: application/json
+Content-Type: application/x-www-form-urlencoded
 ```
 
-Receives emerchantpay notifications.
+Receives emerchantpay notifications. No authentication required (uses signature verification).
 
 **Transaction Update:**
-```json
-{
-    "unique_id": "tx_123",
-    "transaction_type": "sdd_sale",
-    "status": "approved",
-    "signature": "sha1_hash"
-}
+```
+unique_id=tx_123
+&transaction_type=sdd_sale
+&status=approved
+&amount=1000
+&currency=EUR
+&signature=sha1_hash
 ```
 
 **Chargeback Notification:**
-```json
-{
-    "unique_id": "cb_456",
-    "transaction_type": "chargeback",
-    "status": "approved",
-    "original_transaction_unique_id": "tx_123",
-    "amount": 10000,
-    "currency": "EUR",
-    "reason": "Account closed",
-    "reason_code": "AC04",
-    "signature": "sha1_hash"
-}
+```
+unique_id=cb_456
+&transaction_type=chargeback
+&status=approved
+&original_transaction_unique_id=tx_123
+&amount=1000
+&currency=EUR
+&reason=Account closed
+&reason_code=AC04
+&signature=sha1_hash
 ```
 
-**Signature:** `SHA1(unique_id + EMP_PASSWORD)`
+**Signature Verification:** `SHA1(unique_id + EMP_API_PASSWORD)`
 
 **Chargeback Processing:**
-1. Find original transaction by `unique_id`
+1. Find original transaction by `original_transaction_unique_id`
 2. Update billing_attempt status to `chargebacked`
 3. Store error_code and error_message
 4. Auto-blacklist IBAN if code in `['AC04', 'AC06', 'AG01', 'MD01']`
+5. Log chargeback details in `meta` field
+
+**Response:**
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<notification_echo>
+    <unique_id>tx_123</unique_id>
+</notification_echo>
+```
 
 ---
 
@@ -988,7 +1182,7 @@ Receives emerchantpay notifications.
 ┌─────────────────────────────────────────────────────────────┐
 │                 3. VOP VERIFY (Optional)                     │
 │  POST /api/admin/uploads/{id}/verify-vop                     │
-│  → Verifies IBAN ownership with bank                        │
+│  → Verifies IBAN ownership with bank (Sumsub)               │
 │  → Reduces chargebacks by 30-50%                            │
 └─────────────────────────────────────────────────────────────┘
                               │
@@ -998,15 +1192,21 @@ Receives emerchantpay notifications.
 │  POST /api/admin/uploads/{id}/sync                           │
 │  → Creates billing_attempts                                  │
 │  → Sends SDD transactions to emerchantpay                   │
-│  → Status: pending (awaiting bank)                          │
+│  → Status: pending (awaiting bank 2-5 days)                 │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                    5. WEBHOOK UPDATES                        │
+│                    5. STATUS UPDATES                         │
+│                                                              │
+│  PRIMARY: Webhook from EMP                                   │
 │  POST /api/webhooks/emp                                      │
 │  → Updates status: approved/declined/chargebacked           │
 │  → Auto-blacklist on certain error codes                    │
+│                                                              │
+│  BACKUP: Reconciliation (if webhook missed)                 │
+│  POST /api/admin/billing-attempts/{id}/reconcile            │
+│  → Queries EMP directly for actual status                   │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -1017,16 +1217,17 @@ Receives emerchantpay notifications.
 | Blacklisted | Permanent | IBAN in blacklist table |
 | Chargebacked | Permanent | IBAN has previous chargeback |
 | Already Recovered | Permanent | Debt recovered for IBAN |
-| Recently Attempted | 7-day cooldown | Billing within last 7 days |
+| Recently Attempted | 30-day cooldown | Billing within last 30 days |
 
 ### Billing Processing
 
 - **Async:** Jobs run on `billing` queue
 - **Chunked:** 50 debtors per chunk
 - **Rate Limited:** 50 requests/second to EMP
-- **Circuit Breaker:** 10 failures → 5 minute pause
+- **Circuit Breaker:** 10 consecutive failures → 5 minute pause
 - **Idempotency:** Cache lock prevents duplicate dispatches (5 min)
 - **SEPA DD:** Pending status for 2-5 business days
+- **Reconciliation:** Backup for missed webhooks (after 2 hours)
 
 ---
 
@@ -1040,18 +1241,20 @@ DB_USERNAME=tether
 DB_PASSWORD=secret
 
 # emerchantpay
-EMP_USERNAME=your_username
-EMP_PASSWORD=your_password
-EMP_TERMINAL_TOKEN=your_token
-EMP_API_URL=https://staging.gate.emerchantpay.net/process/
-EMP_MOCK_MODE=false
+EMP_API_LOGIN=your_api_login
+EMP_API_PASSWORD=your_api_password
+EMP_TERMINAL_TOKEN=your_terminal_token
+EMP_ENVIRONMENT=staging  # or production
 
-# IBAN.com VOP
-IBAN_API_KEY=your_api_key
-IBAN_API_URL=https://api.iban.com/clients/api/v4/iban/
-IBAN_API_MOCK=true
+# Sumsub VOP
+SUMSUB_APP_TOKEN=your_app_token
+SUMSUB_SECRET_KEY=your_secret_key
 
 # Queue
 QUEUE_CONNECTION=redis
 REDIS_HOST=redis
+
+# Reconciliation (optional)
+RECONCILIATION_MIN_AGE_HOURS=2
+RECONCILIATION_MAX_ATTEMPTS=10
 ```
