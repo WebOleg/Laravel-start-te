@@ -35,7 +35,7 @@ stop-host-postgres:
 
 clean-ports:
 	@echo "Cleaning up Docker resources..."
-	docker-compose down --remove-orphans
+	docker compose down --remove-orphans
 	@echo "✓ Cleanup complete"
 
 up-safe: check-ports clean-ports
@@ -51,15 +51,15 @@ up-safe: check-ports clean-ports
 		echo ""; \
 		exit 1; \
 	fi
-	docker-compose up -d
+	docker compose up -d
 	@echo ""
-	@docker-compose ps
+	@docker compose ps
 
 up-force: stop-host-postgres clean-ports
 	@echo "Force starting all services..."
-	docker-compose up -d
+	docker compose up -d
 	@echo ""
-	@docker-compose ps
+	@docker compose ps
 
 up-alt:
 	@echo "Starting services with alternative ports..."
@@ -67,10 +67,10 @@ up-alt:
 	@echo "  - Redis: 6380 (instead of 6379)"
 	@echo "  - Nginx: 8000"
 	@echo ""
-	docker-compose -f docker-compose.alt.yml down --remove-orphans 2>/dev/null || true
-	docker-compose -f docker-compose.alt.yml up -d
+	docker compose -f docker-compose.alt.yml down --remove-orphans 2>/dev/null || true
+	docker compose -f docker-compose.alt.yml up -d
 	@echo ""
-	@docker-compose -f docker-compose.alt.yml ps
+	@docker compose -f docker-compose.alt.yml ps
 	@echo ""
 	@echo "Note: Update your .env file to use these ports if needed:"
 	@echo "  DB_PORT=5433"
@@ -78,78 +78,78 @@ up-alt:
 
 down-alt:
 	@echo "Stopping services (alternative ports)..."
-	docker-compose -f docker-compose.alt.yml down
+	docker compose -f docker-compose.alt.yml down
 
 status:
 	@echo "=== Port Status ==="
 	@make check-ports
 	@echo ""
 	@echo "=== Default Containers ==="
-	@docker-compose ps 2>/dev/null || echo "No containers running"
+	@docker compose ps 2>/dev/null || echo "No containers running"
 	@echo ""
 	@echo "=== Alternative Port Containers ==="
-	@docker-compose -f docker-compose.alt.yml ps 2>/dev/null || echo "No containers running"
+	@docker compose -f docker-compose.alt.yml ps 2>/dev/null || echo "No containers running"
 
 # Docker commands
 up:
 	@make up-safe
 
 down:
-	docker-compose down
+	docker compose down
 
 restart:
-	docker-compose down && docker-compose up -d
+	docker compose down && docker compose up -d
 
 build:
-	docker-compose build --no-cache
+	docker compose build --no-cache
 
 logs:
-	docker-compose logs -f
+	docker compose logs -f
 
 # Container access
 bash:
-	docker-compose exec app bash
+	docker compose exec app bash
 
 tinker:
-	docker-compose exec app php artisan tinker
+	docker compose exec app php artisan tinker
 
 # Database commands
 migrate:
-	docker-compose exec app php artisan migrate
+	docker compose exec app php artisan migrate
 
 fresh:
-	docker-compose exec app composer dump-autoload
-	docker-compose exec app php artisan migrate:fresh --seed
+	docker compose exec app composer dump-autoload
+	docker compose exec app php artisan migrate:fresh --seed
 
 seed:
-	docker-compose exec app php artisan db:seed
+	docker compose exec app php artisan db:seed
 
 # Composer
 autoload:
-	docker-compose exec app composer dump-autoload
+	docker compose exec app composer dump-autoload
 
 install:
-	docker-compose exec app composer install
+	docker compose exec app composer install
 
 # Testing
 test:
-	docker-compose exec app php artisan test
+	docker compose exec app php artisan test
 
 test-filter:
-	docker-compose exec app php artisan test --filter=$(filter)
+	docker compose exec app php artisan test --filter=$(filter)
 
 test-coverage:
-	docker-compose exec app php artisan test --coverage
+	docker compose exec app php artisan test --coverage
 
 # Cache commands
 cache:
-	docker-compose exec app php artisan config:cache
-	docker-compose exec app php artisan route:cache
+	docker compose exec app php artisan config:cache
+	docker compose exec app php artisan route:cache
 
 clear:
-	docker-compose exec app php artisan config:clear
-	docker-compose exec app php artisan route:clear
-	docker-compose exec app php artisan cache:clear
+	docker compose exec app php artisan config:clear
+	docker compose exec app php artisan route:clear
+	docker compose exec app php artisan cache:clear
 
 # Help
 help:
