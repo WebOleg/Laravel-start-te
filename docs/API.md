@@ -4,6 +4,24 @@
 
 Tether API uses REST architecture with JSON responses. All endpoints require authentication via Bearer token.
 
+**Base URL:** `http://localhost:8000/api`
+
+## Table of Contents
+
+1. [Authentication](#authentication)
+2. [Response Format](#response-format)
+3. [Dashboard](#dashboard)
+4. [Uploads](#uploads)
+5. [Debtors](#debtors)
+6. [Validation](#validation)
+7. [VOP Verification](#vop-verification)
+8. [Billing](#billing)
+9. [Statistics](#statistics)
+10. [Webhooks](#webhooks)
+11. [Processing Flow](#processing-flow)
+
+---
+
 ## Authentication
 
 All API requests must include the `Authorization` header:
@@ -46,6 +64,8 @@ GET /api/user
 Authorization: Bearer {token}
 ```
 
+---
+
 ## Response Format
 
 ### Success Response
@@ -63,12 +83,13 @@ Authorization: Bearer {token}
 ### Error Response
 ```json
 {
-    "message": "Unauthenticated.",
-    "status": 401
+    "message": "Validation failed.",
+    "errors": ["Field is required"],
+    "status": 422
 }
 ```
 
-## Pagination
+### Pagination
 
 All list endpoints support pagination:
 
@@ -82,13 +103,24 @@ All list endpoints support pagination:
 GET /api/admin/debtors?page=2&per_page=50
 ```
 
+### HTTP Status Codes
+
+| Code | Description |
+|------|-------------|
+| 200 | Success |
+| 201 | Created |
+| 202 | Accepted (async job queued) |
+| 401 | Unauthorized |
+| 404 | Resource not found |
+| 409 | Conflict (duplicate operation) |
+| 422 | Validation error |
+| 500 | Server error |
+
 ---
 
-## Endpoints
+## Dashboard
 
-### Dashboard
-
-#### Get Dashboard Statistics
+### Get Dashboard Statistics
 ```
 GET /api/admin/dashboard
 Authorization: Bearer {token}
@@ -103,7 +135,9 @@ Authorization: Bearer {token}
             "pending": 2,
             "processing": 1,
             "completed": 20,
-            "failed": 2
+            "failed": 2,
+            "today": 3,
+            "this_week": 12
         },
         "debtors": {
             "total": 5000,
@@ -113,217 +147,68 @@ Authorization: Bearer {token}
                 "recovered": 1200,
                 "failed": 300
             },
+            "total_amount": 750000.00,
+            "recovered_amount": 180000.00,
+            "recovery_rate": 24.0,
             "by_country": {
                 "ES": 2000,
                 "DE": 1500,
-                "NL": 800,
-                "FR": 500,
-                "IT": 200
-            }
+                "NL": 800
+            },
+            "valid_iban_rate": 94.5
+        },
+        "vop": {
+            "total": 4500,
+            "by_result": {
+                "verified": 3500,
+                "likely_verified": 500,
+                "inconclusive": 300,
+                "mismatch": 150,
+                "rejected": 50
+            },
+            "verification_rate": 88.9,
+            "average_score": 82.5,
+            "today": 150
+        },
+        "billing": {
+            "total_attempts": 8000,
+            "by_status": {
+                "approved": 6500,
+                "pending": 800,
+                "declined": 500,
+                "error": 150,
+                "chargebacked": 50
+            },
+            "approval_rate": 81.25,
+            "total_approved_amount": 975000.00,
+            "today": 250
         },
         "recent_activity": {
-            "latest_uploads": [...],
-            "latest_debtors": [...]
-        }
+            "recent_uploads": [...],
+            "recent_billing": [...]
+        },
+        "trends": [...]
     }
 }
 ```
 
 ---
 
-### Stats
+## Uploads
 
-#### Get Chargeback Rates by Country
-```
-GET /api/admin/stats/chargeback-rates
-Authorization: Bearer {token}
-```
-
-**Query Parameters:**
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `period` | string | `7d` | Time period: `24h`, `7d`, `30d`, `90d` |
-
-**Response:**
-```json
-{
-    "data": {
-        "period": "7d",
-        "start_date": "2025-12-09T00:00:00+00:00",
-        "threshold": 25,
-        "countries": [
-            {
-                "country": "ES",
-                "total": 100,
-                "approved": 85,
-                "declined": 10,
-                "errors": 3,
-                "chargebacks": 2,
-                "cb_rate_total": 2.0,
-                "cb_rate_approved": 2.35,
-                "alert": false
-            },
-            {
-                "country": "DE",
-                "total": 50,
-                "approved": 30,
-                "declined": 5,
-                "errors": 0,
-                "chargebacks": 15,
-                "cb_rate_total": 30.0,
-                "cb_rate_approved": 50.0,
-                "alert": true
-            }
-        ],
-        "totals": {
-            "total": 150,
-            "approved": 115,
-            "declined": 15,
-            "errors": 3,
-            "chargebacks": 17,
-            "cb_rate_total": 11.33,
-            "cb_rate_approved": 14.78,
-            "alert": false
-        }
-    }
-}
-```
-
-| Field | Description |
-|-------|-------------|
-| `period` | Requested time period |
-| `start_date` | Start date for the period |
-| `threshold` | Alert threshold percentage (default: 25%) |
-| `countries` | Stats grouped by country |
-| `totals` | Aggregate totals across all countries |
-| `cb_rate_total` | Chargebacks / Total transactions * 100 |
-| `cb_rate_approved` | Chargebacks / Approved transactions * 100 |
-| `alert` | True if rate exceeds threshold |
-
----
-
-#### Get Chargeback Codes Statistics
-```
-GET /api/admin/stats/chargeback-codes
-Authorization: Bearer {token}
-```
-
-**Query Parameters:**
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `period` | string | `7d` | Time period: `24h`, `7d`, `30d`, `90d` |
-
-**Response:**
-```json
-{
-    "data": {
-        "period": "7d",
-        "start_date": "2025-12-09T00:00:00+00:00",
-        "codes": [
-            {
-                "chargeback_code": "AC04",
-                "chargeback_reason": "Account closed",
-                "occurrences": 15,
-                "total_amount": 2500.00
-            },
-            {
-                "chargeback_code": "MD01",
-                "chargeback_reason": "No mandate",
-                "occurrences": 8,
-                "total_amount": 1200.00
-            }
-        ],
-        "totals": {
-            "occurrences": 23,
-            "total_amount": 3700.00
-        }
-    }
-}
-```
-
-| Field | Description |
-|-------|-------------|
-| `codes` | Stats grouped by error code |
-| `chargeback_code` | SEPA error code |
-| `chargeback_reason` | Human-readable description |
-| `occurrences` | Number of chargebacks with this code |
-| `total_amount` | Sum of chargeback amounts |
-
----
-
-#### Get Chargeback Bank Statistics
-```
-GET /api/admin/stats/chargeback-banks
-Authorization: Bearer {token}
-```
-
-**Query Parameters:**
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `period`  | string | `7d`  | Time period: `24h`, `7d`, `30d`, `90d` |
-
-**Response:**
-```json
-{
-    "data": {
-        "period": "7d",
-        "start_date": "2025-12-09T00:00:00+00:00",
-        "banks": [
-            {
-                "bank_name": "N26",
-                "total_amount": 21953.99,
-                "chargebacks": 10,
-                "cb_rate": 13.16
-            },
-            {
-                "bank_name": "Sparkasse",
-                "total_amount": 12734.32,
-                "chargebacks": 4,
-                "cb_rate": 10.53
-            },
-            {
-                "bank_name": "Volksbank",
-                "total_amount": 12924.53,
-                "chargebacks": 6,
-                "cb_rate": 13.04
-            }
-        ],
-        "totals": {
-            "total": 600,
-            "total_amount": 164859.14,
-            "chargebacks": 65,
-            "total_cb_rate": 10.83
-        }
-    }
-}
-```
-
-| Field | Description |
-|-------|-------------|
-| `banks` | Stats grouped by bank name |
-| `bank_name` | Bank name |
-| `total_amount` | Total amount of this bank |
-| `chargebacks` | Number of chargebacks with this bank |
-| `cb_rate` | Chargebacks / Total transactions * 100 |
-
----
-
-
-### Uploads
-
-#### List Uploads
+### List Uploads
 ```
 GET /api/admin/uploads
+Authorization: Bearer {token}
 ```
 
 **Query Parameters:**
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `status` | string | Filter by status: `pending`, `processing`, `completed`, `failed` |
+| `status` | string | Filter: `pending`, `processing`, `completed`, `failed` |
+| `page` | integer | Page number |
+| `per_page` | integer | Items per page |
 
 **Response:**
 ```json
@@ -340,11 +225,10 @@ GET /api/admin/uploads
             "processed_records": 98,
             "failed_records": 2,
             "success_rate": 96.0,
+            "headers": ["iban", "name", "amount", "city"],
             "processing_started_at": "2025-12-04T10:00:00Z",
             "processing_completed_at": "2025-12-04T10:05:00Z",
             "created_at": "2025-12-04T09:59:00Z",
-            "updated_at": "2025-12-04T10:05:00Z",
-            "debtors_count": 100,
             "skipped": {
                 "total": 5,
                 "blacklisted": 2,
@@ -358,14 +242,13 @@ GET /api/admin/uploads
 }
 ```
 
-#### Get Upload
+### Get Upload
 ```
 GET /api/admin/uploads/{id}
+Authorization: Bearer {token}
 ```
 
-**Response:** Single upload object with same structure.
-
-#### Create Upload
+### Create Upload
 ```
 POST /api/admin/uploads
 Content-Type: multipart/form-data
@@ -374,36 +257,9 @@ Authorization: Bearer {token}
 file: (binary)
 ```
 
-**Pre-Validation (Stage 0):**
+**Supported Formats:** CSV, XLSX, XLS, TXT
 
-Before any processing starts, files undergo lightweight **structure-only** pre-validation:
-- Check file type (CSV/XLSX/XLS/TXT)
-- Check headers exist
-- Validate required columns: IBAN, amount, name
-- Check data rows exist
-
-> **Note:** IBAN format, amount format, and duplicate validation happen in Stage 1/2, not pre-validation.
-
-**Pre-Validation Error Response (422):**
-```json
-{
-    "message": "File validation failed.",
-    "errors": [
-        "Missing required column: IBAN."
-    ]
-}
-```
-
-**Pre-Validation Error Types:**
-
-| Error | Description |
-|-------|-------------|
-| `Unsupported file type.` | File is not CSV/XLSX/XLS/TXT |
-| `File is empty or has no headers.` | File has no rows |
-| `Missing required column: IBAN.` | No IBAN/iban column found |
-| `Missing required column: amount.` | No amount/sum/total/price column |
-| `Missing required column: name.` | No name/first_name/last_name column |
-| `File has headers but no data rows.` | Headers only, no data |
+**Required Columns:** IBAN, Amount, Name (first_name/last_name or combined)
 
 **Response (sync, ≤100 rows):**
 ```json
@@ -427,15 +283,6 @@ Before any processing starts, files undergo lightweight **structure-only** pre-v
 }
 ```
 
-**Skipped Reasons:**
-
-| Reason | Block Type | Description |
-|--------|------------|-------------|
-| `blacklisted` | Permanent | IBAN exists in blacklist table |
-| `chargebacked` | Permanent | IBAN has previous chargeback |
-| `already_recovered` | Permanent | Debt already recovered for this IBAN |
-| `recently_attempted` | 7-day cooldown | Billing attempt within last 7 days |
-
 **Response (async, >100 rows):**
 ```json
 {
@@ -447,9 +294,20 @@ Before any processing starts, files undergo lightweight **structure-only** pre-v
 }
 ```
 
-#### Get Upload Status
+**Pre-Validation Errors (422):**
+
+| Error | Description |
+|-------|-------------|
+| `Unsupported file type.` | Not CSV/XLSX/XLS/TXT |
+| `File is empty or has no headers.` | No rows |
+| `Missing required column: IBAN.` | No IBAN column |
+| `Missing required column: amount.` | No amount column |
+| `Missing required column: name.` | No name column |
+
+### Get Upload Status
 ```
 GET /api/admin/uploads/{id}/status
+Authorization: Bearer {token}
 ```
 
 **Response:**
@@ -467,13 +325,19 @@ GET /api/admin/uploads/{id}/status
 }
 ```
 
-#### Filter Chargebacks
+### Delete Upload
+```
+DELETE /api/admin/uploads/{id}
+Authorization: Bearer {token}
+```
 
-Remove chargebacked debtors from an upload (for retry scenarios).
+### Filter Chargebacks
 ```
 POST /api/admin/uploads/{id}/filter-chargebacks
 Authorization: Bearer {token}
 ```
+
+Removes chargebacked debtors from upload (soft delete).
 
 **Response:**
 ```json
@@ -485,30 +349,26 @@ Authorization: Bearer {token}
 }
 ```
 
-**Use Case:**
-1. Upload CSV with 100 records
-2. Send payments to EMP
-3. 5 chargebacks received over time
-4. Before retry: call filter-chargebacks to remove those 5 records
-5. Retry only processes clean records
-
 ---
 
-### Debtors
+## Debtors
 
-#### List Debtors
+### List Debtors
 ```
 GET /api/admin/debtors
+Authorization: Bearer {token}
 ```
 
 **Query Parameters:**
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `upload_id` | integer | Filter by upload ID |
+| `upload_id` | integer | Filter by upload |
 | `status` | string | Filter: `pending`, `processing`, `recovered`, `failed` |
-| `country` | string | Filter by country code (ES, DE, FR, NL, IT) |
+| `validation_status` | string | Filter: `pending`, `valid`, `invalid` |
+| `country` | string | Filter by country code |
 | `risk_class` | string | Filter: `low`, `medium`, `high` |
+| `search` | string | Search name, IBAN, email |
 
 **Response:**
 ```json
@@ -517,434 +377,44 @@ GET /api/admin/debtors
         {
             "id": 101,
             "upload_id": 1,
-            
             "iban_masked": "ES05****0723",
-            "bank_name": "DEUTSCHE BANK",
-            "bank_code": "0019",
-            "bic": "DEUTESBBXXX",
-            
+            "iban_valid": true,
             "first_name": "Maria",
             "last_name": "Rodriguez",
             "full_name": "Maria Rodriguez",
-            "email": null,
+            "email": "maria@example.com",
             "phone": "638549256",
-            "primary_phone": "638549256",
-            "national_id": "52268154X",
-            "birth_date": "1964-01-12",
-            
             "street": "JUAN RAMON JIMENEZ",
             "street_number": "7",
-            "floor": null,
-            "door": null,
-            "apartment": null,
             "postcode": "21740",
             "city": "HINOJOS",
             "province": "Huelva",
             "country": "ES",
-            "full_address": "JUAN RAMON JIMENEZ 7\n21740, HINOJOS, Huelva, ES",
-            
             "amount": 150.00,
             "currency": "EUR",
-            "sepa_type": "CORE",
-            
             "status": "pending",
-            "risk_class": "medium",
-            "iban_valid": true,
-            "name_matched": true,
-            
-            "external_reference": "ORDER-12345",
-            "created_at": "2025-12-04T10:00:00Z",
-            "updated_at": "2025-12-04T10:00:00Z"
-        }
-    ],
-    "meta": { ... }
-}
-```
-
-#### Get Debtor
-```
-GET /api/admin/debtors/{id}
-```
-
-**Response:** Single debtor with related `upload`, `vopLogs`, `billingAttempts`.
-
----
-
-### VOP Logs
-
-VOP (Verification of Payee) logs contain IBAN validation results.
-
-#### List VOP Logs
-```
-GET /api/admin/vop-logs
-```
-
-**Query Parameters:**
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `upload_id` | integer | Filter by upload ID |
-| `debtor_id` | integer | Filter by debtor ID |
-| `result` | string | Filter: `verified`, `likely_verified`, `inconclusive`, `mismatch`, `rejected` |
-
-**Response:**
-```json
-{
-    "data": [
-        {
-            "id": 1,
-            "debtor_id": 101,
-            "upload_id": 1,
-            "iban_masked": "ES05****0723",
-            "iban_valid": true,
-            "bank_identified": true,
-            "bank_name": "Deutsche Bank",
-            "bic": "DEUTESBBXXX",
-            "country": "ES",
-            "vop_score": 85,
-            "score_label": "high",
-            "result": "verified",
-            "is_positive": true,
-            "is_negative": false,
-            "created_at": "2025-12-04T10:01:00Z"
-        }
-    ],
-    "meta": { ... }
-}
-```
-
-**VOP Score Ranges:**
-
-| Score | Label | Result |
-|-------|-------|--------|
-| 80-100 | high | verified |
-| 60-79 | medium | likely_verified |
-| 40-59 | low | inconclusive |
-| 20-39 | low | mismatch |
-| 0-19 | low | rejected |
-
----
-
-### Billing Attempts
-
-#### List Billing Attempts
-```
-GET /api/admin/billing-attempts
-```
-
-**Query Parameters:**
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `upload_id` | integer | Filter by upload ID |
-| `debtor_id` | integer | Filter by debtor ID |
-| `status` | string | Filter: `pending`, `approved`, `declined`, `error`, `voided`, `chargebacked` |
-
-**Response:**
-```json
-{
-    "data": [
-        {
-            "id": 1,
-            "debtor_id": 101,
-            "upload_id": 1,
-            "transaction_id": "TXN-ABC123",
-            "unique_id": "EMG-XYZ789",
-            "amount": 150.00,
-            "currency": "EUR",
-            "status": "approved",
-            "attempt_number": 2,
-            "mid_reference": null,
-            "error_code": null,
-            "error_message": null,
-            "is_approved": true,
-            "is_final": true,
-            "can_retry": false,
-            "processed_at": "2025-12-04T10:05:00Z",
-            "created_at": "2025-12-04T10:05:00Z"
-        }
-    ],
-    "meta": { ... }
-}
-```
-
-**Common Error Codes:**
-
-| Code | Description | Auto-Blacklist |
-|------|-------------|----------------|
-| AC04 | Account closed | Yes |
-| AC06 | Account blocked | Yes |
-| AG01 | Transaction forbidden | Yes |
-| MD01 | No mandate | Yes |
-| AM04 | Insufficient funds | No |
-| MS03 | Reason not specified | No |
-
----
-
-## Webhooks
-
-### EMP (emerchantpay) Webhook
-```
-POST /api/webhooks/emp
-Content-Type: application/json
-```
-
-Receives notifications from emerchantpay about transaction status changes and chargebacks.
-
-**Chargeback Notification:**
-```json
-{
-    "unique_id": "cb_unique_456",
-    "transaction_type": "chargeback",
-    "status": "approved",
-    "original_transaction_unique_id": "tx_original_123",
-    "amount": 10000,
-    "currency": "EUR",
-    "reason": "Account closed",
-    "reason_code": "AC04",
-    "signature": "sha1_hash"
-}
-```
-
-**Transaction Status Update:**
-```json
-{
-    "unique_id": "tx_123",
-    "transaction_type": "sdd_sale",
-    "status": "approved",
-    "signature": "sha1_hash"
-}
-```
-
-**Signature Verification:**
-```
-signature = SHA1(unique_id + EMP_PASSWORD)
-```
-
-**Response:**
-```json
-{
-    "status": "ok",
-    "message": "Chargeback processed"
-}
-```
-
-**Webhook Flow:**
-1. EMP sends POST request to `/api/webhooks/emp`
-2. System verifies signature
-3. For chargebacks:
-   - Find original transaction
-   - Update billing_attempt status to `chargebacked`
-   - Store error_code and error_message
-   - **Auto-blacklist IBAN** if error code is in blacklist_codes (AC04, AC06, AG01, MD01)
-4. For transactions: updates billing_attempt status
-
-**Auto-Blacklist Codes:**
-
-Configurable in `config/tether.php`:
-```php
-'chargeback' => [
-    'blacklist_codes' => ['AC04', 'AC06', 'AG01', 'MD01'],
-]
-```
-
-When a chargeback is received with one of these codes, the debtor's IBAN is automatically added to the blacklist with reason "chargeback" and source "Auto-blacklisted: {code}".
-
----
-
-## HTTP Status Codes
-
-| Code | Description |
-|------|-------------|
-| 200 | Success |
-| 201 | Created (sync upload) |
-| 202 | Accepted (async upload queued) |
-| 401 | Unauthorized (missing/invalid token) |
-| 404 | Resource not found |
-| 422 | Validation error (includes pre-validation failures) |
-| 500 | Server error |
-
----
-
-## Three-Stage Processing Flow
-
-### Stage 0: Pre-Validation (NEW)
-
-Before any processing, files undergo lightweight **structure-only** validation using `FilePreValidationService`:
-
-**Checks Performed:**
-- File type supported (CSV/XLSX/XLS/TXT)
-- Headers exist
-- Required columns present (IBAN, amount, name)
-- Data rows exist (at least one)
-
-> **Note:** IBAN format, amount format, and duplicate validation happen in Stage 1/2, not pre-validation.
-
-**Performance:**
-- Reads only headers + sample rows
-- 0 database queries
-- ~50ms execution time
-
-**Result:**
-- ❌ FAIL → Return 422 immediately (no processing starts)
-- ✅ PASS → Continue to Stage 1
-
-### Stage 1: Upload (Deduplication)
-
-During CSV upload, IBANs are checked against deduplication rules. Records that match are **skipped** (not created in database).
-
-**Deduplication Rules:**
-
-| Rule | Block Type | Check |
-|------|------------|-------|
-| Blacklisted | Permanent | `blacklists.iban_hash` exists |
-| Chargebacked | Permanent | `billing_attempts.status = 'chargebacked'` |
-| Already Recovered | Permanent | `debtors.status = 'recovered'` |
-| Recently Attempted | 7-day cooldown | `billing_attempts.created_at > now() - 7 days` |
-
-### Stage 2: Validation
-
-After upload, records are validated for data quality. This happens automatically when viewing upload details.
-
-#### Get Upload Debtors
-```
-GET /api/admin/uploads/{id}/debtors
-```
-
-**Query Parameters:**
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `validation_status` | string | Filter: `pending`, `valid`, `invalid` |
-| `exclude_chargebacked` | boolean | Exclude debtors with chargebacked billing attempts |
-| `search` | string | Search by name, IBAN, email |
-| `per_page` | integer | Items per page (default: 50) |
-
-**Response:**
-```json
-{
-    "data": [
-        {
-            "id": 101,
-            "upload_id": 1,
-            "iban_masked": "ES05****0723",
-            "first_name": "Maria",
-            "last_name": "Rodriguez",
-            "amount": 150.00,
             "validation_status": "valid",
             "validation_errors": null,
-            "validated_at": "2025-12-11T10:00:00Z",
-            "raw_data": {
-                "first_name": "Maria",
-                "last_name": "Rodriguez",
-                "iban": "ES0500190050054010130723",
-                "amount": "150.00",
-                "custom_field": "extra_value"
-            },
-            "latest_billing": {
-                "id": 1,
-                "status": "approved",
-                "amount": 150.00
-            }
+            "risk_class": "medium",
+            "bank_name": "DEUTSCHE BANK",
+            "bic": "DEUTESBBXXX",
+            "raw_data": { ... },
+            "created_at": "2025-12-04T10:00:00Z",
+            "latest_vop": { ... },
+            "latest_billing": { ... }
         }
     ],
     "meta": { ... }
 }
 ```
 
-#### Validate Upload
+### Get Debtor
 ```
-POST /api/admin/uploads/{id}/validate
+GET /api/admin/debtors/{id}
 Authorization: Bearer {token}
 ```
 
-Triggers validation for all debtors with `validation_status=pending`.
-
-**Response:**
-```json
-{
-    "message": "Validation completed",
-    "data": {
-        "total": 100,
-        "valid": 85,
-        "invalid": 15
-    }
-}
-```
-
-**Error (upload still processing):**
-```json
-{
-    "message": "Upload is still processing. Please wait.",
-    "status": 422
-}
-```
-
-#### Get Validation Stats
-```
-GET /api/admin/uploads/{id}/validation-stats
-Authorization: Bearer {token}
-```
-
-**Response:**
-```json
-{
-    "data": {
-        "total": 100,
-        "valid": 85,
-        "invalid": 10,
-        "pending": 5,
-        "blacklisted": 2,
-        "chargebacked": 3,
-        "ready_for_sync": 85,
-        "skipped": {
-            "total": 3,
-            "blacklisted": 1,
-            "chargebacked": 1,
-            "already_recovered": 0,
-            "recently_attempted": 1
-        }
-    }
-}
-```
-
-| Field | Description |
-|-------|-------------|
-| `total` | Total debtors created in upload |
-| `valid` | Passed all validation rules |
-| `invalid` | Failed validation |
-| `pending` | Not yet validated |
-| `blacklisted` | Invalid due to blacklist |
-| `chargebacked` | Has billing_attempt with status='chargebacked' |
-| `ready_for_sync` | Valid + pending status (ready for billing) |
-| `skipped` | Records skipped during upload (from meta) |
-
----
-
-### Individual Debtor Validation
-
-#### Validate Single Debtor
-```
-POST /api/admin/debtors/{id}/validate
-Authorization: Bearer {token}
-```
-
-**Response:**
-```json
-{
-    "message": "Validation completed",
-    "data": {
-        "id": 101,
-        "validation_status": "invalid",
-        "validation_errors": [
-            "IBAN is required"
-        ],
-        "validated_at": "2025-12-11T10:00:00Z"
-    }
-}
-```
-
-#### Update Debtor (via raw_data)
+### Update Debtor
 ```
 PUT /api/admin/debtors/{id}
 Content-Type: application/json
@@ -960,51 +430,99 @@ Authorization: Bearer {token}
 }
 ```
 
-Updates debtor fields from raw_data and triggers re-validation.
+Updates debtor fields and triggers re-validation.
 
-**Response:** Updated debtor object with new `validation_status`.
+### Delete Debtor
+```
+DELETE /api/admin/debtors/{id}
+Authorization: Bearer {token}
+```
 
 ---
 
-## Validation Rules
+## Validation
 
-Debtors are validated against these rules:
+### Get Upload Debtors
+```
+GET /api/admin/uploads/{id}/debtors
+Authorization: Bearer {token}
+```
 
-| Field | Rule | Error Message |
-|-------|------|---------------|
-| IBAN | Required, valid checksum, SEPA country | "IBAN is required" / "IBAN is invalid" |
+**Query Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `validation_status` | string | Filter: `pending`, `valid`, `invalid` |
+| `search` | string | Search by name, IBAN |
+| `per_page` | integer | Items per page |
+
+### Validate Upload
+```
+POST /api/admin/uploads/{id}/validate
+Authorization: Bearer {token}
+```
+
+Triggers validation for all pending debtors.
+
+**Response:**
+```json
+{
+    "message": "Validation completed",
+    "data": {
+        "total": 100,
+        "valid": 85,
+        "invalid": 15
+    }
+}
+```
+
+### Get Validation Stats
+```
+GET /api/admin/uploads/{id}/validation-stats
+Authorization: Bearer {token}
+```
+
+**Response:**
+```json
+{
+    "data": {
+        "total": 100,
+        "valid": 85,
+        "invalid": 10,
+        "pending": 5,
+        "blacklisted": 2,
+        "chargebacked": 3,
+        "ready_for_sync": 80
+    }
+}
+```
+
+### Validate Single Debtor
+```
+POST /api/admin/debtors/{id}/validate
+Authorization: Bearer {token}
+```
+
+### Validation Rules
+
+| Field | Rule | Error |
+|-------|------|-------|
+| IBAN | Required, valid checksum, SEPA country | "IBAN is required/invalid" |
 | Name | first_name OR last_name required | "Name is required" |
-| Name | Max 35 characters each | "First/Last name cannot exceed 35 characters" |
-| Name | No numbers or symbols | "First/Last name contains numbers or symbols" |
-| Amount | Required, > 0, ≤ 50000 | "Amount is required" / "Amount must be positive" |
+| Name | Max 35 chars, no numbers/symbols | "Name contains invalid characters" |
+| Amount | Required, > 0, ≤ 50000 | "Amount must be positive" |
 | Email | Valid format (if provided) | "Email format is invalid" |
-| Encoding | No broken UTF-8 characters | "Field contains encoding issues" |
-| Blacklist | IBAN not in blacklist | "IBAN is blacklisted" |
-
-**Name Character Validation:**
-
-Names must contain only:
-- English letters A-Z, a-z
-- Spaces
-- Hyphens `-` and apostrophes `'`
-- Periods `.`
-
-Rejected characters:
-- Numbers 0-9
-- Symbols: `*#@$%^&+=[]{}|\<>`
-- Accented characters: `áàâäçèéêëîïíóòôöúùûüÿñ` (and uppercase variants)
+| Encoding | Valid UTF-8 | "Field contains encoding issues" |
 
 ---
 
-## VOP Verification (BAV API)
+## VOP Verification
 
-VOP (Verification of Payee) uses iban.com BAV API to verify bank accounts with issuing banks.
+VOP (Verification of Payee) verifies IBAN ownership via bank APIs.
 
-### Supported Countries
+**Supported Countries:** AT, BE, CY, DE, EE, ES, FI, FR, GR, HR, IE, IT, LT, LU, LV, MT, NL, PT, SI, SK
 
-AT, BE, CY, DE, EE, ES, FI, FR, GR, HR, IE, IT, LT, LU, LV, MT, NL, PT, SI, SK
-
-### Get VOP Stats for Upload
+### Get VOP Stats
 ```
 GET /api/admin/uploads/{id}/vop-stats
 Authorization: Bearer {token}
@@ -1028,14 +546,7 @@ Authorization: Bearer {token}
 }
 ```
 
-| Field | Description |
-|-------|-------------|
-| `total_eligible` | Debtors with validation_status=valid and supported country |
-| `verified` | Total VOP logs created |
-| `pending` | Eligible but not yet verified |
-| `by_result` | Count by VOP result category |
-
-### Start VOP Verification for Upload
+### Start VOP Verification
 ```
 POST /api/admin/uploads/{id}/verify-vop
 Authorization: Bearer {token}
@@ -1045,10 +556,6 @@ Content-Type: application/json
     "force": false
 }
 ```
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `force` | boolean | false | Re-verify even if already cached |
 
 **Response (202 Accepted):**
 ```json
@@ -1061,17 +568,17 @@ Content-Type: application/json
 }
 ```
 
-**Processing:**
-- Job queued on `vop` queue
-- Processes in chunks of 50 debtors
-- 500ms delay between API calls (rate limiting)
-- Results cached by IBAN hash (same IBAN = same bank)
-
-### Get VOP Logs for Upload
+### Get VOP Logs
 ```
 GET /api/admin/uploads/{id}/vop-logs
 Authorization: Bearer {token}
 ```
+```
+GET /api/admin/vop-logs
+Authorization: Bearer {token}
+```
+
+**Query Parameters:** `upload_id`, `debtor_id`, `result`
 
 **Response:**
 ```json
@@ -1084,23 +591,21 @@ Authorization: Bearer {token}
             "iban_masked": "DE89****3000",
             "iban_valid": true,
             "bank_identified": true,
-            "bank_name": null,
+            "bank_name": "Commerzbank",
             "bic": "COBADEFFXXX",
             "country": "DE",
             "vop_score": 100,
+            "score_label": "high",
             "result": "verified",
-            "meta": {
-                "name_match": "yes",
-                "iban_hash": "abc123..."
-            },
+            "is_positive": true,
+            "is_negative": false,
             "created_at": "2025-12-18T10:00:00Z"
         }
-    ],
-    "meta": { ... }
+    ]
 }
 ```
 
-### Verify Single IBAN (Testing)
+### Verify Single IBAN
 ```
 POST /api/admin/vop/verify-single
 Authorization: Bearer {token}
@@ -1109,36 +614,11 @@ Content-Type: application/json
 {
     "iban": "DE89370400440532013000",
     "name": "Max Mustermann",
-    "use_mock": true
+    "use_mock": false
 }
 ```
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `iban` | string | Yes | IBAN to verify |
-| `name` | string | Yes | Account holder name |
-| `use_mock` | boolean | No | Use mock response (no API credit used) |
-
-**Response:**
-```json
-{
-    "data": {
-        "success": true,
-        "valid": true,
-        "name_match": "yes",
-        "bic": "COBADEFFXXX",
-        "vop_score": 100,
-        "vop_result": "verified",
-        "error": null
-    },
-    "meta": {
-        "mock_mode": true,
-        "credits_used": 0
-    }
-}
-```
-
-**VOP Score Calculation:**
+**VOP Score Mapping:**
 
 | name_match | Score | Result |
 |------------|-------|--------|
@@ -1146,15 +626,432 @@ Content-Type: application/json
 | partial | 70 | likely_verified |
 | unavailable | 50 | inconclusive |
 | no | 20 | mismatch |
-| (invalid IBAN) | 0 | rejected |
+| invalid | 0 | rejected |
 
-**API Response Times:**
+---
 
-BAV API response time varies: 200ms to 3 minutes depending on the bank.
+## Billing
 
-**Environment Variables:**
+Billing sends SEPA Direct Debit transactions to emerchantpay gateway.
+
+### Start Billing (Sync to Gateway)
 ```
+POST /api/admin/uploads/{id}/sync
+Authorization: Bearer {token}
+```
+
+Dispatches async billing job for all eligible debtors.
+
+**Eligibility Criteria:**
+- `validation_status = valid`
+- `status = pending`
+- No existing `pending` or `approved` billing attempt
+
+**Response (202 Accepted):**
+```json
+{
+    "message": "Billing queued for 50 debtors",
+    "data": {
+        "upload_id": 31,
+        "eligible": 50,
+        "queued": true
+    }
+}
+```
+
+**Response (No eligible):**
+```json
+{
+    "message": "No eligible debtors to bill",
+    "data": {
+        "upload_id": 31,
+        "eligible": 0,
+        "queued": false
+    }
+}
+```
+
+**Response (409 Conflict - Already processing):**
+```json
+{
+    "message": "Billing already in progress",
+    "data": {
+        "upload_id": 31,
+        "queued": true,
+        "duplicate": true
+    }
+}
+```
+
+### Get Billing Stats
+```
+GET /api/admin/uploads/{id}/billing-stats
+Authorization: Bearer {token}
+```
+
+**Response:**
+```json
+{
+    "data": {
+        "upload_id": 31,
+        "is_processing": false,
+        "total_attempts": 50,
+        "approved": 0,
+        "approved_amount": 0,
+        "pending": 50,
+        "pending_amount": 497.50,
+        "declined": 0,
+        "declined_amount": 0,
+        "error": 0,
+        "error_amount": 0
+    }
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `is_processing` | True if billing job is currently running |
+| `total_attempts` | Total billing attempts created |
+| `pending` | Awaiting bank confirmation (2-5 days for SEPA) |
+| `approved` | Successfully processed |
+| `declined` | Rejected by bank |
+| `error` | Technical errors |
+
+### List Billing Attempts
+```
+GET /api/admin/billing-attempts
+Authorization: Bearer {token}
+```
+
+**Query Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `upload_id` | integer | Filter by upload |
+| `debtor_id` | integer | Filter by debtor |
+| `status` | string | Filter: `pending`, `approved`, `declined`, `error`, `voided`, `chargebacked` |
+
+**Response:**
+```json
+{
+    "data": [
+        {
+            "id": 1,
+            "debtor_id": 101,
+            "upload_id": 31,
+            "transaction_id": "tether_101_20251229_Abc123",
+            "unique_id": "09dcbd928440e5eb8faaf4be0698a58c",
+            "amount": 9.99,
+            "currency": "EUR",
+            "status": "pending",
+            "attempt_number": 1,
+            "error_code": null,
+            "error_message": null,
+            "is_approved": false,
+            "is_final": false,
+            "can_retry": false,
+            "processed_at": "2025-12-29T07:44:00Z",
+            "created_at": "2025-12-29T07:44:00Z"
+        }
+    ],
+    "meta": { ... }
+}
+```
+
+### Get Billing Attempt
+```
+GET /api/admin/billing-attempts/{id}
+Authorization: Bearer {token}
+```
+
+### Retry Failed Billing
+```
+POST /api/admin/billing-attempts/{id}/retry
+Authorization: Bearer {token}
+```
+
+Retries a failed billing attempt (declined/error status only).
+
+**Response (201 Created):**
+```json
+{
+    "message": "Retry initiated successfully",
+    "data": {
+        "id": 52,
+        "debtor_id": 101,
+        "status": "pending",
+        "attempt_number": 2,
+        ...
+    }
+}
+```
+
+**Response (422 - Cannot retry):**
+```json
+{
+    "message": "This billing attempt cannot be retried",
+    "data": {
+        "id": 14,
+        "status": "approved",
+        "can_retry": false
+    }
+}
+```
+
+### Billing Statuses
+
+| Status | Description | Final | Can Retry |
+|--------|-------------|-------|-----------|
+| `pending` | Sent to gateway, awaiting bank | No | No |
+| `approved` | Successfully processed | Yes | No |
+| `declined` | Rejected by bank | Yes | Yes |
+| `error` | Technical error | Yes | Yes |
+| `voided` | Cancelled before processing | Yes | No |
+| `chargebacked` | Reversed after approval | Yes | No |
+
+### SEPA Error Codes
+
+| Code | Description | Auto-Blacklist |
+|------|-------------|----------------|
+| AC04 | Account closed | Yes |
+| AC06 | Account blocked | Yes |
+| AG01 | Transaction forbidden | Yes |
+| MD01 | No mandate | Yes |
+| AM04 | Insufficient funds | No |
+| MS03 | Reason not specified | No |
+
+---
+
+## Statistics
+
+### Chargeback Rates by Country
+```
+GET /api/admin/stats/chargeback-rates
+Authorization: Bearer {token}
+```
+
+**Query Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `period` | string | `7d` | `24h`, `7d`, `30d`, `90d` |
+
+**Response:**
+```json
+{
+    "data": {
+        "period": "7d",
+        "start_date": "2025-12-22T00:00:00Z",
+        "threshold": 25,
+        "countries": [
+            {
+                "country": "ES",
+                "total": 100,
+                "approved": 85,
+                "declined": 10,
+                "errors": 3,
+                "chargebacks": 2,
+                "cb_rate_total": 2.0,
+                "cb_rate_approved": 2.35,
+                "alert": false
+            }
+        ],
+        "totals": { ... }
+    }
+}
+```
+
+### Chargeback Codes
+```
+GET /api/admin/stats/chargeback-codes
+Authorization: Bearer {token}
+```
+
+**Response:**
+```json
+{
+    "data": {
+        "period": "7d",
+        "codes": [
+            {
+                "chargeback_code": "AC04",
+                "chargeback_reason": "Account closed",
+                "occurrences": 15,
+                "total_amount": 2500.00
+            }
+        ],
+        "totals": {
+            "occurrences": 23,
+            "total_amount": 3700.00
+        }
+    }
+}
+```
+
+### Chargeback Banks
+```
+GET /api/admin/stats/chargeback-banks
+Authorization: Bearer {token}
+```
+
+**Response:**
+```json
+{
+    "data": {
+        "period": "7d",
+        "banks": [
+            {
+                "bank_name": "N26",
+                "total_amount": 21953.99,
+                "chargebacks": 10,
+                "cb_rate": 13.16
+            }
+        ],
+        "totals": {
+            "total": 600,
+            "total_amount": 164859.14,
+            "chargebacks": 65,
+            "total_cb_rate": 10.83
+        }
+    }
+}
+```
+
+---
+
+## Webhooks
+
+### EMP Webhook
+```
+POST /api/webhooks/emp
+Content-Type: application/json
+```
+
+Receives emerchantpay notifications.
+
+**Transaction Update:**
+```json
+{
+    "unique_id": "tx_123",
+    "transaction_type": "sdd_sale",
+    "status": "approved",
+    "signature": "sha1_hash"
+}
+```
+
+**Chargeback Notification:**
+```json
+{
+    "unique_id": "cb_456",
+    "transaction_type": "chargeback",
+    "status": "approved",
+    "original_transaction_unique_id": "tx_123",
+    "amount": 10000,
+    "currency": "EUR",
+    "reason": "Account closed",
+    "reason_code": "AC04",
+    "signature": "sha1_hash"
+}
+```
+
+**Signature:** `SHA1(unique_id + EMP_PASSWORD)`
+
+**Chargeback Processing:**
+1. Find original transaction by `unique_id`
+2. Update billing_attempt status to `chargebacked`
+3. Store error_code and error_message
+4. Auto-blacklist IBAN if code in `['AC04', 'AC06', 'AG01', 'MD01']`
+
+---
+
+## Processing Flow
+
+### Complete Workflow
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    1. UPLOAD CSV                             │
+│  POST /api/admin/uploads                                     │
+│  → Pre-validation (structure check)                          │
+│  → Deduplication (blacklist, chargeback, cooldown)          │
+│  → Create debtors                                           │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    2. VALIDATE                               │
+│  POST /api/admin/uploads/{id}/validate                       │
+│  → IBAN checksum, name format, amount range                 │
+│  → Updates validation_status: valid/invalid                  │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                 3. VOP VERIFY (Optional)                     │
+│  POST /api/admin/uploads/{id}/verify-vop                     │
+│  → Verifies IBAN ownership with bank                        │
+│  → Reduces chargebacks by 30-50%                            │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    4. SYNC TO GATEWAY                        │
+│  POST /api/admin/uploads/{id}/sync                           │
+│  → Creates billing_attempts                                  │
+│  → Sends SDD transactions to emerchantpay                   │
+│  → Status: pending (awaiting bank)                          │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    5. WEBHOOK UPDATES                        │
+│  POST /api/webhooks/emp                                      │
+│  → Updates status: approved/declined/chargebacked           │
+│  → Auto-blacklist on certain error codes                    │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Deduplication Rules (Stage 1)
+
+| Rule | Block Type | Description |
+|------|------------|-------------|
+| Blacklisted | Permanent | IBAN in blacklist table |
+| Chargebacked | Permanent | IBAN has previous chargeback |
+| Already Recovered | Permanent | Debt recovered for IBAN |
+| Recently Attempted | 7-day cooldown | Billing within last 7 days |
+
+### Billing Processing
+
+- **Async:** Jobs run on `billing` queue
+- **Chunked:** 50 debtors per chunk
+- **Rate Limited:** 50 requests/second to EMP
+- **Circuit Breaker:** 10 failures → 5 minute pause
+- **Idempotency:** Cache lock prevents duplicate dispatches (5 min)
+- **SEPA DD:** Pending status for 2-5 business days
+
+---
+
+## Environment Variables
+```bash
+# Database
+DB_CONNECTION=pgsql
+DB_HOST=db
+DB_DATABASE=tether
+DB_USERNAME=tether
+DB_PASSWORD=secret
+
+# emerchantpay
+EMP_USERNAME=your_username
+EMP_PASSWORD=your_password
+EMP_TERMINAL_TOKEN=your_token
+EMP_API_URL=https://staging.gate.emerchantpay.net/process/
+EMP_MOCK_MODE=false
+
+# IBAN.com VOP
 IBAN_API_KEY=your_api_key
-IBAN_API_URL=https://api.iban.com/clients/api/verify/v3/
-IBAN_API_MOCK=true  # true for dev, false for production
+IBAN_API_URL=https://api.iban.com/clients/api/v4/iban/
+IBAN_API_MOCK=true
+
+# Queue
+QUEUE_CONNECTION=redis
+REDIS_HOST=redis
 ```
