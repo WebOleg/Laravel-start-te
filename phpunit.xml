@@ -31,5 +31,11 @@
         <env name="PULSE_ENABLED" value="false"/>
         <env name="TELESCOPE_ENABLED" value="false"/>
         <env name="NIGHTWATCH_ENABLED" value="false"/>
+
+        <!-- emerchantpay Genesis API (staging) -->
+        <env name="EMP_GENESIS_ENDPOINT" value="staging.gate.emerchantpay.net"/>
+        <env name="EMP_GENESIS_USERNAME" value="32a174d6bdbe31b03a337b65900fe96271c9f4a8"/>
+        <env name="EMP_GENESIS_PASSWORD" value="948d93cb68916cc893d234f549a825fa0c91c826"/>
+        <env name="EMP_GENESIS_TERMINAL_TOKEN" value="585b1650138599b7861e129030c91fe0ecc79bd5"/>
     </php>
 </phpunit>
