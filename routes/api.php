@@ -8,6 +8,7 @@ use App\Http\Controllers\Admin\DashboardController as AdminDashboardController;
 use App\Http\Controllers\Admin\DebtorController as AdminDebtorController;
 use App\Http\Controllers\Admin\VopLogController as AdminVopLogController;
 use App\Http\Controllers\Admin\BillingAttemptController as AdminBillingAttemptController;
+use App\Http\Controllers\Admin\BillingController as AdminBillingController;
 use App\Http\Controllers\Admin\UploadController as AdminUploadController;
 use App\Http\Controllers\Admin\StatsController as AdminStatsController;
 use App\Http\Controllers\Admin\VopController as AdminVopController;
@@ -41,6 +42,11 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('uploads/{upload}/verify-vop', [AdminVopController::class, 'verify']);
         Route::get('uploads/{upload}/vop-logs', [AdminVopController::class, 'logs']);
         Route::post('vop/verify-single', [AdminVopController::class, 'verifySingle']);
+
+        // Billing routes
+        Route::post('uploads/{upload}/sync', [AdminBillingController::class, 'sync']);
+        Route::get('uploads/{upload}/billing-stats', [AdminBillingController::class, 'stats']);
+        Route::post('billing-attempts/{billing_attempt}/retry', [AdminBillingAttemptController::class, 'retry']);
 
         Route::post('debtors/{debtor}/validate', [AdminDebtorController::class, 'validate']);
         Route::apiResource('debtors', AdminDebtorController::class)->only(['index', 'show', 'update', 'destroy']);

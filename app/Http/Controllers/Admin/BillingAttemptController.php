@@ -9,13 +9,15 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\BillingAttemptResource;
 use App\Models\BillingAttempt;
+use App\Services\Emp\EmpBillingService;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 
 class BillingAttemptController extends Controller
 {
     /**
-     * @return AnonymousResourceCollection
+     * List billing attempts with filters.
      */
     public function index(Request $request): AnonymousResourceCollection
     {
@@ -39,12 +41,42 @@ class BillingAttemptController extends Controller
     }
 
     /**
-     * @return BillingAttemptResource
+     * Get single billing attempt.
      */
     public function show(BillingAttempt $billingAttempt): BillingAttemptResource
     {
         $billingAttempt->load(['debtor', 'upload']);
 
         return new BillingAttemptResource($billingAttempt);
+    }
+
+    /**
+     * Retry failed billing attempt.
+     */
+    public function retry(BillingAttempt $billingAttempt, EmpBillingService $billingService): JsonResponse
+    {
+        if (!$billingAttempt->canRetry()) {
+            return response()->json([
+                'message' => 'This billing attempt cannot be retried',
+                'data' => [
+                    'id' => $billingAttempt->id,
+                    'status' => $billingAttempt->status,
+                    'can_retry' => false,
+                ],
+            ], 422);
+        }
+
+        try {
+            $newAttempt = $billingService->retry($billingAttempt);
+
+            return response()->json([
+                'message' => 'Retry initiated successfully',
+                'data' => new BillingAttemptResource($newAttempt),
+            ], 201);
+        } catch (\Exception $e) {
+            return response()->json([
+                'message' => 'Retry failed: ' . $e->getMessage(),
+            ], 500);
+        }
     }
 }
