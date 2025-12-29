@@ -111,20 +111,20 @@ SUMSUB_SECRET_KEY=your_secret
 4. **Start containers**
 
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
 5. **Install dependencies & migrate**
 
 ```bash
-docker-compose exec app composer install
-docker-compose exec app php artisan migrate --seed
+docker compose exec app composer install
+docker compose exec app php artisan migrate --seed
 ```
 
 6. **Start queue worker** (for async processing)
 
 ```bash
-docker-compose exec app php artisan queue:work
+docker compose exec app php artisan queue:work
 ```
 
 ## Development
@@ -144,9 +144,9 @@ make logs            # View logs
 ### Without Make
 
 ```bash
-docker-compose up -d
-docker-compose exec app php artisan migrate
-docker-compose exec app php artisan test
+docker compose up -d
+docker compose exec app php artisan migrate
+docker compose exec app php artisan test
 ```
 
 ## Testing
@@ -156,7 +156,7 @@ docker-compose exec app php artisan test
 make test
 
 # Specific test
-docker-compose exec app php artisan test --filter=ReconciliationControllerTest
+docker compose exec app php artisan test --filter=ReconciliationControllerTest
 ```
 
 ### Test Coverage
