@@ -12,6 +12,7 @@ use App\Jobs\ProcessBillingJob;
 use App\Models\BillingAttempt;
 use App\Models\Debtor;
 use App\Models\Upload;
+use App\Models\VopLog;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Cache;
 
@@ -35,6 +36,22 @@ class BillingController extends Controller
                     'duplicate' => true,
                 ],
             ], 409);
+        }
+
+        // VOP Gate: Check if VOP verification is completed
+        $vopCheck = $this->checkVopCompleted($upload);
+        if (!$vopCheck['passed']) {
+            return response()->json([
+                'message' => $vopCheck['message'],
+                'data' => [
+                    'upload_id' => $upload->id,
+                    'queued' => false,
+                    'vop_required' => true,
+                    'vop_total_eligible' => $vopCheck['total_eligible'],
+                    'vop_verified' => $vopCheck['verified'],
+                    'vop_pending' => $vopCheck['pending'],
+                ],
+            ], 422);
         }
 
         // Count eligible debtors
@@ -108,5 +125,54 @@ class BillingController extends Controller
                 'error_amount' => (float) ($error?->total_amount ?? 0),
             ],
         ]);
+    }
+
+    /**
+     * Check if VOP verification is completed for upload.
+     * Billing is blocked until all eligible debtors have VOP logs.
+     *
+     * @return array{passed: bool, message: string, total_eligible: int, verified: int, pending: int}
+     */
+    private function checkVopCompleted(Upload $upload): array
+    {
+        // Count debtors eligible for VOP (valid + iban_valid)
+        $totalEligible = Debtor::where('upload_id', $upload->id)
+            ->where('validation_status', Debtor::VALIDATION_VALID)
+            ->where('iban_valid', true)
+            ->count();
+
+        // If no eligible debtors, VOP check passes (nothing to verify)
+        if ($totalEligible === 0) {
+            return [
+                'passed' => true,
+                'message' => 'No debtors eligible for VOP',
+                'total_eligible' => 0,
+                'verified' => 0,
+                'pending' => 0,
+            ];
+        }
+
+        // Count VOP logs for this upload
+        $verified = VopLog::where('upload_id', $upload->id)->count();
+        $pending = $totalEligible - $verified;
+
+        // VOP must be completed for all eligible debtors
+        if ($pending > 0) {
+            return [
+                'passed' => false,
+                'message' => "VOP verification must be completed before billing. {$pending} debtors pending verification.",
+                'total_eligible' => $totalEligible,
+                'verified' => $verified,
+                'pending' => $pending,
+            ];
+        }
+
+        return [
+            'passed' => true,
+            'message' => 'VOP verification completed',
+            'total_eligible' => $totalEligible,
+            'verified' => $verified,
+            'pending' => 0,
+        ];
     }
 }
