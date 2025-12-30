@@ -11,6 +11,7 @@ use App\Models\BillingAttempt;
 use App\Models\Debtor;
 use App\Models\Upload;
 use App\Models\User;
+use App\Models\VopLog;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Cache;
@@ -65,11 +66,20 @@ class BillingControllerTest extends TestCase
         Bus::fake();
 
         $upload = Upload::factory()->create();
-        Debtor::factory()->count(3)->create([
+        $debtors = Debtor::factory()->count(3)->create([
             'upload_id' => $upload->id,
             'validation_status' => Debtor::VALIDATION_VALID,
+            'iban_valid' => true,
             'status' => Debtor::STATUS_PENDING,
         ]);
+
+        // Create VopLog for each debtor (VOP gate requirement)
+        foreach ($debtors as $debtor) {
+            VopLog::factory()->create([
+                'upload_id' => $upload->id,
+                'debtor_id' => $debtor->id,
+            ]);
+        }
 
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
             ->postJson("/api/admin/uploads/{$upload->id}/sync");
@@ -89,17 +99,24 @@ class BillingControllerTest extends TestCase
 
         $upload = Upload::factory()->create();
         
-        // Valid debtor
-        Debtor::factory()->create([
+        // Valid debtor with VOP
+        $validDebtor = Debtor::factory()->create([
             'upload_id' => $upload->id,
             'validation_status' => Debtor::VALIDATION_VALID,
+            'iban_valid' => true,
             'status' => Debtor::STATUS_PENDING,
         ]);
         
-        // Invalid debtor - should be skipped
+        VopLog::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $validDebtor->id,
+        ]);
+        
+        // Invalid debtor - should be skipped (no VOP needed for invalid)
         Debtor::factory()->create([
             'upload_id' => $upload->id,
             'validation_status' => Debtor::VALIDATION_INVALID,
+            'iban_valid' => false,
             'status' => Debtor::STATUS_PENDING,
         ]);
 
@@ -118,7 +135,14 @@ class BillingControllerTest extends TestCase
         $debtor = Debtor::factory()->create([
             'upload_id' => $upload->id,
             'validation_status' => Debtor::VALIDATION_VALID,
+            'iban_valid' => true,
             'status' => Debtor::STATUS_PENDING,
+        ]);
+
+        // Create VopLog
+        VopLog::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
         ]);
 
         // Create pending billing attempt
@@ -144,7 +168,14 @@ class BillingControllerTest extends TestCase
         $debtor = Debtor::factory()->create([
             'upload_id' => $upload->id,
             'validation_status' => Debtor::VALIDATION_VALID,
+            'iban_valid' => true,
             'status' => Debtor::STATUS_PENDING,
+        ]);
+
+        // Create VopLog
+        VopLog::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
         ]);
 
         // Create approved billing attempt
@@ -180,6 +211,61 @@ class BillingControllerTest extends TestCase
 
         $response->assertStatus(409)
             ->assertJsonPath('data.duplicate', true);
+
+        Bus::assertNotDispatched(ProcessBillingJob::class);
+    }
+
+    public function test_sync_blocked_without_vop_verification(): void
+    {
+        Bus::fake();
+
+        $upload = Upload::factory()->create();
+        
+        // Create valid debtors WITHOUT VopLog
+        Debtor::factory()->count(3)->create([
+            'upload_id' => $upload->id,
+            'validation_status' => Debtor::VALIDATION_VALID,
+            'iban_valid' => true,
+            'status' => Debtor::STATUS_PENDING,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->postJson("/api/admin/uploads/{$upload->id}/sync");
+
+        $response->assertStatus(422)
+            ->assertJsonPath('data.vop_required', true)
+            ->assertJsonPath('data.vop_pending', 3);
+
+        Bus::assertNotDispatched(ProcessBillingJob::class);
+    }
+
+    public function test_sync_blocked_with_partial_vop_verification(): void
+    {
+        Bus::fake();
+
+        $upload = Upload::factory()->create();
+        
+        // Create 3 valid debtors
+        $debtors = Debtor::factory()->count(3)->create([
+            'upload_id' => $upload->id,
+            'validation_status' => Debtor::VALIDATION_VALID,
+            'iban_valid' => true,
+            'status' => Debtor::STATUS_PENDING,
+        ]);
+
+        // Only create VopLog for 1 debtor (partial)
+        VopLog::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtors[0]->id,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->postJson("/api/admin/uploads/{$upload->id}/sync");
+
+        $response->assertStatus(422)
+            ->assertJsonPath('data.vop_required', true)
+            ->assertJsonPath('data.vop_verified', 1)
+            ->assertJsonPath('data.vop_pending', 2);
 
         Bus::assertNotDispatched(ProcessBillingJob::class);
     }
