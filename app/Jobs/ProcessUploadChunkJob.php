@@ -248,7 +248,7 @@ class ProcessUploadChunkJob implements ShouldQueue
             $errors[] = 'Name is required';
         }
 
-        if (empty($data['amount']) || $data['amount'] <= 0) {
+        if (empty($data['amount']) || $data['amount'] < 1) {
             $errors[] = 'Valid amount is required';
         }
 

@@ -256,7 +256,7 @@ tether-laravel/
 │  ✓ IBAN checksum valid                                          │
 │  ✓ First name max 35 chars, no numbers/symbols                  │
 │  ✓ Last name max 35 chars, no numbers/symbols                   │
-│  ✓ Amount > 0 and ≤ 50000                                       │
+│  ✓ Amount ≥ 1 and ≤ 50000                                       │
 │  ✓ Not blacklisted                                              │
 │  ✓ No encoding issues                                           │
 │                                                                  │

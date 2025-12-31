@@ -118,7 +118,7 @@ trait ParsesDebtorData
         }
 
         $amount = (float) $value;
-        return $amount > 0 ? $amount : null;
+        return $amount >= 1 ? $amount : null;
     }
 
     private function parseDate(mixed $value): ?string
