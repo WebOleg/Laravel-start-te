@@ -212,7 +212,7 @@ class EmpBillingService
         }
 
         // Must have amount
-        if ($debtor->amount <= 0) {
+        if ($debtor->amount < 1) {
             return false;
         }
 

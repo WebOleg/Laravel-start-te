@@ -275,6 +275,34 @@ class EmpBillingServiceTest extends TestCase
         $this->assertEquals(BillingAttempt::STATUS_APPROVED, $billingAttempt->status);
     }
 
+    public function test_cannot_bill_amount_below_one_euro(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'validation_status' => 'valid',
+            'status' => Debtor::STATUS_PENDING,
+            'iban' => 'DE89370400440532013000',
+            'amount' => 0.50,
+        ]);
+
+        $this->assertFalse($this->service->canBill($debtor));
+    }
+
+    public function test_can_bill_amount_exactly_one_euro(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'validation_status' => 'valid',
+            'status' => Debtor::STATUS_PENDING,
+            'iban' => 'DE89370400440532013000',
+            'amount' => 1.00,
+        ]);
+
+        $this->assertTrue($this->service->canBill($debtor));
+    }
+
     protected function tearDown(): void
     {
         Mockery::close();

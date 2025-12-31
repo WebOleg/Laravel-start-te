@@ -136,7 +136,7 @@ class DebtorValidationServiceTest extends TestCase
 
         $errors = $this->service->validateDebtor($debtor);
 
-        $this->assertContains('Amount must be greater than zero', $errors);
+        $this->assertContains('Amount must be at least 1.00', $errors);
     }
 
     public function test_validates_amount_max(): void
@@ -198,5 +198,42 @@ class DebtorValidationServiceTest extends TestCase
         $this->assertEquals(Debtor::VALIDATION_INVALID, $debtor->validation_status);
         $this->assertNotNull($debtor->validation_errors);
         $this->assertContains('First name cannot exceed 35 characters', $debtor->validation_errors);
+    }
+
+    public function test_validates_amount_below_minimum(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'first_name' => 'John',
+            'iban' => 'DE89370400440532013000',
+            'amount' => 0.50,
+            'city' => 'Berlin',
+            'postcode' => '10115',
+            'street' => 'Main Street 1',
+        ]);
+
+        $errors = $this->service->validateDebtor($debtor);
+
+        $this->assertContains('Amount must be at least 1.00', $errors);
+    }
+    
+    public function test_validates_amount_exactly_one_euro(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'first_name' => 'John',
+            'last_name' => 'Doe',
+            'iban' => 'DE89370400440532013000',
+            'amount' => 1.00,
+            'city' => 'Berlin',
+            'postcode' => '10115',
+            'street' => 'Main Street 1',
+        ]);
+
+        $errors = $this->service->validateDebtor($debtor);
+
+        $this->assertNotContains('Amount must be at least 1.00', $errors);
     }
 }

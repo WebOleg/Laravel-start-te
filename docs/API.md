@@ -512,7 +512,7 @@ Authorization: Bearer {token}
 | First Name | Max 35 chars, no numbers/symbols | "First name cannot exceed 35 characters" |
 | Last Name | Max 35 chars, no numbers/symbols | "Last name cannot exceed 35 characters" |
 | Name | first_name OR last_name required | "Name is required" |
-| Amount | Required, > 0, ≤ 50000 | "Amount must be positive" |
+| Amount | Required, ≥ 1, ≤ 50000 | "Amount must be at least 1" |
 | Email | Valid format (if provided) | "Email format is invalid" |
 | Encoding | Valid UTF-8 | "Field contains encoding issues" |
 
