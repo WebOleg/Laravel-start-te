@@ -15,14 +15,10 @@ use App\Http\Controllers\Admin\StatsController as AdminStatsController;
 use App\Http\Controllers\Admin\VopController as AdminVopController;
 
 Route::post('/login', [AuthController::class, 'login']);
-Route::post('/register', [AuthController::class, 'register']);
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/user', [AuthController::class, 'user']);
-
-    Route::apiResource('clients', ClientController::class);
-    Route::apiResource('uploads', UploadController::class);
 
     Route::prefix('admin')->group(function () {
         Route::get('dashboard', [AdminDashboardController::class, 'index']);
