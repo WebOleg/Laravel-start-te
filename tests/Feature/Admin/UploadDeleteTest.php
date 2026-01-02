@@ -27,10 +27,11 @@ class UploadDeleteTest extends TestCase
 
     public function test_upload_destroy_hard_deletes_upload_when_no_debtors_exist(): void
     {
-        Storage::fake('local');
-        Storage::disk('local')->put('uploads/test_file_123.csv', 'content');
+        $filePath = 'uploads/test_file_123.csv';
+        Storage::disk('s3')->put($filePath, 'content');
         
         $upload = Upload::factory()->create([
+            'file_path' => $filePath,
             'filename' => 'test_file_123.csv',
             'status' => Upload::STATUS_COMPLETED,
         ]);
@@ -40,7 +41,7 @@ class UploadDeleteTest extends TestCase
         
         $response->assertStatus(200);
         $this->assertDatabaseMissing('uploads', ['id' => $upload->id]);
-        $this->assertFalse(Storage::disk('local')->exists('uploads/test_file_123.csv'));
+        Storage::disk('s3')->assertMissing($filePath);
     }
 
     public function test_upload_destroy_soft_deletes_upload_when_has_debtors_no_billing(): void
@@ -106,15 +107,18 @@ class UploadDeleteTest extends TestCase
 
     public function test_upload_destroy_removes_file_from_storage(): void
     {
-        Storage::fake('local');
-        Storage::disk('local')->put('uploads/test_file.csv', 'test content');
+        $filePath = 'uploads/test_file.csv';
+        Storage::disk('s3')->put($filePath, 'test content');
+        
         $upload = Upload::factory()->create([
+            'file_path' => $filePath,
             'filename' => 'test_file.csv',
         ]);
 
         $this->withHeader('Authorization', 'Bearer ' . $this->token)
                 ->deleteJson('/api/admin/uploads/' . $upload->id);
-        $this->assertFalse(Storage::disk('local')->exists('uploads/test_file.csv'));
+        
+        Storage::disk('s3')->assertMissing($filePath);
     }
 
     public function test_upload_destroy_deletes_all_associated_debtors(): void

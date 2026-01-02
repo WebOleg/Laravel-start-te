@@ -240,7 +240,7 @@ class UploadController extends Controller
     public function destroy(Upload $upload): JsonResponse
     {
         if ($upload->canBeHardDeleted()) {
-            Storage::disk('local')->delete('uploads/'.$upload->filename);
+            Storage::disk('s3')->delete($upload->file_path);
             $upload->forceDelete();
             return response()->json([
                 'success'   => true,
