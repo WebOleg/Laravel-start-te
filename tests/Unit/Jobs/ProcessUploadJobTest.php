@@ -17,35 +17,22 @@ use App\Services\IbanValidator;
 use App\Services\BlacklistService;
 use App\Services\DeduplicationService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
 class ProcessUploadJobTest extends TestCase
 {
     use RefreshDatabase;
 
-    private string $testFilePath;
-
-    protected function tearDown(): void
-    {
-        if (isset($this->testFilePath) && file_exists(storage_path('app/' . $this->testFilePath))) {
-            unlink(storage_path('app/' . $this->testFilePath));
-        }
-        parent::tearDown();
-    }
-
     public function test_job_processes_csv_file(): void
     {
-        $this->testFilePath = 'uploads/test_' . uniqid() . '.csv';
+        $filePath = 'uploads/test_' . uniqid() . '.csv';
         $content = "first_name,last_name,iban,amount\nJohn,Doe,DE89370400440532013000,100.00";
         
-        $fullPath = storage_path('app/' . $this->testFilePath);
-        if (!is_dir(dirname($fullPath))) {
-            mkdir(dirname($fullPath), 0755, true);
-        }
-        file_put_contents($fullPath, $content);
+        Storage::disk('s3')->put($filePath, $content);
 
         $upload = Upload::factory()->create([
-            'file_path' => $this->testFilePath,
+            'file_path' => $filePath,
             'status' => Upload::STATUS_PENDING,
             'total_records' => 1,
         ]);
@@ -61,7 +48,8 @@ class ProcessUploadJobTest extends TestCase
         $job->handle(
             new SpreadsheetParserService(),
             new IbanValidator(),
-            app(BlacklistService::class), app(DeduplicationService::class)
+            app(BlacklistService::class),
+            app(DeduplicationService::class)
         );
 
         $upload->refresh();
@@ -81,18 +69,13 @@ class ProcessUploadJobTest extends TestCase
 
     public function test_job_accepts_all_rows_including_invalid(): void
     {
-        // Stage A: Job accepts ALL rows, validation is in Stage B
-        $this->testFilePath = 'uploads/test_' . uniqid() . '.csv';
+        $filePath = 'uploads/test_' . uniqid() . '.csv';
         $content = "first_name,last_name,iban,amount\nJohn,Doe,INVALID,100.00\nJane,Smith,DE89370400440532013000,200.00";
         
-        $fullPath = storage_path('app/' . $this->testFilePath);
-        if (!is_dir(dirname($fullPath))) {
-            mkdir(dirname($fullPath), 0755, true);
-        }
-        file_put_contents($fullPath, $content);
+        Storage::disk('s3')->put($filePath, $content);
 
         $upload = Upload::factory()->create([
-            'file_path' => $this->testFilePath,
+            'file_path' => $filePath,
             'status' => Upload::STATUS_PENDING,
             'total_records' => 2,
         ]);
@@ -108,17 +91,16 @@ class ProcessUploadJobTest extends TestCase
         $job->handle(
             new SpreadsheetParserService(),
             new IbanValidator(),
-            app(BlacklistService::class), app(DeduplicationService::class)
+            app(BlacklistService::class),
+            app(DeduplicationService::class)
         );
 
         $upload->refresh();
 
-        // All rows accepted in Stage A
         $this->assertEquals(Upload::STATUS_COMPLETED, $upload->status);
         $this->assertEquals(2, $upload->processed_records);
         $this->assertEquals(0, $upload->failed_records);
 
-        // Both records saved with pending validation
         $this->assertDatabaseCount('debtors', 2);
         $this->assertDatabaseHas('debtors', [
             'upload_id' => $upload->id,
@@ -130,18 +112,13 @@ class ProcessUploadJobTest extends TestCase
 
     public function test_job_completes_even_with_all_invalid_data(): void
     {
-        // Stage A: Job accepts ALL rows even if data is invalid
-        $this->testFilePath = 'uploads/test_' . uniqid() . '.csv';
+        $filePath = 'uploads/test_' . uniqid() . '.csv';
         $content = "first_name,last_name,iban,amount\nJohn,Doe,INVALID,100.00";
         
-        $fullPath = storage_path('app/' . $this->testFilePath);
-        if (!is_dir(dirname($fullPath))) {
-            mkdir(dirname($fullPath), 0755, true);
-        }
-        file_put_contents($fullPath, $content);
+        Storage::disk('s3')->put($filePath, $content);
 
         $upload = Upload::factory()->create([
-            'file_path' => $this->testFilePath,
+            'file_path' => $filePath,
             'status' => Upload::STATUS_PENDING,
             'total_records' => 1,
         ]);
@@ -157,12 +134,12 @@ class ProcessUploadJobTest extends TestCase
         $job->handle(
             new SpreadsheetParserService(),
             new IbanValidator(),
-            app(BlacklistService::class), app(DeduplicationService::class)
+            app(BlacklistService::class),
+            app(DeduplicationService::class)
         );
 
         $upload->refresh();
 
-        // Job completes successfully, validation happens in Stage B
         $this->assertEquals(Upload::STATUS_COMPLETED, $upload->status);
         $this->assertEquals(1, $upload->processed_records);
         $this->assertEquals(0, $upload->failed_records);

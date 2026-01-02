@@ -21,6 +21,7 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 
 class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
 {
@@ -53,19 +54,17 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
     ): void {
         Log::info("ProcessUploadJob started", ['upload_id' => $this->upload->id]);
 
+        $tempFilePath = null;
+
         try {
             $this->upload->update([
                 'status' => Upload::STATUS_PROCESSING,
                 'processing_started_at' => now(),
             ]);
 
-            $filePath = storage_path('app/' . $this->upload->file_path);
+            $tempFilePath = $this->downloadFromS3();
 
-            if (!file_exists($filePath)) {
-                throw new \RuntimeException("File not found: {$filePath}");
-            }
-
-            $parsed = $this->parseFile($parser, $filePath);
+            $parsed = $this->parseFile($parser, $tempFilePath);
             $rows = $parsed['rows'];
 
             if (count($rows) > self::BATCH_THRESHOLD) {
@@ -81,6 +80,59 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
             ]);
 
             throw $e;
+        } finally {
+            $this->cleanupTempFile($tempFilePath);
+        }
+    }
+
+    /**
+     * Download file from S3 to temporary location.
+     *
+     * @throws \RuntimeException If file not found or download fails
+     */
+    private function downloadFromS3(): string
+    {
+        $s3Path = $this->upload->file_path;
+
+        if (!Storage::disk('s3')->exists($s3Path)) {
+            Log::error('File not found in S3', [
+                'upload_id' => $this->upload->id,
+                'path' => $s3Path,
+            ]);
+            throw new \RuntimeException("File not found in S3: {$s3Path}");
+        }
+
+        $content = Storage::disk('s3')->get($s3Path);
+
+        if ($content === null) {
+            throw new \RuntimeException("Failed to download file from S3: {$s3Path}");
+        }
+
+        $extension = pathinfo($s3Path, PATHINFO_EXTENSION);
+        $tempFilePath = sys_get_temp_dir() . '/upload_' . $this->upload->id . '_' . uniqid() . '.' . $extension;
+
+        if (file_put_contents($tempFilePath, $content) === false) {
+            throw new \RuntimeException("Failed to write temp file: {$tempFilePath}");
+        }
+
+        Log::info('File downloaded from S3 to temp', [
+            'upload_id' => $this->upload->id,
+            's3_path' => $s3Path,
+            'temp_path' => $tempFilePath,
+            'size' => strlen($content),
+        ]);
+
+        return $tempFilePath;
+    }
+
+    /**
+     * Clean up temporary file.
+     */
+    private function cleanupTempFile(?string $tempFilePath): void
+    {
+        if ($tempFilePath && file_exists($tempFilePath)) {
+            @unlink($tempFilePath);
+            Log::debug('Temp file cleaned up', ['path' => $tempFilePath]);
         }
     }
 
