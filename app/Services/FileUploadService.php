@@ -11,6 +11,7 @@ use App\Models\Upload;
 use App\Models\Debtor;
 use App\Traits\ParsesDebtorData;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 class FileUploadService
@@ -151,10 +152,33 @@ class FileUploadService
         ];
     }
 
+    /**
+     * Store uploaded file in S3 storage.
+     *
+     * @throws \RuntimeException If file storage fails
+     */
     private function storeFile(UploadedFile $file): string
     {
         $filename = Str::uuid() . '.' . $file->getClientOriginalExtension();
-        return $file->storeAs('uploads', $filename, 'local');
+
+        $path = $file->storeAs('uploads', $filename, 's3');
+
+        if ($path === false) {
+            Log::error('Failed to store file in S3', [
+                'original_filename' => $file->getClientOriginalName(),
+                'size' => $file->getSize(),
+                'mime_type' => $file->getMimeType(),
+            ]);
+            throw new \RuntimeException('Failed to store file in S3 storage');
+        }
+
+        Log::info('File stored in S3', [
+            'path' => $path,
+            'original_filename' => $file->getClientOriginalName(),
+            'size' => $file->getSize(),
+        ]);
+
+        return $path;
     }
 
     private function createUploadRecord(

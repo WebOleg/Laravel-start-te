@@ -75,11 +75,15 @@ class UploadValidationTest extends TestCase
             'upload_id' => $upload->id,
             'first_name' => 'Hans',
             'last_name' => 'Mueller',
+            'email' => 'hans.mueller@example.com',
+            'iban' => 'DE89370400440532013000',
         ]);
         Debtor::factory()->create([
             'upload_id' => $upload->id,
             'first_name' => 'Peter',
             'last_name' => 'Schmidt',
+            'email' => 'peter.schmidt@example.com',
+            'iban' => 'DE89370400440532013001',
         ]);
 
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)

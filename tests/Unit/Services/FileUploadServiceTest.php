@@ -17,11 +17,18 @@ use App\Services\IbanValidator;
 use App\Services\SpreadsheetParserService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
 class FileUploadServiceTest extends TestCase
 {
     use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        Storage::fake('s3');
+    }
 
     private function createService(): FileUploadService
     {
