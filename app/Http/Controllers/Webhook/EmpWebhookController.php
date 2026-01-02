@@ -1,70 +1,65 @@
 <?php
 
 /**
- * Webhook controller for emerchantpay notifications.
+ * Webhook controller for emerchantpay payment gateway notifications.
+ * 
+ * Handles HTTP concerns only. Business logic delegated to EmpWebhookService.
  */
 
 namespace App\Http\Controllers\Webhook;
 
 use App\Http\Controllers\Controller;
-use App\Jobs\ProcessEmpWebhookJob;
+use App\Services\Emp\EmpWebhookService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Log;
 
 class EmpWebhookController extends Controller
 {
-    private const VALID_TRANSACTION_TYPES = ['chargeback', 'sdd_sale'];
-
-    public function handle(Request $request): JsonResponse
-    {
-        $data = $request->all();
-        
-        Log::info('EMP webhook received', ['unique_id' => $data['unique_id'] ?? null]);
-
-        // Verify signature
-        if (!$this->verifySignature($request)) {
-            Log::warning('EMP webhook invalid signature', ['unique_id' => $data['unique_id'] ?? null]);
-            return response()->json(['error' => 'Invalid signature'], 401);
-        }
-
-        $transactionType = $data['transaction_type'] ?? null;
-
-        // Validate transaction type
-        if (!isset(array_flip(self::VALID_TRANSACTION_TYPES)[$transactionType])) {
-            Log::info('EMP webhook unknown type', ['type' => $transactionType]);
-            return response()->json(['status' => 'ok']);
-        }
-
-        // Dispatch to queue for processing
-        ProcessEmpWebhookJob::dispatch($data, $transactionType, now()->toIso8601String());
-
-        // Return immediately to acknowledge webhook
-        return response()->json([
-            'status' => 'ok',
-            'message' => match ($transactionType) {
-                'chargeback' => 'Chargeback processing queued',
-                'sdd_sale' => 'Transaction processing queued',
-                default => 'Processing queued',
-            }
-        ]);
-    }
+    public function __construct(
+        private EmpWebhookService $webhookService
+    ) {}
 
     /**
-     * Verify EMP webhook signature.
+     * Handle incoming EMP webhook.
      */
-    private function verifySignature(Request $request): bool
+    public function handle(Request $request): JsonResponse
     {
-        $signature = $request->input('signature');
-        $uniqueId = $request->input('unique_id');
-        $apiPassword = config('services.emp.password');
+        try {
+            Log::info('EMP webhook received', [
+                'unique_id' => $request->input('unique_id'),
+                'type' => $request->input('transaction_type'),
+            ]);
 
-        if (!$signature || !$uniqueId || !$apiPassword) {
-            return false;
+            $result = $this->webhookService->process($request);
+
+            return response()->json([
+                'status' => 'ok',
+                'message' => $result['message'] ?? 'Webhook processed',
+            ]);
+
+        } catch (\InvalidArgumentException $e) {
+            $statusCode = match ($e->getMessage()) {
+                'Invalid signature' => 401,
+                'Missing unique_id' => 400,
+                default => 400,
+            };
+
+            return response()->json([
+                'error' => $e->getMessage(),
+                'status' => 'error',
+            ], $statusCode);
+
+        } catch (\Exception $e) {
+            Log::error('EMP webhook processing error', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return response()->json([
+                'error' => 'Internal server error',
+                'status' => 'error',
+            ], 500);
         }
-
-        $expectedSignature = hash('sha1', $uniqueId . $apiPassword);
-
-        return hash_equals($expectedSignature, $signature);
     }
 }
