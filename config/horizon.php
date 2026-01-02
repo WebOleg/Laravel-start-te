@@ -4,7 +4,8 @@
  * Horizon configuration for Tether fintech platform.
  * 
  * Queue Priority:
- * - critical: Payments, webhooks, refunds (highest)
+ * - critical: Payments, refunds (highest)
+ * - webhooks: Webhook notifications (high priority, isolated processing)
  * - high: VOP verification, alerts
  * - default: File processing, imports
  * - low: Reports, notifications, cleanup
@@ -25,6 +26,7 @@ return [
 
     'waits' => [
         'redis:critical' => 30,
+        'redis:webhooks' => 30,
         'redis:high' => 60,
         'redis:default' => 120,
         'redis:low' => 300,
@@ -68,9 +70,23 @@ return [
             'timeout' => 60,
             'nice' => 0,
         ],
+        'supervisor-webhooks' => [
+            'connection' => 'redis',
+            'queue' => ['webhooks'],
+            'balance' => 'auto',
+            'autoScalingStrategy' => 'time',
+            'maxProcesses' => 4,
+            'maxTime' => 0,
+            'maxJobs' => 500,
+            'memory' => 128,
+            'tries' => 3,
+            'timeout' => 60,
+            'nice' => 0,
+            'visibility_timeout' => 120,
+        ],
         'supervisor-high' => [
             'connection' => 'redis',
-            'queue' => ['high', 'critical'],
+            'queue' => ['high'],
             'balance' => 'auto',
             'autoScalingStrategy' => 'time',
             'maxProcesses' => 3,
@@ -78,12 +94,12 @@ return [
             'maxJobs' => 500,
             'memory' => 128,
             'tries' => 3,
-            'timeout' => 120,
+            'timeout' => 180,
             'nice' => 0,
         ],
         'supervisor-default' => [
             'connection' => 'redis',
-            'queue' => ['default', 'high', 'critical'],
+            'queue' => ['default'],
             'balance' => 'auto',
             'autoScalingStrategy' => 'time',
             'maxProcesses' => 3,
@@ -91,7 +107,7 @@ return [
             'maxJobs' => 1000,
             'memory' => 256,
             'tries' => 3,
-            'timeout' => 300,
+            'timeout' => 600,
             'nice' => 0,
         ],
         'supervisor-low' => [
@@ -116,6 +132,11 @@ return [
                 'balanceMaxShift' => 3,
                 'balanceCooldown' => 3,
             ],
+            'supervisor-webhooks' => [
+                'maxProcesses' => 8,
+                'balanceMaxShift' => 2,
+                'balanceCooldown' => 3,
+            ],
             'supervisor-high' => [
                 'maxProcesses' => 5,
                 'balanceMaxShift' => 2,
@@ -135,6 +156,9 @@ return [
 
         'local' => [
             'supervisor-critical' => [
+                'maxProcesses' => 2,
+            ],
+            'supervisor-webhooks' => [
                 'maxProcesses' => 2,
             ],
             'supervisor-high' => [
