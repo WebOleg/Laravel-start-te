@@ -1,0 +1,41 @@
+# Tether MinIO Docker Compose
+# THR-174: Deploy MinIO for S3 storage (instead of Ceph)
+
+version: '3.8'
+
+services:
+  minio:
+    image: minio/minio:latest
+    container_name: tether-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    volumes:
+      - minio-data:/data
+    ports:
+      - "127.0.0.1:9000:9000"   # S3 API (private)
+      - "127.0.0.1:9001:9001"   # Console (private)
+    networks:
+      - tether-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G
+
+volumes:
+  minio-data:
+
+networks:
+  tether-network:
+    external: true

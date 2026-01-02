@@ -1,0 +1,38 @@
+# Tether Redis Docker Compose
+# THR-173: Deploy Redis cluster
+
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: tether-redis
+    restart: unless-stopped
+    command: redis-server /usr/local/etc/redis/redis.conf
+    volumes:
+      - ./redis.conf:/usr/local/etc/redis/redis.conf:ro
+      - redis-data:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    networks:
+      - tether-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G
+
+volumes:
+  redis-data:
+
+networks:
+  tether-network:
+    external: true

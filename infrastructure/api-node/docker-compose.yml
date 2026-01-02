@@ -1,0 +1,61 @@
+# Tether API Node Docker Compose
+# THR-171: Provision API nodes
+
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: ../../
+      dockerfile: infrastructure/api-node/Dockerfile
+    container_name: tether-api
+    restart: unless-stopped
+    environment:
+      - APP_ENV=production
+      - APP_DEBUG=false
+      - DB_CONNECTION=pgsql
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_DATABASE=tether
+      - DB_USERNAME=${DB_USERNAME}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - CACHE_DRIVER=redis
+      - SESSION_DRIVER=redis
+      - QUEUE_CONNECTION=redis
+      - FILESYSTEM_DISK=s3
+      - AWS_ENDPOINT=${MINIO_ENDPOINT}
+      - AWS_ACCESS_KEY_ID=${MINIO_ACCESS_KEY}
+      - AWS_SECRET_ACCESS_KEY=${MINIO_SECRET_KEY}
+      - AWS_BUCKET=${MINIO_BUCKET}
+      - AWS_USE_PATH_STYLE_ENDPOINT=true
+    volumes:
+      - app-storage:/var/www/html/storage
+      - php-logs:/var/log/php
+      - nginx-logs:/var/log/nginx
+    networks:
+      - tether-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G
+
+volumes:
+  app-storage:
+  php-logs:
+  nginx-logs:
+
+networks:
+  tether-network:
+    external: true
