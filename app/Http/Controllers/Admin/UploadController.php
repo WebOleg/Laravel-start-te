@@ -12,6 +12,7 @@ use App\Models\BillingAttempt;
 use App\Services\FileUploadService;
 use App\Services\FilePreValidationService;
 use App\Services\DebtorValidationService;
+use App\Jobs\ProcessValidationJob;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Http\JsonResponse;
@@ -169,6 +170,10 @@ class UploadController extends Controller
         return DebtorResource::collection($debtors);
     }
 
+    /**
+     * Start async validation for all debtors in upload.
+     * Returns 202 Accepted immediately, validation runs in background.
+     */
     public function validate(Upload $upload): JsonResponse
     {
         if ($upload->status === Upload::STATUS_PROCESSING) {
@@ -177,16 +182,12 @@ class UploadController extends Controller
             ], 422);
         }
 
-        $stats = $this->validationService->validateUpload($upload);
+        ProcessValidationJob::dispatch($upload);
 
         return response()->json([
-            'message' => 'Validation completed',
-            'data' => [
-                'total' => $stats['total'],
-                'valid' => $stats['valid'],
-                'invalid' => $stats['invalid'],
-            ],
-        ]);
+            'message' => 'Validation started',
+            'status' => 'processing',
+        ], 202);
     }
 
     public function validationStats(Upload $upload): JsonResponse
