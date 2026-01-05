@@ -7,6 +7,7 @@
  * - critical: Payments, refunds (highest)
  * - webhooks: Webhook notifications (high priority, isolated processing)
  * - high: VOP verification, alerts
+ * - vop: VOP verification jobs (processed with high priority)
  * - default: File processing, imports
  * - low: Reports, notifications, cleanup
  */
@@ -28,6 +29,7 @@ return [
         'redis:critical' => 30,
         'redis:webhooks' => 30,
         'redis:high' => 60,
+        'redis:vop' => 60,
         'redis:default' => 120,
         'redis:low' => 300,
     ],
@@ -86,7 +88,7 @@ return [
         ],
         'supervisor-high' => [
             'connection' => 'redis',
-            'queue' => ['high'],
+            'queue' => ['high', 'vop'],
             'balance' => 'auto',
             'autoScalingStrategy' => 'time',
             'maxProcesses' => 3,
