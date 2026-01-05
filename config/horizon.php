@@ -1,5 +1,4 @@
 <?php
-
 /**
  * Horizon configuration for Tether fintech platform.
  * 
@@ -8,32 +7,27 @@
  * - webhooks: Webhook notifications (high priority, isolated processing)
  * - high: VOP verification, alerts
  * - vop: VOP verification jobs (processed with high priority)
+ * - billing: EMP billing jobs (processed with high priority)
  * - default: File processing, imports
  * - low: Reports, notifications, cleanup
  */
-
 use Illuminate\Support\Str;
 
 return [
-
     'domain' => env('HORIZON_DOMAIN'),
     'path' => 'horizon',
-
     'use' => 'default',
-
     'prefix' => env('HORIZON_PREFIX', Str::slug(env('APP_NAME', 'laravel'), '_').'_horizon:'),
-
     'middleware' => ['web'],
-
     'waits' => [
         'redis:critical' => 30,
         'redis:webhooks' => 30,
         'redis:high' => 60,
         'redis:vop' => 60,
+        'redis:billing' => 60,
         'redis:default' => 120,
         'redis:low' => 300,
     ],
-
     'trim' => [
         'recent' => 60,
         'pending' => 60,
@@ -42,22 +36,17 @@ return [
         'failed' => 10080,
         'monitored' => 10080,
     ],
-
     'silenced' => [
         // App\Jobs\ExampleJob::class,
     ],
-
     'metrics' => [
         'trim_snapshots' => [
             'job' => 24,
             'queue' => 24,
         ],
     ],
-
     'fast_termination' => false,
-
     'memory_limit' => 128,
-
     'defaults' => [
         'supervisor-critical' => [
             'connection' => 'redis',
@@ -88,7 +77,7 @@ return [
         ],
         'supervisor-high' => [
             'connection' => 'redis',
-            'queue' => ['high', 'vop'],
+            'queue' => ['high', 'vop', 'billing'],
             'balance' => 'auto',
             'autoScalingStrategy' => 'time',
             'maxProcesses' => 3,
@@ -126,7 +115,6 @@ return [
             'nice' => 5,
         ],
     ],
-
     'environments' => [
         'production' => [
             'supervisor-critical' => [
@@ -155,7 +143,6 @@ return [
                 'balanceCooldown' => 5,
             ],
         ],
-
         'local' => [
             'supervisor-critical' => [
                 'maxProcesses' => 2,
