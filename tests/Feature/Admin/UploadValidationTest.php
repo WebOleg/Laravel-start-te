@@ -9,7 +9,9 @@ namespace Tests\Feature\Admin;
 use App\Models\Debtor;
 use App\Models\Upload;
 use App\Models\User;
+use App\Jobs\ProcessValidationJob;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
 class UploadValidationTest extends TestCase
@@ -94,8 +96,33 @@ class UploadValidationTest extends TestCase
             ->assertJsonPath('data.0.first_name', 'Hans');
     }
 
+    public function test_validate_endpoint_dispatches_validation_job(): void
+    {
+        Queue::fake();
+
+        $upload = Upload::factory()->create(['status' => Upload::STATUS_COMPLETED]);
+        Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'iban' => 'DE89370400440532013000',
+            'first_name' => 'Hans',
+            'last_name' => 'Mueller',
+            'amount' => 100,
+            'validation_status' => Debtor::VALIDATION_PENDING,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->postJson('/api/admin/uploads/' . $upload->id . '/validate');
+
+        $response->assertStatus(202)
+            ->assertJsonPath('message', 'Validation started')
+            ->assertJsonPath('status', 'processing');
+
+        Queue::assertPushed(ProcessValidationJob::class);
+    }
+
     public function test_validate_endpoint_validates_all_debtors(): void
     {
+        // Don't fake queue - execute jobs synchronously
         $upload = Upload::factory()->create(['status' => Upload::STATUS_COMPLETED]);
         Debtor::factory()->create([
             'upload_id' => $upload->id,
@@ -117,10 +144,19 @@ class UploadValidationTest extends TestCase
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
             ->postJson('/api/admin/uploads/' . $upload->id . '/validate');
 
-        $response->assertStatus(200)
-            ->assertJsonPath('data.total', 2)
-            ->assertJsonPath('data.valid', 1)
-            ->assertJsonPath('data.invalid', 1);
+        $response->assertStatus(202);
+
+        // Check debtors were validated (job runs synchronously in tests)
+        $this->assertDatabaseHas('debtors', [
+            'upload_id' => $upload->id,
+            'first_name' => 'Hans',
+            'validation_status' => Debtor::VALIDATION_VALID,
+        ]);
+        $this->assertDatabaseHas('debtors', [
+            'upload_id' => $upload->id,
+            'first_name' => 'Peter',
+            'validation_status' => Debtor::VALIDATION_INVALID,
+        ]);
     }
 
     public function test_validate_endpoint_rejects_processing_upload(): void
