@@ -150,11 +150,11 @@ class ReconciliationController extends Controller
             ], 409);
         }
 
-        $maxAgeHours = $validated['max_age_hours'] ?? 24;
+        $maxAgeHours = $validated['max_age_hours'] ?? 720;
         $limit = $validated['limit'] ?? 1000;
 
         $eligible = BillingAttempt::query()->needsReconciliation()
-            ->where('created_at', '<', now()->subHours($maxAgeHours))
+            ->where('created_at', '>', now()->subHours($maxAgeHours))
             ->count();
 
         if ($eligible === 0) {
