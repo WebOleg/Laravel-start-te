@@ -63,20 +63,27 @@ class ProcessReconciliationJob implements ShouldQueue
         }
 
         $chunks = array_chunk($attemptIds, self::CHUNK_SIZE);
-
         $jobs = array_map(
             fn($chunk) => new ProcessReconciliationChunkJob($chunk),
             $chunks
         );
 
+        // Extract values for closure (avoid $this serialization)
+        $type = $this->type;
+        $uploadId = $this->uploadId;
+
         Bus::batch($jobs)
             ->name("Reconciliation: {$this->type}")
             ->onQueue('reconciliation')
-            ->finally(function () {
-                $this->clearCacheLock();
+            ->finally(function () use ($type, $uploadId) {
+                if ($type === 'upload' && $uploadId) {
+                    Cache::forget("reconciliation_upload_{$uploadId}");
+                } else {
+                    Cache::forget('reconciliation_bulk');
+                }
                 Log::info('Reconciliation batch completed', [
-                    'type' => $this->type,
-                    'upload_id' => $this->uploadId,
+                    'type' => $type,
+                    'upload_id' => $uploadId,
                 ]);
             })
             ->dispatch();
