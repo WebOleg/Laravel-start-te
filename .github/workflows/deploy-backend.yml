@@ -1,0 +1,130 @@
+name: Deploy Backend
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Deploy target'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - api-nodes
+          - worker
+
+jobs:
+  deploy-node-1:
+    if: ${{ github.event.inputs.target == 'all' || github.event.inputs.target == 'api-nodes' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to Node 1
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.API_NODE_1_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /opt/tether-laravel
+            
+            # Maintenance mode
+            docker exec tether_app php artisan down --message="Updating..." --retry=60
+            
+            # Pull latest code
+            git pull origin main
+            
+            # Rebuild container if needed
+            docker compose build app
+            docker compose up -d app
+            
+            # Wait for container
+            sleep 5
+            
+            # Install dependencies & run migrations
+            docker exec tether_app composer install --no-dev --optimize-autoloader
+            docker exec tether_app php artisan migrate --force
+            docker exec tether_app php artisan config:cache
+            docker exec tether_app php artisan route:cache
+            docker exec tether_app php artisan view:cache
+            
+            # Back online
+            docker exec tether_app php artisan up
+
+      - name: Health check Node 1
+        run: |
+          sleep 5
+          curl -f http://${{ secrets.API_NODE_1_HOST }}/health || exit 1
+
+  deploy-node-2:
+    if: ${{ github.event.inputs.target == 'all' || github.event.inputs.target == 'api-nodes' }}
+    needs: deploy-node-1
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to Node 2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.API_NODE_2_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /opt/tether-laravel
+            
+            # Maintenance mode
+            docker exec tether_app php artisan down --message="Updating..." --retry=60
+            
+            # Pull latest code
+            git pull origin main
+            
+            # Rebuild container if needed
+            docker compose build app
+            docker compose up -d app
+            
+            # Wait for container
+            sleep 5
+            
+            # Install dependencies (NO migrations - already done on Node 1)
+            docker exec tether_app composer install --no-dev --optimize-autoloader
+            docker exec tether_app php artisan config:cache
+            docker exec tether_app php artisan route:cache
+            docker exec tether_app php artisan view:cache
+            
+            # Back online
+            docker exec tether_app php artisan up
+
+      - name: Health check Node 2
+        run: |
+          sleep 5
+          curl -f http://${{ secrets.API_NODE_2_HOST }}/health || exit 1
+
+  deploy-worker:
+    if: ${{ github.event.inputs.target == 'all' || github.event.inputs.target == 'worker' }}
+    needs: [deploy-node-1, deploy-node-2]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to Worker
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.WORKER_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /opt/tether-laravel
+            
+            # Pull latest code
+            git pull origin main
+            
+            # Rebuild container
+            docker compose build app
+            docker compose up -d app
+            
+            # Wait for container
+            sleep 5
+            
+            # Install dependencies
+            docker exec tether_app composer install --no-dev --optimize-autoloader
+            docker exec tether_app php artisan config:cache
+            
+            # Restart Horizon (graceful)
+            docker exec tether_app php artisan horizon:terminate
+            
+            # Horizon auto-restarts via supervisor inside container
