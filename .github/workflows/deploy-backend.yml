@@ -27,11 +27,11 @@ jobs:
           script: |
             cd /opt/tether-laravel
             sudo -u deploy git pull origin main
-            sudo -u deploy composer install --no-dev --optimize-autoloader
-            php artisan migrate --force
-            php artisan config:cache
-            php artisan route:cache
-            php artisan view:cache
+            docker exec tether_app composer install --no-dev --optimize-autoloader
+            docker exec tether_app php artisan migrate --force
+            docker exec tether_app php artisan config:cache
+            docker exec tether_app php artisan route:cache
+            docker exec tether_app php artisan view:cache
             echo "Node 1 deployed!"
 
   deploy-node-2:
@@ -48,10 +48,10 @@ jobs:
           script: |
             cd /opt/tether-laravel
             sudo -u deploy git pull origin main
-            sudo -u deploy composer install --no-dev --optimize-autoloader
-            php artisan config:cache
-            php artisan route:cache
-            php artisan view:cache
+            docker exec tether_app composer install --no-dev --optimize-autoloader
+            docker exec tether_app php artisan config:cache
+            docker exec tether_app php artisan route:cache
+            docker exec tether_app php artisan view:cache
             echo "Node 2 deployed!"
 
   deploy-worker:
@@ -68,7 +68,7 @@ jobs:
           script: |
             cd /opt/tether-laravel
             sudo -u deploy git pull origin main
-            sudo -u deploy composer install --no-dev --optimize-autoloader
-            php artisan config:cache
-            php artisan horizon:terminate
+            docker exec tether_app composer install --no-dev --optimize-autoloader
+            docker exec tether_app php artisan config:cache
+            docker exec tether_horizon php artisan horizon:terminate
             echo "Worker deployed!"
