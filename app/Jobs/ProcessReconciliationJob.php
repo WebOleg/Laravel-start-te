@@ -46,7 +46,7 @@ class ProcessReconciliationJob implements ShouldQueue
         if ($this->type === 'upload' && $this->uploadId) {
             $query->where('upload_id', $this->uploadId);
         } else {
-            $query->where('created_at', '<', now()->subHours($this->maxAgeHours));
+            $query->where('created_at', '>', now()->subHours($this->maxAgeHours));
         }
 
         $attemptIds = $query
