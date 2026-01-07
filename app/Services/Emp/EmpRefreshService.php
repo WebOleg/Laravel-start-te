@@ -19,8 +19,8 @@ class EmpRefreshService
     private EmpClient $client;
     
     public const PER_PAGE = 100;
-    public const CHUNK_SIZE = 50; // Process in smaller chunks for memory
-    public const RATE_LIMIT_DELAY_MS = 100; // 10 requests/second to EMP
+    public const CHUNK_SIZE = 50;
+    public const RATE_LIMIT_DELAY_MS = 100;
 
     public function __construct(EmpClient $client)
     {
@@ -29,9 +29,6 @@ class EmpRefreshService
 
     /**
      * Fetch a single page of transactions from EMP.
-     * Used by chunk jobs.
-     *
-     * @return array{transactions: array, has_more: bool}
      */
     public function fetchPage(string $startDate, string $endDate, int $page): array
     {
@@ -50,6 +47,12 @@ class EmpRefreshService
         $transactions = $this->extractTransactions($response);
         $hasMore = count($transactions) >= self::PER_PAGE;
 
+        Log::debug('EMP Refresh: fetchPage', [
+            'page' => $page,
+            'transactions_count' => count($transactions),
+            'has_more' => $hasMore,
+        ]);
+
         return [
             'transactions' => $transactions,
             'has_more' => $hasMore,
@@ -59,16 +62,11 @@ class EmpRefreshService
 
     /**
      * Process a batch of transactions (upsert).
-     * Used by chunk jobs.
-     *
-     * @param array $transactions
-     * @return array{inserted: int, updated: int, errors: int}
      */
     public function processTransactions(array $transactions): array
     {
         $stats = ['inserted' => 0, 'updated' => 0, 'errors' => 0];
 
-        // Process in smaller chunks for memory efficiency
         $chunks = array_chunk($transactions, self::CHUNK_SIZE);
 
         foreach ($chunks as $chunk) {
@@ -85,7 +83,6 @@ class EmpRefreshService
                 $stats['errors'] += count($chunk);
             }
 
-            // Rate limiting - prevent memory issues
             usleep(self::RATE_LIMIT_DELAY_MS * 1000);
         }
 
@@ -94,7 +91,6 @@ class EmpRefreshService
 
     /**
      * Get total pages estimate for a date range.
-     * Fetches first page to determine if there's more data.
      */
     public function estimatePages(string $startDate, string $endDate): array
     {
@@ -109,30 +105,47 @@ class EmpRefreshService
 
     /**
      * Extract transactions array from API response.
+     * Handles multiple EMP response formats.
      */
     private function extractTransactions(array $response): array
     {
-        // Response structure may vary - handle both single and multiple transactions
-        if (isset($response['payment_transaction'])) {
-            $tx = $response['payment_transaction'];
-            // Check if it's a single transaction or array of transactions
+        // Format 1: payment_response (single or multiple)
+        if (isset($response['payment_response'])) {
+            $tx = $response['payment_response'];
             if (isset($tx['unique_id'])) {
                 return [$tx]; // Single transaction
             }
             return array_values($tx); // Array of transactions
         }
 
+        // Format 2: payment_transaction (single or multiple)
+        if (isset($response['payment_transaction'])) {
+            $tx = $response['payment_transaction'];
+            if (isset($tx['unique_id'])) {
+                return [$tx]; // Single transaction
+            }
+            return array_values($tx); // Array of transactions
+        }
+
+        // Format 3: payment_transactions (array)
         if (isset($response['payment_transactions'])) {
             return array_values($response['payment_transactions']);
         }
+
+        // Format 4: payment_responses (array)
+        if (isset($response['payment_responses'])) {
+            return array_values($response['payment_responses']);
+        }
+
+        Log::warning('EMP Refresh: unknown response format', [
+            'keys' => array_keys($response),
+        ]);
 
         return [];
     }
 
     /**
      * Upsert a single transaction.
-     *
-     * @return string 'inserted' | 'updated' | 'errors'
      */
     private function upsertTransaction(array $tx): string
     {
@@ -145,28 +158,27 @@ class EmpRefreshService
                 return 'errors';
             }
 
-            // Try to find existing record by unique_id first (primary key for upsert)
+            // Try to find existing record by unique_id first
             $existing = BillingAttempt::where('unique_id', $uniqueId)->first();
             
             if (!$existing && $transactionId) {
-                // Try by our transaction_id (tether_*)
+                // Try by our transaction_id
                 $existing = BillingAttempt::where('transaction_id', $transactionId)->first();
             }
 
             $data = $this->mapTransactionData($tx);
 
             if ($existing) {
-                // Update existing record (only if status changed or new data)
                 $existing->update($data);
+                Log::debug('EMP Refresh: updated', ['unique_id' => $uniqueId]);
                 return 'updated';
             }
 
-            // Try to find debtor by transaction_id pattern (tether_{debtor_id}_...)
+            // Try to find debtor by transaction_id pattern
             $debtorId = $this->extractDebtorId($transactionId);
             $debtor = $debtorId ? Debtor::find($debtorId) : null;
 
             if (!$debtor) {
-                // Orphan transaction - log but still create
                 Log::info('EMP Refresh: orphan transaction', [
                     'unique_id' => $uniqueId,
                     'transaction_id' => $transactionId,
@@ -180,6 +192,8 @@ class EmpRefreshService
                 'transaction_id' => $transactionId ?? 'emp_import_' . $uniqueId,
                 'attempt_number' => 1,
             ]));
+
+            Log::debug('EMP Refresh: inserted', ['unique_id' => $uniqueId]);
 
             // Update debtor status if approved
             if ($debtor && $data['status'] === BillingAttempt::STATUS_APPROVED) {
@@ -203,7 +217,7 @@ class EmpRefreshService
     private function mapTransactionData(array $tx): array
     {
         $status = $this->mapStatus($tx['status'] ?? 'unknown');
-        $amount = isset($tx['amount']) ? ((float) $tx['amount']) / 100 : 0; // Convert from cents
+        $amount = isset($tx['amount']) ? ((float) $tx['amount']) / 100 : 0;
 
         return [
             'unique_id' => $tx['unique_id'] ?? null,
@@ -236,7 +250,7 @@ class EmpRefreshService
     }
 
     /**
-     * Extract debtor ID from transaction_id pattern (tether_{id}_...).
+     * Extract debtor ID from transaction_id pattern.
      */
     private function extractDebtorId(?string $transactionId): ?int
     {
