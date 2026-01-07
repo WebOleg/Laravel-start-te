@@ -170,7 +170,7 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
             return;
         }
 
-        $billingAttempt = BillingAttempt::where('transaction_id', $uniqueId)->first();
+        $billingAttempt = BillingAttempt::where('unique_id', $uniqueId)->first();
 
         if (!$billingAttempt) {
             Log::info('Transaction notification for unknown tx', ['unique_id' => $uniqueId]);

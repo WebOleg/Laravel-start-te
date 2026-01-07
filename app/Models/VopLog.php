@@ -9,6 +9,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class VopLog extends Model
 {
@@ -57,6 +58,16 @@ class VopLog extends Model
     public function upload(): BelongsTo
     {
         return $this->belongsTo(Upload::class);
+    }
+
+    /**
+     * Get bank reference by BIC.
+     *
+     * @return HasOne<BankReference>
+     */
+    public function bankReference(): HasOne
+    {
+        return $this->hasOne(BankReference::class, 'bic', 'bic');
     }
 
     public function isVerified(): bool

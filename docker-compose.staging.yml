@@ -11,10 +11,7 @@ services:
       - ./storage:/var/www/storage
     networks:
       - tether_network
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     depends_on:
-      - db
       - redis
 
   queue:
@@ -30,8 +27,6 @@ services:
       - ./storage:/var/www/storage
     networks:
       - tether_network
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     depends_on:
       - app
       - redis
@@ -49,21 +44,6 @@ services:
       - tether_network
     depends_on:
       - app
-
-  db:
-    image: postgres:15-alpine
-    container_name: tether_db
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: ${DB_DATABASE:-tether}
-      POSTGRES_USER: ${DB_USERNAME:-tether}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-secret}
-    volumes:
-      - tether_db_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-    networks:
-      - tether_network
 
   redis:
     image: redis:7-alpine
@@ -87,5 +67,4 @@ networks:
     driver: bridge
 
 volumes:
-  tether_db_data:
   tether_redis_data:

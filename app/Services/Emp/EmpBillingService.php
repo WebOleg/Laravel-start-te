@@ -296,6 +296,7 @@ class EmpBillingService
             'technical_message' => $response['technical_message'] ?? null,
             'response_payload' => $response,
             'processed_at' => now(),
+            'emp_created_at' => isset($response['timestamp']) ? \Carbon\Carbon::parse($response['timestamp']) : null,
             'meta' => array_merge($billingAttempt->meta ?? [], [
                 'redirect_url' => $response['redirect_url'] ?? null,
                 'descriptor' => $response['descriptor'] ?? null,
@@ -338,6 +339,7 @@ class EmpBillingService
             'declined' => BillingAttempt::STATUS_DECLINED,
             'error' => BillingAttempt::STATUS_ERROR,
             'voided' => BillingAttempt::STATUS_VOIDED,
+            'chargebacked', 'chargeback' => BillingAttempt::STATUS_CHARGEBACKED,
             'pending', 'pending_async' => BillingAttempt::STATUS_PENDING,
             default => BillingAttempt::STATUS_ERROR,
         };
