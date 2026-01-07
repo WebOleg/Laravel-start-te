@@ -134,6 +134,7 @@ class EmpBillingServiceTest extends TestCase
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
             'status' => BillingAttempt::STATUS_PENDING,
+            'unique_id' => 'pending_attempt_' . uniqid(),
         ]);
 
         $this->assertFalse($this->service->canBill($debtor));
@@ -154,6 +155,7 @@ class EmpBillingServiceTest extends TestCase
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
             'status' => BillingAttempt::STATUS_APPROVED,
+            'unique_id' => 'approved_attempt_' . uniqid(),
         ]);
 
         $this->assertFalse($this->service->canBill($debtor));
@@ -170,12 +172,17 @@ class EmpBillingServiceTest extends TestCase
             'iban' => 'DE89370400440532013000',
         ]);
 
+        // Each call returns a different unique_id
+        $callCount = 0;
         $this->mockClient->shouldReceive('sddSale')
             ->times(3)
-            ->andReturn([
-                'status' => 'approved',
-                'unique_id' => 'batch_' . uniqid(),
-            ]);
+            ->andReturnUsing(function () use (&$callCount) {
+                $callCount++;
+                return [
+                    'status' => 'approved',
+                    'unique_id' => 'batch_' . $callCount . '_' . uniqid(),
+                ];
+            });
 
         $result = $this->service->billBatch($debtors);
 
@@ -209,7 +216,7 @@ class EmpBillingServiceTest extends TestCase
             ->once()
             ->andReturn([
                 'status' => 'approved',
-                'unique_id' => 'valid_123',
+                'unique_id' => 'valid_123_' . uniqid(),
             ]);
 
         $result = $this->service->billBatch($debtors);
@@ -234,13 +241,14 @@ class EmpBillingServiceTest extends TestCase
             'upload_id' => $upload->id,
             'status' => BillingAttempt::STATUS_DECLINED,
             'attempt_number' => 1,
+            'unique_id' => 'failed_attempt_' . uniqid(),
         ]);
 
         $this->mockClient->shouldReceive('sddSale')
             ->once()
             ->andReturn([
                 'status' => 'approved',
-                'unique_id' => 'retry_success',
+                'unique_id' => 'retry_success_' . uniqid(),
             ]);
 
         $result = $this->service->retry($failedAttempt);
@@ -254,19 +262,20 @@ class EmpBillingServiceTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
         
+        $uniqueId = 'reconcile_' . uniqid();
         $billingAttempt = BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
-            'unique_id' => 'reconcile_123',
+            'unique_id' => $uniqueId,
             'status' => BillingAttempt::STATUS_PENDING,
         ]);
 
         $this->mockClient->shouldReceive('reconcile')
-            ->with('reconcile_123')
+            ->with($uniqueId)
             ->once()
             ->andReturn([
                 'status' => 'approved',
-                'unique_id' => 'reconcile_123',
+                'unique_id' => $uniqueId,
             ]);
 
         $result = $this->service->reconcile($billingAttempt);
