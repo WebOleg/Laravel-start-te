@@ -62,6 +62,36 @@ class EmpClient
     }
 
     /**
+     * Get transactions by date range (for EMP Refresh).
+     *
+     * @param string $startDate Y-m-d format
+     * @param string $endDate Y-m-d format
+     * @param int $page Page number (1-based)
+     * @param int $perPage Items per page
+     * @return array
+     */
+    public function getTransactionsByDate(string $startDate, string $endDate, int $page = 1, int $perPage = 100): array
+    {
+        $xml = $this->buildGetByDateXml($startDate, $endDate, $page, $perPage);
+        
+        return $this->sendRequest('/reconcile/by_date/' . $this->terminalToken, $xml);
+    }
+
+    /**
+     * Build XML for get transactions by date request.
+     */
+    private function buildGetByDateXml(string $startDate, string $endDate, int $page, int $perPage): string
+    {
+        $xml = new \SimpleXMLElement('<?xml version="1.0" encoding="UTF-8"?><reconcile/>');
+        $xml->addChild('start_date', $startDate);
+        $xml->addChild('end_date', $endDate);
+        $xml->addChild('page', $page);
+        $xml->addChild('per_page', $perPage);
+        
+        return $xml->asXML();
+    }
+
+    /**
      * Build XML for SDD Sale transaction.
      */
     private function buildSddSaleXml(array $data): string

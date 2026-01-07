@@ -62,3 +62,10 @@ Route::middleware('auth:sanctum')->group(function () {
 Route::prefix('webhooks')->group(function () {
     Route::post('/emp', [\App\Http\Controllers\Webhook\EmpWebhookController::class, 'handle']);
 });
+
+// EMP Refresh routes
+Route::middleware(['auth:sanctum', 'admin'])->prefix('admin/emp')->group(function () {
+    Route::post('/refresh', [App\Http\Controllers\Admin\EmpRefreshController::class, 'refresh']);
+    Route::get('/refresh/status', [App\Http\Controllers\Admin\EmpRefreshController::class, 'currentStatus']);
+    Route::get('/refresh/{jobId}', [App\Http\Controllers\Admin\EmpRefreshController::class, 'status']);
+});
