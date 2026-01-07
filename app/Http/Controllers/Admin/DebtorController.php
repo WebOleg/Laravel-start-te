@@ -46,32 +46,33 @@ class DebtorController extends Controller
 
     public function index(Request $request): AnonymousResourceCollection
     {
-        $query = Debtor::with(['upload', 'latestVopLog', 'latestBillingAttempt'])
-                    ->leftJoin('vop_logs', 'vop_logs.debtor_id', '=', 'debtors.id')
-                    ->leftJoin('bank_references', 'bank_references.bic', '=', 'vop_logs.bic')
-                    ->selectRaw('debtors.*, bank_references.bank_name AS bank_name_reference, bank_references.country_iso AS bank_country_iso_reference');
+        $query = Debtor::with([
+            'upload',
+            'latestVopLog.bankReference',
+            'latestBillingAttempt',
+        ]);
 
         if ($request->has('upload_id')) {
-            $query->where('debtors.upload_id', $request->input('upload_id'));
+            $query->where('upload_id', $request->input('upload_id'));
         }
 
         if ($request->has('status')) {
-            $query->where('debtors.status', $request->input('status'));
+            $query->where('status', $request->input('status'));
         }
 
         if ($request->has('validation_status')) {
-            $query->where('debtors.validation_status', $request->input('validation_status'));
+            $query->where('validation_status', $request->input('validation_status'));
         }
 
         if ($request->has('country')) {
-            $query->where('debtors.country', $request->input('country'));
+            $query->where('country', $request->input('country'));
         }
 
         if ($request->has('risk_class')) {
-            $query->where('debtors.risk_class', $request->input('risk_class'));
+            $query->where('risk_class', $request->input('risk_class'));
         }
 
-        $debtors = $query->latest('debtors.created_at')->paginate($request->input('per_page', 20));
+        $debtors = $query->latest('created_at')->paginate($request->input('per_page', 50));
 
         return DebtorResource::collection($debtors);
     }
@@ -80,9 +81,9 @@ class DebtorController extends Controller
     {
         $debtor->load([
             'upload',
-            'vopLogs',
+            'vopLogs.bankReference',
             'billingAttempts',
-            'latestVopLog',
+            'latestVopLog.bankReference',
             'latestBillingAttempt',
         ]);
 
@@ -113,7 +114,7 @@ class DebtorController extends Controller
         $debtor->save();
 
         $this->validationService->validateAndUpdate($debtor);
-        $debtor->load(['upload', 'latestVopLog', 'latestBillingAttempt']);
+        $debtor->load(['upload', 'latestVopLog.bankReference', 'latestBillingAttempt']);
 
         return new DebtorResource($debtor);
     }
