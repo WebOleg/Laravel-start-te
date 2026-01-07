@@ -1,20 +1,18 @@
 <?php
 
 /**
- * Main job for EMP Refresh - dispatches chunk jobs.
- * Uses Laravel Bus::batch for parallel processing with progress tracking.
+ * Main job for EMP Refresh - processes pages directly.
+ * Simplified approach without batch for reliability.
  */
 
 namespace App\Jobs;
 
 use App\Services\Emp\EmpRefreshService;
 use Illuminate\Bus\Queueable;
-use Illuminate\Bus\Batch;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
@@ -22,11 +20,10 @@ class EmpRefreshByDateJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    public int $timeout = 300; // 5 min for setup
+    public int $timeout = 1800; // 30 min max
     public int $tries = 1;
 
-    public const MAX_PAGES = 1000; // Safety limit
-    public const PAGES_PER_CHUNK = 5; // Pages per chunk job
+    public const MAX_PAGES = 100; // Safety limit
 
     public function __construct(
         public string $startDate,
@@ -42,9 +39,10 @@ class EmpRefreshByDateJob implements ShouldQueue
 
         try {
             Cache::put($cacheKey, [
-                'status' => 'initializing',
+                'status' => 'processing',
                 'started_at' => now()->toIso8601String(),
                 'progress' => 0,
+                'stats' => ['inserted' => 0, 'updated' => 0, 'errors' => 0, 'total' => 0],
             ], 7200);
 
             Log::info('EmpRefreshByDateJob: starting', [
@@ -53,66 +51,71 @@ class EmpRefreshByDateJob implements ShouldQueue
                 'end_date' => $this->endDate,
             ]);
 
-            // Estimate total pages by fetching first page
-            $estimate = $service->estimatePages($this->startDate, $this->endDate);
-
-            if ($estimate['error']) {
-                throw new \RuntimeException('Failed to fetch first page from EMP');
-            }
-
-            if ($estimate['first_page_count'] === 0) {
-                Cache::put($cacheKey, [
-                    'status' => 'completed',
-                    'completed_at' => now()->toIso8601String(),
-                    'stats' => ['inserted' => 0, 'updated' => 0, 'errors' => 0, 'total' => 0],
-                    'message' => 'No transactions found for date range',
-                ], 7200);
-                Cache::forget('emp_refresh_active');
-                return;
-            }
-
-            // Create chunk jobs
-            $jobs = [];
+            $totalStats = ['inserted' => 0, 'updated' => 0, 'errors' => 0, 'total' => 0];
             $page = 1;
+            $hasMore = true;
 
-            // We'll create jobs for pages we know exist, plus some buffer
-            $estimatedPages = $estimate['has_more'] ? self::MAX_PAGES : 1;
+            while ($hasMore && $page <= self::MAX_PAGES) {
+                // Fetch page
+                $result = $service->fetchPage($this->startDate, $this->endDate, $page);
 
-            while ($page <= $estimatedPages) {
-                $endPage = min($page + self::PAGES_PER_CHUNK - 1, $estimatedPages);
+                if ($result['error']) {
+                    Log::error('EmpRefreshByDateJob: fetch error', ['page' => $page]);
+                    $totalStats['errors']++;
+                    break;
+                }
+
+                $transactions = $result['transactions'];
+                $hasMore = $result['has_more'];
+
+                if (empty($transactions)) {
+                    break;
+                }
+
+                // Process transactions
+                $pageStats = $service->processTransactions($transactions);
                 
-                $jobs[] = new EmpRefreshChunkJob(
-                    $this->startDate,
-                    $this->endDate,
-                    $page,
-                    $endPage,
-                    $this->jobId
-                );
+                $totalStats['inserted'] += $pageStats['inserted'];
+                $totalStats['updated'] += $pageStats['updated'];
+                $totalStats['errors'] += $pageStats['errors'];
+                $totalStats['total'] += count($transactions);
 
-                $page = $endPage + 1;
+                // Update progress
+                $progress = $hasMore ? min(95, $page * 10) : 100;
+                Cache::put($cacheKey, [
+                    'status' => 'processing',
+                    'started_at' => now()->toIso8601String(),
+                    'progress' => $progress,
+                    'stats' => $totalStats,
+                    'current_page' => $page,
+                ], 7200);
+
+                Log::info('EmpRefreshByDateJob: page processed', [
+                    'job_id' => $this->jobId,
+                    'page' => $page,
+                    'transactions' => count($transactions),
+                    'stats' => $pageStats,
+                ]);
+
+                $page++;
+
+                // Rate limit between pages
+                usleep(200000); // 200ms
             }
 
+            // Mark completed
             Cache::put($cacheKey, [
-                'status' => 'processing',
-                'started_at' => now()->toIso8601String(),
-                'total_chunks' => count($jobs),
-                'processed_chunks' => 0,
-                'stats' => ['inserted' => 0, 'updated' => 0, 'errors' => 0, 'total' => 0],
+                'status' => 'completed',
+                'completed_at' => now()->toIso8601String(),
+                'progress' => 100,
+                'stats' => $totalStats,
             ], 7200);
 
-            // Dispatch batch
-            Bus::batch($jobs)
-                ->name("EMP Refresh {$this->startDate} to {$this->endDate}")
-                ->allowFailures()
-                ->finally(function (Batch $batch) use ($cacheKey) {
-                    $this->finalizeBatch($batch, $cacheKey);
-                })
-                ->onQueue('emp-refresh')
-                ->dispatch();
+            Cache::forget('emp_refresh_active');
 
-            Log::info('EmpRefreshByDateJob: batch dispatched', [
+            Log::info('EmpRefreshByDateJob: completed', [
                 'job_id' => $this->jobId,
-                'chunks' => count($jobs),
+                'stats' => $totalStats,
             ]);
 
         } catch (\Exception $e) {
@@ -131,28 +134,5 @@ class EmpRefreshByDateJob implements ShouldQueue
 
             throw $e;
         }
-    }
-
-    private function finalizeBatch(Batch $batch, string $cacheKey): void
-    {
-        $current = Cache::get($cacheKey, []);
-        $stats = $current['stats'] ?? ['inserted' => 0, 'updated' => 0, 'errors' => 0, 'total' => 0];
-
-        Cache::put($cacheKey, [
-            'status' => $batch->hasFailures() ? 'completed_with_errors' : 'completed',
-            'completed_at' => now()->toIso8601String(),
-            'stats' => $stats,
-            'batch_id' => $batch->id,
-            'failed_jobs' => $batch->failedJobs,
-        ], 7200);
-
-        // Clear active flag
-        Cache::forget('emp_refresh_active');
-
-        Log::info('EmpRefreshByDateJob: batch completed', [
-            'batch_id' => $batch->id,
-            'stats' => $stats,
-            'failed_jobs' => $batch->failedJobs,
-        ]);
     }
 }
