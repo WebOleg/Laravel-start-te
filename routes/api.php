@@ -13,6 +13,7 @@ use App\Http\Controllers\Admin\ReconciliationController as AdminReconciliationCo
 use App\Http\Controllers\Admin\UploadController as AdminUploadController;
 use App\Http\Controllers\Admin\StatsController as AdminStatsController;
 use App\Http\Controllers\Admin\VopController as AdminVopController;
+use App\Http\Controllers\Admin\EmpRefreshController as AdminEmpRefreshController;
 
 Route::post('/login', [AuthController::class, 'login']);
 
@@ -52,6 +53,13 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('reconciliation/stats', [AdminReconciliationController::class, 'stats']);
         Route::post('reconciliation/bulk', [AdminReconciliationController::class, 'bulk']);
 
+        // EMP Refresh routes
+        Route::prefix('emp')->group(function () {
+            Route::post('/refresh', [AdminEmpRefreshController::class, 'refresh']);
+            Route::get('/refresh/status', [AdminEmpRefreshController::class, 'currentStatus']);
+            Route::get('/refresh/{jobId}', [AdminEmpRefreshController::class, 'status']);
+        });
+
         Route::post('debtors/{debtor}/validate', [AdminDebtorController::class, 'validate']);
         Route::apiResource('debtors', AdminDebtorController::class)->only(['index', 'show', 'update', 'destroy']);
         Route::apiResource('vop-logs', AdminVopLogController::class)->only(['index', 'show']);
@@ -61,11 +69,4 @@ Route::middleware('auth:sanctum')->group(function () {
 
 Route::prefix('webhooks')->group(function () {
     Route::post('/emp', [\App\Http\Controllers\Webhook\EmpWebhookController::class, 'handle']);
-});
-
-// EMP Refresh routes
-Route::middleware(['auth:sanctum', 'admin'])->prefix('admin/emp')->group(function () {
-    Route::post('/refresh', [App\Http\Controllers\Admin\EmpRefreshController::class, 'refresh']);
-    Route::get('/refresh/status', [App\Http\Controllers\Admin\EmpRefreshController::class, 'currentStatus']);
-    Route::get('/refresh/{jobId}', [App\Http\Controllers\Admin\EmpRefreshController::class, 'status']);
 });
