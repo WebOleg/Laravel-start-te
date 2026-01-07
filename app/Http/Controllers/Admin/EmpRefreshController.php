@@ -34,7 +34,8 @@ class EmpRefreshController extends Controller
         
         if ($from->diffInDays($to) > 90) {
             return response()->json([
-                'error' => 'Date range cannot exceed 90 days',
+                'message' => 'Date range cannot exceed 90 days',
+                'data' => null,
             ], 422);
         }
 
@@ -42,9 +43,13 @@ class EmpRefreshController extends Controller
         $existingJob = Cache::get('emp_refresh_active');
         if ($existingJob && $existingJob['status'] === 'processing') {
             return response()->json([
-                'error' => 'Refresh already in progress',
-                'job_id' => $existingJob['job_id'],
-                'started_at' => $existingJob['started_at'],
+                'message' => 'Refresh already in progress',
+                'data' => [
+                    'job_id' => $existingJob['job_id'],
+                    'started_at' => $existingJob['started_at'],
+                    'queued' => false,
+                    'duplicate' => true,
+                ],
             ], 409);
         }
 
@@ -68,9 +73,13 @@ class EmpRefreshController extends Controller
 
         return response()->json([
             'message' => 'Refresh job started',
-            'job_id' => $jobId,
-            'from' => $validated['from'],
-            'to' => $validated['to'],
+            'data' => [
+                'job_id' => $jobId,
+                'from' => $validated['from'],
+                'to' => $validated['to'],
+                'estimated_pages' => 0,
+                'queued' => true,
+            ],
         ], 202);
     }
 
@@ -85,11 +94,27 @@ class EmpRefreshController extends Controller
 
         if (!$status) {
             return response()->json([
-                'error' => 'Job not found',
+                'message' => 'Job not found',
+                'data' => null,
             ], 404);
         }
 
-        return response()->json($status);
+        return response()->json([
+            'data' => [
+                'job_id' => $jobId,
+                'status' => $status['status'] ?? 'unknown',
+                'progress' => $status['progress'] ?? 0,
+                'stats' => $status['stats'] ?? [
+                    'inserted' => 0,
+                    'updated' => 0,
+                    'errors' => 0,
+                    'processed_pages' => 0,
+                    'total_pages' => 0,
+                ],
+                'started_at' => $status['started_at'] ?? null,
+                'completed_at' => $status['completed_at'] ?? null,
+            ],
+        ]);
     }
 
     /**
@@ -103,7 +128,12 @@ class EmpRefreshController extends Controller
 
         if (!$active) {
             return response()->json([
-                'is_processing' => false,
+                'data' => [
+                    'is_processing' => false,
+                    'job_id' => null,
+                    'progress' => 0,
+                    'stats' => null,
+                ],
             ]);
         }
 
@@ -114,19 +144,22 @@ class EmpRefreshController extends Controller
         if ($jobStatus && in_array($jobStatus['status'] ?? '', ['completed', 'completed_with_errors', 'failed'])) {
             Cache::forget('emp_refresh_active');
             return response()->json([
-                'is_processing' => false,
-                'last_job' => array_merge(['job_id' => $active['job_id']], $jobStatus),
+                'data' => [
+                    'is_processing' => false,
+                    'job_id' => $active['job_id'],
+                    'progress' => 100,
+                    'stats' => $jobStatus['stats'] ?? null,
+                ],
             ]);
         }
 
         return response()->json([
-            'is_processing' => true,
-            'job_id' => $active['job_id'],
-            'started_at' => $active['started_at'],
-            'from' => $active['from'] ?? null,
-            'to' => $active['to'] ?? null,
-            'progress' => $jobStatus['progress'] ?? 0,
-            'stats' => $jobStatus['stats'] ?? null,
+            'data' => [
+                'is_processing' => true,
+                'job_id' => $active['job_id'],
+                'progress' => $jobStatus['progress'] ?? 0,
+                'stats' => $jobStatus['stats'] ?? null,
+            ],
         ]);
     }
 }
