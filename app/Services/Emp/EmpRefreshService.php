@@ -68,23 +68,19 @@ class EmpRefreshService
     {
         $stats = ['inserted' => 0, 'updated' => 0, 'errors' => 0];
 
-        $chunks = array_chunk($transactions, self::CHUNK_SIZE);
-
-        foreach ($chunks as $chunk) {
-            DB::beginTransaction();
+        foreach ($transactions as $tx) {
             try {
-                foreach ($chunk as $tx) {
-                    $result = $this->upsertTransaction($tx);
-                    $stats[$result]++;
-                }
-                DB::commit();
+                $result = $this->upsertTransaction($tx);
+                $stats[$result]++;
             } catch (\Exception $e) {
-                DB::rollBack();
-                Log::error('EMP Refresh: chunk failed', ['error' => $e->getMessage()]);
-                $stats['errors'] += count($chunk);
+                Log::error('EMP Refresh: upsert failed', [
+                    'error' => $e->getMessage(),
+                    'unique_id' => $tx['unique_id'] ?? 'unknown',
+                ]);
+                $stats['errors']++;
             }
-
-            usleep(self::RATE_LIMIT_DELAY_MS * 1000);
+            
+            usleep(self::RATE_LIMIT_DELAY_MS * 100);
         }
 
         return $stats;
@@ -170,61 +166,52 @@ class EmpRefreshService
      */
     private function upsertTransaction(array $tx): string
     {
-        try {
-            $uniqueId = $tx['unique_id'] ?? null;
-            $transactionId = $tx['transaction_id'] ?? null;
+        $uniqueId = $tx['unique_id'] ?? null;
+        $transactionId = $tx['transaction_id'] ?? null;
 
-            if (!$uniqueId) {
-                Log::warning('EMP Refresh: transaction without unique_id', ['tx' => $tx]);
-                return 'errors';
-            }
-
-            $existing = BillingAttempt::where('unique_id', $uniqueId)->first();
-            
-            if (!$existing && $transactionId) {
-                $existing = BillingAttempt::where('transaction_id', $transactionId)->first();
-            }
-
-            $data = $this->mapTransactionData($tx);
-
-            if ($existing) {
-                $existing->update($data);
-                Log::debug('EMP Refresh: updated', ['unique_id' => $uniqueId]);
-                return 'updated';
-            }
-
-            $debtorId = $this->extractDebtorId($transactionId);
-            $debtor = $debtorId ? Debtor::find($debtorId) : null;
-
-            if (!$debtor) {
-                Log::info('EMP Refresh: orphan transaction', [
-                    'unique_id' => $uniqueId,
-                    'transaction_id' => $transactionId,
-                ]);
-            }
-
-            BillingAttempt::create(array_merge($data, [
-                'debtor_id' => $debtor?->id,
-                'upload_id' => $debtor?->upload_id,
-                'transaction_id' => $transactionId ?? 'emp_import_' . $uniqueId,
-                'attempt_number' => 1,
-            ]));
-
-            Log::debug('EMP Refresh: inserted', ['unique_id' => $uniqueId]);
-
-            if ($debtor && $data['status'] === BillingAttempt::STATUS_APPROVED) {
-                $debtor->update(['status' => Debtor::STATUS_RECOVERED]);
-            }
-
-            return 'inserted';
-
-        } catch (\Exception $e) {
-            Log::error('EMP Refresh: upsert failed', [
-                'error' => $e->getMessage(),
-                'unique_id' => $tx['unique_id'] ?? 'unknown',
-            ]);
+        if (!$uniqueId) {
+            Log::warning('EMP Refresh: transaction without unique_id', ['tx' => $tx]);
             return 'errors';
         }
+
+        $existing = BillingAttempt::where('unique_id', $uniqueId)->first();
+        
+        if (!$existing && $transactionId) {
+            $existing = BillingAttempt::where('transaction_id', $transactionId)->first();
+        }
+
+        $data = $this->mapTransactionData($tx);
+
+        if ($existing) {
+            $existing->update($data);
+            Log::debug('EMP Refresh: updated', ['unique_id' => $uniqueId]);
+            return 'updated';
+        }
+
+        $debtorId = $this->extractDebtorId($transactionId);
+        $debtor = $debtorId ? Debtor::find($debtorId) : null;
+
+        if (!$debtor) {
+            Log::info('EMP Refresh: orphan transaction', [
+                'unique_id' => $uniqueId,
+                'transaction_id' => $transactionId,
+            ]);
+        }
+
+        BillingAttempt::create(array_merge($data, [
+            'debtor_id' => $debtor?->id,
+            'upload_id' => $debtor?->upload_id,
+            'transaction_id' => $transactionId ?: 'emp_import_' . $uniqueId,
+            'attempt_number' => 1,
+        ]));
+
+        Log::debug('EMP Refresh: inserted', ['unique_id' => $uniqueId]);
+
+        if ($debtor && $data['status'] === BillingAttempt::STATUS_APPROVED) {
+            $debtor->update(['status' => Debtor::STATUS_RECOVERED]);
+        }
+
+        return 'inserted';
     }
 
     /**
