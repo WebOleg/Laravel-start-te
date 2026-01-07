@@ -43,7 +43,9 @@ RUN if [ "$INSTALL_XDEBUG" = "true" ] && [ -f /tmp/xdebug.ini ]; then \
 COPY . .
 
 # Install dependencies
+RUN rm -rf vendor
 RUN composer install --no-interaction --no-dev --optimize-autoloader
+#RUN composer install -vvv --no-interaction --no-dev --optimize-autoloader
 
 # Set permissions
 RUN chown -R www-data:www-data /var/www/storage /var/www/bootstrap/cache
