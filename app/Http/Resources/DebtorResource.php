@@ -16,6 +16,11 @@ class DebtorResource extends JsonResource
     {
         $ibanValidator = app(IbanValidator::class);
 
+        // Get bank reference from latestVopLog relationship
+        $bankReference = $this->whenLoaded('latestVopLog', function () {
+            return $this->latestVopLog?->bankReference;
+        });
+
         return [
             'id' => $this->id,
             'upload_id' => $this->upload_id,
@@ -44,13 +49,41 @@ class DebtorResource extends JsonResource
             'bank_name' => $this->bank_name,
             'bic' => $this->bic,
             'raw_data' => $this->raw_data,
-            'bank_name_reference' => $this->bank_name_reference,
-            'bank_country_iso_reference' => $this->bank_country_iso_reference,
+            'bank_name_reference' => $this->getBankNameReference($bankReference),
+            'bank_country_iso_reference' => $this->getBankCountryReference($bankReference),
             'created_at' => $this->created_at->toISOString(),
             'updated_at' => $this->updated_at->toISOString(),
             'upload' => new UploadResource($this->whenLoaded('upload')),
             'latest_vop' => new VopLogResource($this->whenLoaded('latestVopLog')),
             'latest_billing' => new BillingAttemptResource($this->whenLoaded('latestBillingAttempt')),
         ];
+    }
+
+    private function getBankNameReference($bankReference): ?string
+    {
+        if ($bankReference instanceof \App\Models\BankReference) {
+            return $bankReference->bank_name;
+        }
+        
+        // Fallback: try from latestVopLog directly
+        if ($this->relationLoaded('latestVopLog') && $this->latestVopLog) {
+            return $this->latestVopLog->bank_name;
+        }
+
+        return null;
+    }
+
+    private function getBankCountryReference($bankReference): ?string
+    {
+        if ($bankReference instanceof \App\Models\BankReference) {
+            return $bankReference->country_iso;
+        }
+
+        // Fallback: try from latestVopLog country
+        if ($this->relationLoaded('latestVopLog') && $this->latestVopLog) {
+            return $this->latestVopLog->country;
+        }
+
+        return null;
     }
 }
