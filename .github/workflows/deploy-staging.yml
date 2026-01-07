@@ -30,6 +30,16 @@ jobs:
             docker compose -f docker-compose.staging.yml build
             docker compose -f docker-compose.staging.yml up -d
 
+            # Fix Laravel writable
+            docker compose -f docker-compose.staging.yml exec -T --user root app sh -lc '
+              set -e
+              mkdir -p storage/logs storage/framework/{cache,sessions,views} bootstrap/cache
+              touch storage/logs/laravel.log
+              chown -R www-data:www-data storage bootstrap/cache
+              find storage bootstrap/cache -type d -exec chmod 775 {} \;
+              find storage bootstrap/cache -type f -exec chmod 664 {} \;
+            '
+
             # Composer
             docker compose -f docker-compose.staging.yml exec -T app composer install \
               --no-interaction --no-dev --prefer-dist --optimize-autoloader
