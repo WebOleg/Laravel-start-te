@@ -77,7 +77,7 @@ return [
         ],
         'supervisor-high' => [
             'connection' => 'redis',
-            'queue' => ['high', 'vop', 'billing'],
+            'queue' => ['high', 'vop', 'billing', 'reconciliation'],
             'balance' => 'auto',
             'autoScalingStrategy' => 'time',
             'maxProcesses' => 3,

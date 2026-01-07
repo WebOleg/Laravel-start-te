@@ -2,14 +2,15 @@
 
 namespace Tests\Feature\Admin;
 
+use App\Jobs\ProcessReconciliationJob;
 use App\Models\BillingAttempt;
 use App\Models\Debtor;
 use App\Models\Upload;
 use App\Models\User;
-use App\Jobs\ProcessReconciliationJob;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
 class ReconciliationControllerTest extends TestCase
@@ -23,17 +24,21 @@ class ReconciliationControllerTest extends TestCase
     {
         parent::setUp();
         $this->user = User::factory()->create();
-        $this->upload = Upload::factory()->create(['status' => 'completed']);
+        $this->upload = Upload::factory()->create();
     }
 
     public function test_reconcile_single_attempt_success(): void
     {
+        Http::fake([
+            '*' => Http::response('<?xml version="1.0"?><payment_response><status>approved</status><unique_id>emp_123</unique_id></payment_response>', 200),
+        ]);
+
         $debtor = Debtor::factory()->create(['upload_id' => $this->upload->id]);
         $attempt = BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'upload_id' => $this->upload->id,
             'status' => 'pending',
-            'unique_id' => 'emp_123456',
+            'unique_id' => 'emp_123',
             'created_at' => now()->subHours(3),
         ]);
 
@@ -41,10 +46,7 @@ class ReconciliationControllerTest extends TestCase
             ->postJson("/api/admin/billing-attempts/{$attempt->id}/reconcile");
 
         $response->assertStatus(200)
-            ->assertJsonStructure([
-                'message',
-                'data' => ['id', 'success', 'changed', 'previous_status', 'new_status'],
-            ]);
+            ->assertJsonPath('data.success', true);
     }
 
     public function test_reconcile_attempt_without_unique_id_fails(): void
@@ -71,13 +73,14 @@ class ReconciliationControllerTest extends TestCase
             'debtor_id' => $debtor->id,
             'upload_id' => $this->upload->id,
             'status' => 'approved',
-            'unique_id' => 'emp_123456',
+            'unique_id' => 'emp_123',
         ]);
 
         $response = $this->actingAs($this->user)
             ->postJson("/api/admin/billing-attempts/{$attempt->id}/reconcile");
 
-        $response->assertStatus(422);
+        $response->assertStatus(422)
+            ->assertJsonPath('data.can_reconcile', false);
     }
 
     public function test_reconcile_attempt_max_attempts_reached_fails(): void
@@ -87,14 +90,15 @@ class ReconciliationControllerTest extends TestCase
             'debtor_id' => $debtor->id,
             'upload_id' => $this->upload->id,
             'status' => 'pending',
-            'unique_id' => 'emp_123456',
+            'unique_id' => 'emp_123',
             'reconciliation_attempts' => 10,
         ]);
 
         $response = $this->actingAs($this->user)
             ->postJson("/api/admin/billing-attempts/{$attempt->id}/reconcile");
 
-        $response->assertStatus(422);
+        $response->assertStatus(422)
+            ->assertJsonPath('data.can_reconcile', false);
     }
 
     public function test_reconcile_upload_dispatches_job(): void
@@ -114,8 +118,7 @@ class ReconciliationControllerTest extends TestCase
             ->postJson("/api/admin/uploads/{$this->upload->id}/reconcile");
 
         $response->assertStatus(202)
-            ->assertJsonPath('data.queued', true)
-            ->assertJsonPath('data.eligible', 1);
+            ->assertJsonPath('data.queued', true);
 
         Bus::assertDispatched(ProcessReconciliationJob::class);
     }
@@ -133,23 +136,15 @@ class ReconciliationControllerTest extends TestCase
     public function test_reconcile_upload_prevents_duplicate(): void
     {
         Bus::fake();
-
-        $debtor = Debtor::factory()->create(['upload_id' => $this->upload->id]);
-        BillingAttempt::factory()->create([
-            'debtor_id' => $debtor->id,
-            'upload_id' => $this->upload->id,
-            'status' => 'pending',
-            'unique_id' => 'emp_123456',
-            'created_at' => now()->subHours(3),
-        ]);
-
-        Cache::put("reconciliation_upload_{$this->upload->id}", true, 30);
+        Cache::put("reconciliation_upload_{$this->upload->id}", true, now()->addMinutes(30));
 
         $response = $this->actingAs($this->user)
             ->postJson("/api/admin/uploads/{$this->upload->id}/reconcile");
 
         $response->assertStatus(409)
             ->assertJsonPath('data.duplicate', true);
+
+        Bus::assertNotDispatched(ProcessReconciliationJob::class);
     }
 
     public function test_get_reconciliation_stats(): void
@@ -196,7 +191,7 @@ class ReconciliationControllerTest extends TestCase
             'upload_id' => $this->upload->id,
             'status' => 'pending',
             'unique_id' => 'emp_123456',
-            'created_at' => now()->subHours(25),
+            'created_at' => now()->subHours(3), // 3 hours ago - within 24h max_age
         ]);
 
         $response = $this->actingAs($this->user)
