@@ -32,31 +32,32 @@ class EmpRefreshService
      */
     public function fetchPage(string $startDate, string $endDate, int $page): array
     {
-        $response = $this->client->getTransactionsByDate(
-            $startDate,
-            $endDate,
-            $page,
-            self::PER_PAGE
-        );
+        $response = $this->client->getTransactionsByDate($startDate, $endDate, $page);
 
         if (isset($response['status']) && $response['status'] === 'error') {
             Log::error('EMP Refresh: API error', ['response' => $response, 'page' => $page]);
-            return ['transactions' => [], 'has_more' => false, 'error' => true];
+            return ['transactions' => [], 'has_more' => false, 'error' => true, 'pagination' => null];
         }
 
+        $pagination = $this->extractPagination($response);
         $transactions = $this->extractTransactions($response);
-        $hasMore = count($transactions) >= self::PER_PAGE;
+        
+        $hasMore = $pagination 
+            ? ($pagination['page'] < $pagination['pages_count'])
+            : (count($transactions) >= self::PER_PAGE);
 
         Log::debug('EMP Refresh: fetchPage', [
             'page' => $page,
             'transactions_count' => count($transactions),
             'has_more' => $hasMore,
+            'pagination' => $pagination,
         ]);
 
         return [
             'transactions' => $transactions,
             'has_more' => $hasMore,
             'error' => false,
+            'pagination' => $pagination,
         ];
     }
 
@@ -100,6 +101,24 @@ class EmpRefreshService
             'first_page_count' => count($firstPage['transactions']),
             'has_more' => $firstPage['has_more'],
             'error' => $firstPage['error'] ?? false,
+            'pagination' => $firstPage['pagination'] ?? null,
+        ];
+    }
+
+    /**
+     * Extract pagination metadata from API response attributes.
+     */
+    private function extractPagination(array $response): ?array
+    {
+        if (!isset($response['@page'])) {
+            return null;
+        }
+        
+        return [
+            'page' => (int) ($response['@page'] ?? 1),
+            'per_page' => (int) ($response['@per_page'] ?? 100),
+            'total_count' => (int) ($response['@total_count'] ?? 0),
+            'pages_count' => (int) ($response['@pages_count'] ?? 1),
         ];
     }
 
@@ -109,30 +128,32 @@ class EmpRefreshService
      */
     private function extractTransactions(array $response): array
     {
-        // Format 1: payment_response (single or multiple)
         if (isset($response['payment_response'])) {
             $tx = $response['payment_response'];
             if (isset($tx['unique_id'])) {
-                return [$tx]; // Single transaction
+                return [$tx];
             }
-            return array_values($tx); // Array of transactions
+            if (is_array($tx) && isset($tx[0])) {
+                return $tx;
+            }
+            return array_values($tx);
         }
 
-        // Format 2: payment_transaction (single or multiple)
         if (isset($response['payment_transaction'])) {
             $tx = $response['payment_transaction'];
             if (isset($tx['unique_id'])) {
-                return [$tx]; // Single transaction
+                return [$tx];
             }
-            return array_values($tx); // Array of transactions
+            if (is_array($tx) && isset($tx[0])) {
+                return $tx;
+            }
+            return array_values($tx);
         }
 
-        // Format 3: payment_transactions (array)
         if (isset($response['payment_transactions'])) {
             return array_values($response['payment_transactions']);
         }
 
-        // Format 4: payment_responses (array)
         if (isset($response['payment_responses'])) {
             return array_values($response['payment_responses']);
         }
@@ -158,11 +179,9 @@ class EmpRefreshService
                 return 'errors';
             }
 
-            // Try to find existing record by unique_id first
             $existing = BillingAttempt::where('unique_id', $uniqueId)->first();
             
             if (!$existing && $transactionId) {
-                // Try by our transaction_id
                 $existing = BillingAttempt::where('transaction_id', $transactionId)->first();
             }
 
@@ -174,7 +193,6 @@ class EmpRefreshService
                 return 'updated';
             }
 
-            // Try to find debtor by transaction_id pattern
             $debtorId = $this->extractDebtorId($transactionId);
             $debtor = $debtorId ? Debtor::find($debtorId) : null;
 
@@ -185,7 +203,6 @@ class EmpRefreshService
                 ]);
             }
 
-            // Insert new record
             BillingAttempt::create(array_merge($data, [
                 'debtor_id' => $debtor?->id,
                 'upload_id' => $debtor?->upload_id,
@@ -195,7 +212,6 @@ class EmpRefreshService
 
             Log::debug('EMP Refresh: inserted', ['unique_id' => $uniqueId]);
 
-            // Update debtor status if approved
             if ($debtor && $data['status'] === BillingAttempt::STATUS_APPROVED) {
                 $debtor->update(['status' => Debtor::STATUS_RECOVERED]);
             }

@@ -25,20 +25,14 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
         private array $webhookData,
         private string $transactionType,
         private string $receivedAt
-    )
-    {
+    ) {
         $this->onQueue('webhooks');
     }
 
-    /**
-     * Unique ID to prevent duplicate webhook processing.
-     * Returns null if unique_id is missing to disable uniqueness enforcement.
-     */
     public function uniqueId(): string|null
     {
         $uniqueId = $this->webhookData['unique_id'] ?? null;
 
-        // If no unique_id, we can't deduplicate safely - skip uniqueness check
         if ($uniqueId === null) {
             Log::warning('EMP webhook missing unique_id - uniqueness cannot be enforced', [
                 'transaction_type' => $this->transactionType,
@@ -46,16 +40,12 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
             return null;
         }
 
-        // Include transaction type to differentiate chargeback vs sdd_sale
         return "webhook_{$this->transactionType}_{$uniqueId}";
     }
 
-    /**
-     * Jobs with the same unique ID within this window are considered duplicates.
-     */
     public function uniqueFor(): int
     {
-        return 3600; // 1 hour
+        return 3600;
     }
 
     public function handle(BlacklistService $blacklistService): void
@@ -83,24 +73,22 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
 
     private function handleChargeback(BlacklistService $blacklistService): void
     {
-        $originalTxId = $this->webhookData['original_transaction_unique_id'] ?? null;
+        $originalUniqueId = $this->webhookData['original_transaction_unique_id'] ?? null;
 
-        if (!$originalTxId) {
+        if (!$originalUniqueId) {
             Log::error('Chargeback missing original_transaction_unique_id', $this->webhookData);
             return;
         }
 
-        // Find original billing attempt with debtor eager-loaded
         $billingAttempt = BillingAttempt::with('debtor')
-            ->where('transaction_id', $originalTxId)
+            ->where('unique_id', $originalUniqueId)
             ->first();
 
         if (!$billingAttempt) {
-            Log::warning('Chargeback for unknown transaction', ['unique_id' => $originalTxId]);
+            Log::warning('Chargeback for unknown transaction', ['unique_id' => $originalUniqueId]);
             return;
         }
 
-        // Idempotency check: skip if already chargebacked
         if ($billingAttempt->status === BillingAttempt::STATUS_CHARGEBACKED) {
             Log::info('Chargeback already processed', [
                 'billing_attempt_id' => $billingAttempt->id,
@@ -117,13 +105,12 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
             'currency' => $this->webhookData['currency'] ?? null,
             'reason' => $this->webhookData['reason'] ?? null,
             'reason_code' => $errorCode,
-            'received_at' => $this->receivedAt
+            'received_at' => $this->receivedAt,
         ];
 
         $currentMeta = $billingAttempt->meta ?? [];
         $currentMeta['chargeback'] = $chargebackMeta;
 
-        // Update status to chargebacked
         $billingAttempt->update([
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
             'error_code' => $errorCode,
@@ -131,7 +118,6 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
             'meta' => $currentMeta,
         ]);
 
-        // Auto-blacklist debtor (IBAN + name + email) if error code matches
         $blacklisted = false;
         if ($errorCode && $this->shouldBlacklistCode($errorCode)) {
             $debtor = $billingAttempt->debtor;
@@ -154,7 +140,7 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
         Log::info('Chargeback processed', [
             'billing_attempt_id' => $billingAttempt->id,
             'debtor_id' => $billingAttempt->debtor_id,
-            'original_tx' => $originalTxId,
+            'original_unique_id' => $originalUniqueId,
             'error_code' => $errorCode,
             'blacklisted' => $blacklisted,
         ]);
@@ -177,10 +163,8 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
             return;
         }
 
-        // Map EMP status to our status
         $mappedStatus = $this->mapEmpStatus($status);
 
-        // Skip update if status is already the same (idempotent)
         if ($mappedStatus && $billingAttempt->status !== $mappedStatus) {
             $billingAttemptOldStatus = $billingAttempt->status;
             $billingAttempt->update(['status' => $mappedStatus]);

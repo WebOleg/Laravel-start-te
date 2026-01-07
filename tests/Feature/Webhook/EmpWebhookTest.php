@@ -38,11 +38,12 @@ class EmpWebhookTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
         
-        $originalTxId = 'tx_original_123';
+        $originalUniqueId = 'emp_unique_123';
         $billingAttempt = BillingAttempt::create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
-            'transaction_id' => $originalTxId,
+            'transaction_id' => 'tx_original_123',
+            'unique_id' => $originalUniqueId,
             'amount' => 100,
             'status' => BillingAttempt::STATUS_APPROVED,
         ]);
@@ -52,7 +53,7 @@ class EmpWebhookTest extends TestCase
         $response = $this->postJson('/api/webhooks/emp', [
             'unique_id' => $chargebackUniqueId,
             'transaction_type' => 'chargeback',
-            'original_transaction_unique_id' => $originalTxId,
+            'original_transaction_unique_id' => $originalUniqueId,
             'amount' => 10000,
             'currency' => 'EUR',
             'signature' => $this->generateSignature($chargebackUniqueId),
@@ -66,16 +67,15 @@ class EmpWebhookTest extends TestCase
 
     public function test_chargeback_updates_billing_attempt_status(): void
     {
-        // Don't fake queue - execute jobs synchronously
-        
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
         
-        $originalTxId = 'tx_original_123';
+        $originalUniqueId = 'emp_unique_123';
         $billingAttempt = BillingAttempt::create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
-            'transaction_id' => $originalTxId,
+            'transaction_id' => 'tx_original_123',
+            'unique_id' => $originalUniqueId,
             'amount' => 100,
             'status' => BillingAttempt::STATUS_APPROVED,
         ]);
@@ -85,7 +85,7 @@ class EmpWebhookTest extends TestCase
         $response = $this->postJson('/api/webhooks/emp', [
             'unique_id' => $chargebackUniqueId,
             'transaction_type' => 'chargeback',
-            'original_transaction_unique_id' => $originalTxId,
+            'original_transaction_unique_id' => $originalUniqueId,
             'amount' => 10000,
             'currency' => 'EUR',
             'signature' => $this->generateSignature($chargebackUniqueId),
@@ -108,11 +108,10 @@ class EmpWebhookTest extends TestCase
         $response = $this->postJson('/api/webhooks/emp', [
             'unique_id' => $uniqueId,
             'transaction_type' => 'chargeback',
-            'original_transaction_unique_id' => 'nonexistent_tx',
+            'original_transaction_unique_id' => 'nonexistent_unique_id',
             'signature' => $this->generateSignature($uniqueId),
         ]);
 
-        // Webhook returns ok because job is queued (actual validation happens in job)
         $response->assertOk();
         Queue::assertPushed(ProcessEmpWebhookJob::class);
     }
@@ -123,28 +122,25 @@ class EmpWebhookTest extends TestCase
         
         $chargebackUniqueId = 'cb_duplicate_789';
         
-        // First webhook request
         $response1 = $this->postJson('/api/webhooks/emp', [
             'unique_id' => $chargebackUniqueId,
             'transaction_type' => 'chargeback',
-            'original_transaction_unique_id' => 'tx_original_123',
+            'original_transaction_unique_id' => 'emp_original_123',
             'signature' => $this->generateSignature($chargebackUniqueId),
         ]);
 
         $response1->assertOk();
         $this->assertEquals(1, count(Queue::pushed(ProcessEmpWebhookJob::class)));
 
-        // Second identical webhook request (duplicate)
         $response2 = $this->postJson('/api/webhooks/emp', [
             'unique_id' => $chargebackUniqueId,
             'transaction_type' => 'chargeback',
-            'original_transaction_unique_id' => 'tx_original_123',
+            'original_transaction_unique_id' => 'emp_original_123',
             'signature' => $this->generateSignature($chargebackUniqueId),
         ]);
 
         $response2->assertOk();
         $response2->assertJson(['message' => 'Webhook already queued']);
-        // Still only 1 job queued (duplicate was rejected)
         $this->assertEquals(1, count(Queue::pushed(ProcessEmpWebhookJob::class)));
     }
 
@@ -177,26 +173,24 @@ class EmpWebhookTest extends TestCase
 
     public function test_transaction_status_update(): void
     {
-        // Don't fake queue - execute jobs synchronously
-        
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
         
-        $txId = 'tx_status_update_123';
+        $uniqueId = 'emp_unique_status_123';
         $billingAttempt = BillingAttempt::create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
-            'transaction_id' => $txId,
-            'unique_id' => $txId,
+            'transaction_id' => 'tx_status_update_123',
+            'unique_id' => $uniqueId,
             'amount' => 100,
             'status' => BillingAttempt::STATUS_PENDING,
         ]);
 
         $response = $this->postJson('/api/webhooks/emp', [
-            'unique_id' => $txId,
+            'unique_id' => $uniqueId,
             'transaction_type' => 'sdd_sale',
             'status' => 'approved',
-            'signature' => $this->generateSignature($txId),
+            'signature' => $this->generateSignature($uniqueId),
         ]);
 
         $response->assertOk();
@@ -212,21 +206,21 @@ class EmpWebhookTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
         
-        $txId = 'tx_status_update_123';
+        $uniqueId = 'emp_unique_status_123';
         $billingAttempt = BillingAttempt::create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
-            'transaction_id' => $txId,
-            'unique_id' => $txId,
+            'transaction_id' => 'tx_status_update_123',
+            'unique_id' => $uniqueId,
             'amount' => 100,
             'status' => BillingAttempt::STATUS_PENDING,
         ]);
 
         $response = $this->postJson('/api/webhooks/emp', [
-            'unique_id' => $txId,
+            'unique_id' => $uniqueId,
             'transaction_type' => 'sdd_sale',
             'status' => 'approved',
-            'signature' => $this->generateSignature($txId),
+            'signature' => $this->generateSignature($uniqueId),
         ]);
 
         $response->assertOk();
@@ -237,26 +231,24 @@ class EmpWebhookTest extends TestCase
 
     public function test_declined_transaction_update(): void
     {
-        // Don't fake queue - execute jobs synchronously
-        
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
         
-        $txId = 'tx_declined_123';
+        $uniqueId = 'emp_unique_declined_123';
         $billingAttempt = BillingAttempt::create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
-            'transaction_id' => $txId,
-            'unique_id' => $txId,
+            'transaction_id' => 'tx_declined_123',
+            'unique_id' => $uniqueId,
             'amount' => 100,
             'status' => BillingAttempt::STATUS_PENDING,
         ]);
 
         $response = $this->postJson('/api/webhooks/emp', [
-            'unique_id' => $txId,
+            'unique_id' => $uniqueId,
             'transaction_type' => 'sdd_sale',
             'status' => 'declined',
-            'signature' => $this->generateSignature($txId),
+            'signature' => $this->generateSignature($uniqueId),
         ]);
 
         $response->assertOk();
@@ -272,21 +264,21 @@ class EmpWebhookTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
         
-        $txId = 'tx_declined_123';
+        $uniqueId = 'emp_unique_declined_123';
         $billingAttempt = BillingAttempt::create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
-            'transaction_id' => $txId,
-            'unique_id' => $txId,
+            'transaction_id' => 'tx_declined_123',
+            'unique_id' => $uniqueId,
             'amount' => 100,
             'status' => BillingAttempt::STATUS_PENDING,
         ]);
 
         $response = $this->postJson('/api/webhooks/emp', [
-            'unique_id' => $txId,
+            'unique_id' => $uniqueId,
             'transaction_type' => 'sdd_sale',
             'status' => 'declined',
-            'signature' => $this->generateSignature($txId),
+            'signature' => $this->generateSignature($uniqueId),
         ]);
 
         $response->assertOk();
@@ -321,7 +313,6 @@ class EmpWebhookTest extends TestCase
             'signature' => $this->generateSignature($uniqueId),
         ]);
 
-        // Missing unique_id will fail signature verification (401) because signature won't match
         $response->assertUnauthorized();
         Queue::assertNotPushed(ProcessEmpWebhookJob::class);
     }
