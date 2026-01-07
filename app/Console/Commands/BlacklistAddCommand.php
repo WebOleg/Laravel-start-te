@@ -20,13 +20,19 @@ class BlacklistAddCommand extends Command
 
     public function handle(): int
     {
-        $iban = $this->option('iban');
-        $email = $this->option('email');
-        $firstName = $this->option('first-name');
-        $lastName = $this->option('last-name');
+        $iban = $this->option('iban') ?: null;
+        $email = $this->option('email') ?: null;
+        $firstName = $this->option('first-name') ?: null;
+        $lastName = $this->option('last-name') ?: null;
+        $bic = $this->option('bic') ?: null;
+        $reason = $this->option('reason') ?: 'Manual blacklist';
+        $source = $this->option('source') ?: 'manual';
 
-        // Interactive mode if no unique identifier provided
-        if (!$iban && !$email && !($firstName && $lastName)) {
+        // Check if we have at least one unique identifier
+        $hasUniqueKey = $iban || $email || ($firstName && $lastName);
+
+        // Interactive mode only if no unique identifier provided via options
+        if (!$hasUniqueKey) {
             $this->info('Provide at least one: IBAN, Email, or Full Name');
             $this->newLine();
             
@@ -37,17 +43,20 @@ class BlacklistAddCommand extends Command
             }
             
             if (!$iban && !$email) {
-                $firstName = $this->ask('First name (required if no IBAN/email)');
-                $lastName = $this->ask('Last name (required if no IBAN/email)');
+                $firstName = $this->ask('First name');
+                $lastName = $this->ask('Last name');
                 
                 if (!$firstName || !$lastName) {
                     $this->error('Must provide IBAN, Email, or Full Name');
                     return 1;
                 }
             }
+            
+            $reason = $this->ask('Reason', 'Manual blacklist');
+            $source = $this->choice('Source', ['manual', 'support', 'system-auto', 'chargeback'], 0);
         }
 
-        // Build unique key for checking existing
+        // Build unique key
         $uniqueKey = $this->getUniqueKey($iban, $email, $firstName, $lastName);
         if (empty($uniqueKey)) {
             $this->error('Must provide IBAN, Email, or Full Name');
@@ -58,45 +67,34 @@ class BlacklistAddCommand extends Command
         $existing = Blacklist::where($uniqueKey)->first();
         if ($existing) {
             $this->warn("Entry already blacklisted (ID: {$existing->id})");
-            if (!$this->confirm('Update existing entry?')) {
-                return 0;
-            }
+            $this->table(
+                ['Field', 'Value'],
+                [
+                    ['ID', $existing->id],
+                    ['IBAN', $existing->iban ?? '-'],
+                    ['Email', $existing->email ?? '-'],
+                    ['Name', trim(($existing->first_name ?? '') . ' ' . ($existing->last_name ?? '')) ?: '-'],
+                    ['Reason', $existing->reason],
+                ]
+            );
+            return 0;
         }
-
-        // Gather other fields if not provided
-        if (!$firstName) {
-            $firstName = $this->option('first-name') ?? $this->ask('First name (optional)') ?: null;
-        }
-        if (!$lastName) {
-            $lastName = $this->option('last-name') ?? $this->ask('Last name (optional)') ?: null;
-        }
-        if (!$email && !$iban) {
-            $email = $this->ask('Email (optional)') ?: null;
-        }
-        
-        $bic = $this->option('bic') ?? $this->ask('BIC (optional)') ?: null;
-        $reason = $this->option('reason') ?? $this->ask('Reason', 'Manual blacklist');
-        $source = $this->option('source') ?? $this->choice('Source', ['manual', 'support', 'system-auto', 'chargeback'], 0);
 
         // Generate hash
         $hashSource = $iban ?? $email ?? (($firstName ?? '') . ($lastName ?? ''));
 
-        $entry = Blacklist::updateOrCreate(
-            $uniqueKey,
-            [
-                'iban' => $iban,
-                'iban_hash' => hash('sha256', $hashSource),
-                'email' => $email,
-                'first_name' => $firstName,
-                'last_name' => $lastName,
-                'bic' => $bic,
-                'reason' => $reason,
-                'source' => $source,
-            ]
-        );
+        $entry = Blacklist::create([
+            'iban' => $iban,
+            'iban_hash' => hash('sha256', $hashSource),
+            'email' => $email,
+            'first_name' => $firstName,
+            'last_name' => $lastName,
+            'bic' => $bic,
+            'reason' => $reason,
+            'source' => $source,
+        ]);
 
-        $action = $entry->wasRecentlyCreated ? 'Added' : 'Updated';
-        $this->info("{$action} blacklist entry ID: {$entry->id}");
+        $this->info("Added blacklist entry ID: {$entry->id}");
         
         $this->table(
             ['Field', 'Value'],
