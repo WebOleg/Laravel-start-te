@@ -187,6 +187,7 @@ class EmpWebhookTest extends TestCase
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
             'transaction_id' => $txId,
+            'unique_id' => $txId,
             'amount' => 100,
             'status' => BillingAttempt::STATUS_PENDING,
         ]);
@@ -216,6 +217,7 @@ class EmpWebhookTest extends TestCase
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
             'transaction_id' => $txId,
+            'unique_id' => $txId,
             'amount' => 100,
             'status' => BillingAttempt::STATUS_PENDING,
         ]);
@@ -245,6 +247,7 @@ class EmpWebhookTest extends TestCase
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
             'transaction_id' => $txId,
+            'unique_id' => $txId,
             'amount' => 100,
             'status' => BillingAttempt::STATUS_PENDING,
         ]);
@@ -274,6 +277,7 @@ class EmpWebhookTest extends TestCase
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
             'transaction_id' => $txId,
+            'unique_id' => $txId,
             'amount' => 100,
             'status' => BillingAttempt::STATUS_PENDING,
         ]);
