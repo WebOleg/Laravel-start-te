@@ -1,7 +1,7 @@
 <?php
 
 /**
- * Service for checking IBANs, names, and emails against blacklist.
+ * Service for checking IBANs, names, emails and BICs against blacklist.
  */
 
 namespace App\Services;
@@ -51,11 +51,23 @@ class BlacklistService
     }
 
     /**
+     * Check if BIC is blacklisted.
+     */
+    public function isBicBlacklisted(string $bic): bool
+    {
+        if (empty($bic)) {
+            return false;
+        }
+        
+        return Blacklist::whereRaw('LOWER(bic) = ?', [strtolower($bic)])->exists();
+    }
+
+    /**
      * Check debtor against all blacklist criteria.
      * Returns array of matched reasons or empty array if not blacklisted.
      *
      * @param Debtor|array $debtor
-     * @return array{iban: bool, name: bool, email: bool, reasons: string[]}
+     * @return array{iban: bool, name: bool, email: bool, bic: bool, reasons: string[]}
      */
     public function checkDebtor($debtor): array
     {
@@ -63,6 +75,7 @@ class BlacklistService
             'iban' => false,
             'name' => false,
             'email' => false,
+            'bic' => false,
             'reasons' => [],
         ];
 
@@ -72,11 +85,13 @@ class BlacklistService
             $firstName = $debtor->first_name ?? '';
             $lastName = $debtor->last_name ?? '';
             $email = $debtor->email ?? '';
+            $bic = $debtor->bic ?? '';
         } else {
             $iban = $debtor['iban'] ?? '';
             $firstName = $debtor['first_name'] ?? '';
             $lastName = $debtor['last_name'] ?? '';
             $email = $debtor['email'] ?? '';
+            $bic = $debtor['bic'] ?? '';
         }
 
         // Check IBAN
@@ -97,6 +112,12 @@ class BlacklistService
             $result['reasons'][] = 'Email is blacklisted';
         }
 
+        // Check BIC
+        if (!empty($bic) && $this->isBicBlacklisted($bic)) {
+            $result['bic'] = true;
+            $result['reasons'][] = 'BIC is blacklisted';
+        }
+
         return $result;
     }
 
@@ -109,7 +130,7 @@ class BlacklistService
     public function isDebtorBlacklisted($debtor): bool
     {
         $check = $this->checkDebtor($debtor);
-        return $check['iban'] || $check['name'] || $check['email'];
+        return $check['iban'] || $check['name'] || $check['email'] || $check['bic'];
     }
 
     /**

@@ -28,60 +28,31 @@ class BlacklistAddCommand extends Command
         $reason = $this->option('reason') ?: 'Manual blacklist';
         $source = $this->option('source') ?: 'manual';
 
-        // Check if we have at least one unique identifier
-        $hasUniqueKey = $iban || $email || ($firstName && $lastName);
+        // Check if at least one field provided
+        $hasData = $iban || $email || $firstName || $lastName || $bic;
 
-        // Interactive mode only if no unique identifier provided via options
-        if (!$hasUniqueKey) {
-            $this->info('Provide at least one: IBAN, Email, or Full Name');
+        // Interactive mode only if nothing provided
+        if (!$hasData) {
+            $this->info('Fill at least one field:');
             $this->newLine();
             
-            $iban = $this->ask('IBAN (or press Enter to skip)') ?: null;
+            $iban = $this->ask('IBAN') ?: null;
+            $email = $this->ask('Email') ?: null;
+            $firstName = $this->ask('First name') ?: null;
+            $lastName = $this->ask('Last name') ?: null;
+            $bic = $this->ask('BIC') ?: null;
             
-            if (!$iban) {
-                $email = $this->ask('Email (or press Enter to skip)') ?: null;
-            }
-            
-            if (!$iban && !$email) {
-                $firstName = $this->ask('First name');
-                $lastName = $this->ask('Last name');
-                
-                if (!$firstName || !$lastName) {
-                    $this->error('Must provide IBAN, Email, or Full Name');
-                    return 1;
-                }
+            if (!$iban && !$email && !$firstName && !$lastName && !$bic) {
+                $this->error('At least one field is required');
+                return 1;
             }
             
             $reason = $this->ask('Reason', 'Manual blacklist');
             $source = $this->choice('Source', ['manual', 'support', 'system-auto', 'chargeback'], 0);
         }
 
-        // Build unique key
-        $uniqueKey = $this->getUniqueKey($iban, $email, $firstName, $lastName);
-        if (empty($uniqueKey)) {
-            $this->error('Must provide IBAN, Email, or Full Name');
-            return 1;
-        }
-
-        // Check if already exists
-        $existing = Blacklist::where($uniqueKey)->first();
-        if ($existing) {
-            $this->warn("Entry already blacklisted (ID: {$existing->id})");
-            $this->table(
-                ['Field', 'Value'],
-                [
-                    ['ID', $existing->id],
-                    ['IBAN', $existing->iban ?? '-'],
-                    ['Email', $existing->email ?? '-'],
-                    ['Name', trim(($existing->first_name ?? '') . ' ' . ($existing->last_name ?? '')) ?: '-'],
-                    ['Reason', $existing->reason],
-                ]
-            );
-            return 0;
-        }
-
-        // Generate hash
-        $hashSource = $iban ?? $email ?? (($firstName ?? '') . ($lastName ?? ''));
+        // Generate hash from whatever we have
+        $hashSource = $iban ?? $email ?? $bic ?? (($firstName ?? '') . ($lastName ?? '')) ?? 'unknown';
 
         $entry = Blacklist::create([
             'iban' => $iban,
@@ -103,25 +74,12 @@ class BlacklistAddCommand extends Command
                 ['IBAN', $entry->iban ?? '-'],
                 ['Email', $entry->email ?? '-'],
                 ['Name', trim(($entry->first_name ?? '') . ' ' . ($entry->last_name ?? '')) ?: '-'],
+                ['BIC', $entry->bic ?? '-'],
                 ['Reason', $entry->reason],
                 ['Source', $entry->source],
             ]
         );
 
         return 0;
-    }
-
-    private function getUniqueKey(?string $iban, ?string $email, ?string $firstName, ?string $lastName): array
-    {
-        if ($iban) {
-            return ['iban' => $iban];
-        }
-        if ($email) {
-            return ['email' => $email];
-        }
-        if ($firstName && $lastName) {
-            return ['first_name' => $firstName, 'last_name' => $lastName];
-        }
-        return [];
     }
 }
