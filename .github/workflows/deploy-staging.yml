@@ -18,29 +18,30 @@ jobs:
           host: ${{ secrets.STAGING_HOST }}
           username: ${{ secrets.STAGING_USER }}
           key: ${{ secrets.STAGING_SSH_KEY }}
-          port: ${{ secrets.STAGING_SSH_PORT || 22 }}
+
           script: |
             set -euo pipefail
 
             cd /opt/tether-staging/backend
 
-            git fetch --all
-            git checkout staging || git checkout -b staging
-            git reset --hard origin/staging
+            git fetch --all --prune
+            git checkout -B staging origin/staging
 
             docker compose -f docker-compose.staging.yml build
             docker compose -f docker-compose.staging.yml up -d
 
             # Composer
-            docker compose -f docker-compose.staging.yml exec -T app composer update --no-interaction --prefer-dist
+            docker compose -f docker-compose.staging.yml exec -T app composer install \
+              --no-interaction --no-dev --prefer-dist --optimize-autoloader
 
-            # Laravel cache clears
+            # Laravel
+            docker compose -f docker-compose.staging.yml exec -T app php artisan package:discover --ansi
+
             docker compose -f docker-compose.staging.yml exec -T app php artisan config:clear || true
             docker compose -f docker-compose.staging.yml exec -T app php artisan cache:clear || true
             docker compose -f docker-compose.staging.yml exec -T app php artisan route:clear || true
             docker compose -f docker-compose.staging.yml exec -T app php artisan view:clear || true
 
-            # DB migrations
             docker compose -f docker-compose.staging.yml exec -T app php artisan migrate --force
 
             docker compose -f docker-compose.staging.yml ps
