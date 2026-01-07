@@ -24,7 +24,6 @@ class EmpRefreshChunkJob implements ShouldQueue
     public int $timeout = 600; // 10 min per chunk
     public int $tries = 3;
     public int $backoff = 60; // 1 min between retries
-    public string $queue = 'emp-refresh';
 
     public function __construct(
         public string $startDate,

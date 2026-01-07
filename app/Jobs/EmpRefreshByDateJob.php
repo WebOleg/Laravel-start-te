@@ -24,7 +24,6 @@ class EmpRefreshByDateJob implements ShouldQueue
 
     public int $timeout = 300; // 5 min for setup
     public int $tries = 1;
-    public string $queue = 'emp-refresh';
 
     public const MAX_PAGES = 1000; // Safety limit
     public const PAGES_PER_CHUNK = 5; // Pages per chunk job
