@@ -43,6 +43,7 @@ RUN if [ "$INSTALL_XDEBUG" = "true" ] && [ -f /tmp/xdebug.ini ]; then \
 COPY . .
 
 # Install dependencies
+RUN rm -rf vendor
 RUN composer install --no-interaction --no-dev --optimize-autoloader
 
 # Set permissions
