@@ -2,7 +2,7 @@
 
 /**
  * Blacklisted IBANs that should be rejected during upload.
- * Can also store name and email for extended matching.
+ * Can also store name, email and BIC for extended matching.
  */
 
 namespace App\Models;
@@ -21,6 +21,7 @@ class Blacklist extends Model
         'first_name',
         'last_name',
         'email',
+        'bic',
         'reason',
         'source',
         'added_by',
@@ -58,6 +59,14 @@ class Blacklist extends Model
     public static function findByEmail(string $email): ?self
     {
         return self::whereRaw('LOWER(email) = ?', [strtolower($email)])->first();
+    }
+
+    /**
+     * Check if matches by BIC (case-insensitive).
+     */
+    public static function findByBic(string $bic): ?self
+    {
+        return self::whereRaw('LOWER(bic) = ?', [strtolower($bic)])->first();
     }
 
     /**

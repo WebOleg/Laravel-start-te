@@ -28,3 +28,4 @@ storage/*.log
 docker-compose.override.yml
 .config/
 .composer/
+database/data/blacklist.json
