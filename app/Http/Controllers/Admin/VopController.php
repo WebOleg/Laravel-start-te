@@ -4,11 +4,14 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Jobs\ProcessVopJob;
+use App\Models\Debtor;
 use App\Models\Upload;
 use App\Models\VopLog;
 use App\Services\VopVerificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 
 class VopController extends Controller
 {
@@ -26,8 +29,22 @@ class VopController extends Controller
     public function verify(Upload $upload, Request $request): JsonResponse
     {
         $forceRefresh = $request->boolean('force', false);
+        $lockKey = "vop_verify_{$upload->id}";
 
-        ProcessVopJob::dispatch($upload, $forceRefresh);
+        // Prevent duplicate dispatches
+        if (app('cache')->has($lockKey) && !$forceRefresh) {
+            return response()->json([
+                'message' => 'VOP verification already in progress',
+                'data' => [
+                    'upload_id' => $upload->id,
+                    'queued' => true,
+                    'duplicate' => true,
+                ],
+            ], 409);
+        }
+
+        Cache::put($lockKey, true, now()->addHours(2));
+        ProcessVopJob::dispatch($upload, $forceRefresh, $lockKey);
 
         return response()->json([
             'message' => 'VOP verification started',
