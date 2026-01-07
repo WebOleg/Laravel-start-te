@@ -11,6 +11,8 @@ services:
       - ./storage:/var/www/storage
     networks:
       - tether_network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - db
       - redis
@@ -28,6 +30,8 @@ services:
       - ./storage:/var/www/storage
     networks:
       - tether_network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - app
       - redis
