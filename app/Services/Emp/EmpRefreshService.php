@@ -66,7 +66,7 @@ class EmpRefreshService
      */
     public function processTransactions(array $transactions): array
     {
-        $stats = ['inserted' => 0, 'updated' => 0, 'errors' => 0];
+        $stats = ['inserted' => 0, 'updated' => 0, 'unchanged' => 0, 'errors' => 0];
         
         $batches = array_chunk($transactions, self::BATCH_SIZE);
         
@@ -74,6 +74,7 @@ class EmpRefreshService
             $result = $this->processBatch($batch);
             $stats['inserted'] += $result['inserted'];
             $stats['updated'] += $result['updated'];
+            $stats['unchanged'] += $result['unchanged'];
             $stats['errors'] += $result['errors'];
             
             usleep(self::RATE_LIMIT_DELAY_MS * 1000);
@@ -84,10 +85,13 @@ class EmpRefreshService
 
     /**
      * Process a single batch with bulk upsert.
+     * Compares status to detect real changes vs unchanged.
      */
     private function processBatch(array $transactions): array
     {
         $rows = [];
+        $uniqueIds = [];
+        $newDataByUniqueId = [];
         $now = now();
         
         foreach ($transactions as $tx) {
@@ -96,9 +100,16 @@ class EmpRefreshService
                 continue;
             }
             
+            $uniqueIds[] = $uniqueId;
             $transactionId = $tx['transaction_id'] ?? null;
             $status = $this->mapStatus($tx['status'] ?? 'unknown');
             $amount = isset($tx['amount']) ? ((float) $tx['amount']) / 100 : 0;
+            
+            // Store for comparison
+            $newDataByUniqueId[$uniqueId] = [
+                'status' => $status,
+                'amount' => $amount,
+            ];
             
             $rows[] = [
                 'unique_id' => $uniqueId,
@@ -119,19 +130,50 @@ class EmpRefreshService
         }
         
         if (empty($rows)) {
-            return ['inserted' => 0, 'updated' => 0, 'errors' => 0];
+            return ['inserted' => 0, 'updated' => 0, 'unchanged' => 0, 'errors' => 0];
         }
         
         try {
-            $affected = BillingAttempt::upsert(
+            // Get existing records with status and amount for comparison
+            $existing = BillingAttempt::whereIn('unique_id', $uniqueIds)
+                ->select('unique_id', 'status', 'amount')
+                ->get()
+                ->keyBy('unique_id');
+            
+            $inserted = 0;
+            $updated = 0;
+            $unchanged = 0;
+            
+            foreach ($newDataByUniqueId as $uniqueId => $newData) {
+                if (!$existing->has($uniqueId)) {
+                    // New record
+                    $inserted++;
+                } else {
+                    $old = $existing->get($uniqueId);
+                    // Compare status (main indicator of change)
+                    if ($old->status !== $newData['status']) {
+                        $updated++;
+                    } else {
+                        $unchanged++;
+                    }
+                }
+            }
+            
+            // Perform upsert
+            BillingAttempt::upsert(
                 $rows,
                 ['unique_id'],
                 ['status', 'amount', 'currency', 'error_code', 'error_message', 'technical_message', 'emp_created_at', 'processed_at', 'response_payload', 'updated_at']
             );
             
-            Log::debug('EMP Refresh: batch upserted', ['count' => count($rows), 'affected' => $affected]);
+            Log::debug('EMP Refresh: batch upserted', [
+                'total' => count($rows),
+                'inserted' => $inserted,
+                'updated' => $updated,
+                'unchanged' => $unchanged,
+            ]);
             
-            return ['inserted' => count($rows), 'updated' => 0, 'errors' => 0];
+            return ['inserted' => $inserted, 'updated' => $updated, 'unchanged' => $unchanged, 'errors' => 0];
             
         } catch (\Exception $e) {
             Log::error('EMP Refresh: batch upsert failed, falling back to individual', [
@@ -148,7 +190,7 @@ class EmpRefreshService
      */
     private function processIndividually(array $transactions): array
     {
-        $stats = ['inserted' => 0, 'updated' => 0, 'errors' => 0];
+        $stats = ['inserted' => 0, 'updated' => 0, 'unchanged' => 0, 'errors' => 0];
         
         foreach ($transactions as $tx) {
             try {
@@ -179,10 +221,13 @@ class EmpRefreshService
         }
 
         $existing = BillingAttempt::where('unique_id', $uniqueId)->first();
-
         $data = $this->mapTransactionData($tx);
 
         if ($existing) {
+            // Check if status actually changed
+            if ($existing->status === $data['status']) {
+                return 'unchanged';
+            }
             $existing->update($data);
             return 'updated';
         }
