@@ -36,6 +36,7 @@ class ChargebackStatsService
                 DB::raw("SUM(CASE WHEN billing_attempts.status = 'declined' THEN 1 ELSE 0 END) as declined"),
                 DB::raw("SUM(CASE WHEN billing_attempts.status = 'error' THEN 1 ELSE 0 END) as errors"),
                 DB::raw("SUM(CASE WHEN billing_attempts.status = 'chargebacked' THEN 1 ELSE 0 END) as chargebacks"),
+                DB::raw("SUM(CASE WHEN billing_attempts.status = 'chargebacked' THEN billing_attempts.amount ELSE 0 END) as chargeback_amount"),
             ])
             ->get();
 
@@ -46,6 +47,7 @@ class ChargebackStatsService
             'declined' => 0,
             'errors' => 0,
             'chargebacks' => 0,
+            'chargeback_amount' => 0,
         ];
 
         foreach ($stats as $row) {
@@ -63,6 +65,7 @@ class ChargebackStatsService
                 'declined' => (int) $row->declined,
                 'errors' => (int) $row->errors,
                 'chargebacks' => (int) $row->chargebacks,
+                'chargeback_amount' => round((float) $row->chargeback_amount, 2),
                 'cb_rate_total' => $cbRateTotal,
                 'cb_rate_approved' => $cbRateApproved,
                 'alert' => $cbRateTotal >= $threshold || $cbRateApproved >= $threshold,
@@ -73,6 +76,7 @@ class ChargebackStatsService
             $totals['declined'] += $row->declined;
             $totals['errors'] += $row->errors;
             $totals['chargebacks'] += $row->chargebacks;
+            $totals['chargeback_amount'] += (float) $row->chargeback_amount;
         }
 
         // Sort: LEGACY last, then by chargebacks desc
@@ -82,6 +86,7 @@ class ChargebackStatsService
             return $b['chargebacks'] <=> $a['chargebacks'];
         });
 
+        $totals['chargeback_amount'] = round($totals['chargeback_amount'], 2);
         $totals['cb_rate_total'] = $totals['total'] > 0 
             ? round(($totals['chargebacks'] / $totals['total']) * 100, 2) 
             : 0;
@@ -184,8 +189,10 @@ class ChargebackStatsService
             ->select([
                 DB::raw("COALESCE(vop_logs.bank_name, 'Unknown') as bank_name"),
                 DB::raw('COUNT(*) as total'),
+                DB::raw("SUM(CASE WHEN billing_attempts.status = 'approved' THEN 1 ELSE 0 END) as approved"),
                 DB::raw('SUM(billing_attempts.amount) as total_amount'),
                 DB::raw("SUM(CASE WHEN billing_attempts.status = '".BillingAttempt::STATUS_CHARGEBACKED."' THEN 1 ELSE 0 END) as chargebacks"),
+                DB::raw("SUM(CASE WHEN billing_attempts.status = '".BillingAttempt::STATUS_CHARGEBACKED."' THEN billing_attempts.amount ELSE 0 END) as chargeback_amount"),
             ])
             ->groupBy('vop_logs.bank_name')
             ->get();
@@ -196,31 +203,41 @@ class ChargebackStatsService
             'banks' => [],
             'totals' => [
                 'total' => 0,
+                'approved' => 0,
                 'total_amount' => 0,
                 'chargebacks' => 0,
-                'total_cb_rate' => 0,
+                'chargeback_amount' => 0,
+                'cb_rate' => 0,
             ],
         ];
 
         foreach ($banks as $row) {
-            $cbBankRate = $row->total > 0 
-                ? round(($row->chargebacks / $row->total) * 100, 2) 
+            // CB rate vs approved (consistent with By Country)
+            $cbBankRate = $row->approved > 0 
+                ? round(($row->chargebacks / $row->approved) * 100, 2) 
                 : 0;
             
             $result['banks'][] = [
                 'bank_name' => $row->bank_name,
-                'total_amount' => (float) $row->total_amount,
+                'total' => (int) $row->total,
+                'approved' => (int) $row->approved,
+                'total_amount' => round((float) $row->total_amount, 2),
                 'chargebacks' => (int) $row->chargebacks,
+                'chargeback_amount' => round((float) $row->chargeback_amount, 2),
                 'cb_rate' => (float) $cbBankRate,
             ];
 
             $result['totals']['total'] += (int) $row->total;
+            $result['totals']['approved'] += (int) $row->approved;
             $result['totals']['total_amount'] += (float) $row->total_amount;
             $result['totals']['chargebacks'] += (int) $row->chargebacks;
+            $result['totals']['chargeback_amount'] += (float) $row->chargeback_amount;
         }
 
-        $result['totals']['total_cb_rate'] = $result['totals']['total'] > 0 
-            ? round(($result['totals']['chargebacks'] / $result['totals']['total']) * 100, 2) 
+        $result['totals']['total_amount'] = round($result['totals']['total_amount'], 2);
+        $result['totals']['chargeback_amount'] = round($result['totals']['chargeback_amount'], 2);
+        $result['totals']['cb_rate'] = $result['totals']['approved'] > 0 
+            ? round(($result['totals']['chargebacks'] / $result['totals']['approved']) * 100, 2) 
             : 0;
 
         return $result;

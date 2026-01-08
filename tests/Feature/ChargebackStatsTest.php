@@ -241,7 +241,7 @@ class ChargebackStatsTest extends TestCase
                         'total',
                         'total_amount',
                         'chargebacks',
-                        'total_cb_rate',
+                        'cb_rate',
                     ]
                 ]
             ]);
@@ -396,8 +396,9 @@ class ChargebackStatsTest extends TestCase
         $response->assertStatus(200);
         $data = $response->json('data');
 
-        $this->assertEqualsWithDelta(16.67, $data['banks'][0]['cb_rate'], 0.01);
-        $this->assertEqualsWithDelta(16.67, $data['totals']['total_cb_rate'], 0.01);
+        // CB rate = chargebacks / approved = 2/10 = 20%
+        $this->assertEqualsWithDelta(20.0, $data['banks'][0]['cb_rate'], 0.01);
+        $this->assertEqualsWithDelta(20.0, $data['totals']['cb_rate'], 0.01);
     }
 
     public function test_chargeback_banks_multiple_aggregated_correctly(): void
@@ -469,11 +470,13 @@ class ChargebackStatsTest extends TestCase
         
         $this->assertEquals(400.0, $deutscheBank['total_amount']); // 4 * 100
         $this->assertEquals(1, $deutscheBank['chargebacks']);
-        $this->assertEqualsWithDelta(25.0, $deutscheBank['cb_rate'], 0.01); // 1/4
+        // CB rate = chargebacks / approved = 1/3 = 33.33%
+        $this->assertEqualsWithDelta(33.33, $deutscheBank['cb_rate'], 0.01);
         
         $this->assertEquals(400.0, $commerzbank['total_amount']); // 4 * 100
         $this->assertEquals(2, $commerzbank['chargebacks']);
-        $this->assertEqualsWithDelta(50.0, $commerzbank['cb_rate'], 0.01); // 2/4
+        // CB rate = chargebacks / approved = 2/2 = 100%
+        $this->assertEqualsWithDelta(100.0, $commerzbank['cb_rate'], 0.01);
     }
 
     public function test_chargeback_banks_response_is_cached(): void
@@ -565,7 +568,7 @@ class ChargebackStatsTest extends TestCase
         $this->assertEmpty($data['banks']);
         $this->assertEquals(0, $data['totals']['total']);
         $this->assertEquals(0, $data['totals']['chargebacks']);
-        $this->assertEquals(0.0, $data['totals']['total_cb_rate']);
+        $this->assertEquals(0.0, $data['totals']['cb_rate']);
     }
 
     public function test_chargeback_banks_total_and_chargebacked_included(): void
@@ -910,7 +913,7 @@ class ChargebackStatsTest extends TestCase
             'error_code' => 'CB001',
             'error_message' => 'Fraud',
             'amount' => 100.00,
-            'created_at' => now()->subHour(12),
+            'created_at' => now()->subHours(12),
         ]);
 
         // Get 24h period
