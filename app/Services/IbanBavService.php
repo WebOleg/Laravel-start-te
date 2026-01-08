@@ -1,9 +1,8 @@
 <?php
-
 /**
  * IBAN.com BAV (Bank Account Verification) API service.
+ * Uses BAV v3 endpoint for name matching verification.
  */
-
 namespace App\Services;
 
 use Illuminate\Support\Facades\Http;
@@ -37,7 +36,7 @@ class IbanBavService
     public function __construct(IbanValidator $ibanValidator)
     {
         $this->apiKey = config('services.iban.api_key', '');
-        $this->apiUrl = config('services.iban.api_url', 'https://api.iban.com/clients/verify/v3/');
+        $this->apiUrl = config('services.iban.bav_api_url', 'https://api.iban.com/clients/api/verify/v3/');
         $this->mockMode = config('services.iban.mock', true);
         $this->ibanValidator = $ibanValidator;
     }
@@ -80,7 +79,7 @@ class IbanBavService
             $response = Http::withHeaders([
                 'x-api-key' => $this->apiKey,
                 'Content-Type' => 'application/json',
-            ])->post($this->apiUrl, [
+            ])->timeout(60)->post($this->apiUrl, [
                 'IBAN' => $iban,
                 'name' => $name,
             ]);
@@ -91,6 +90,7 @@ class IbanBavService
                 'iban_masked' => $this->ibanValidator->mask($iban),
                 'status' => $response->status(),
                 'success' => $data['query']['success'] ?? false,
+                'name_match' => $data['result']['name_match'] ?? null,
             ]);
 
             if (!empty($data['error'])) {
