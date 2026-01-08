@@ -30,9 +30,14 @@ class VopController extends Controller
     {
         $forceRefresh = $request->boolean('force', false);
         $lockKey = "vop_verify_{$upload->id}";
+        $totalDebtorsToVerify = $upload->debtors()
+            ->where('debtors.validation_status', Debtor::VALIDATION_VALID)
+            ->whereNotNull('debtors.iban')
+            ->count();
+        $totalLockSecs = (int) (($totalDebtorsToVerify * 0.5) + 60);
 
         // Prevent duplicate dispatches
-        if (app('cache')->has($lockKey) && !$forceRefresh) {
+        if (Cache::has($lockKey) && !$forceRefresh) {
             return response()->json([
                 'message' => 'VOP verification already in progress',
                 'data' => [
@@ -43,7 +48,7 @@ class VopController extends Controller
             ], 409);
         }
 
-        Cache::put($lockKey, true, now()->addHours(2));
+        Cache::put($lockKey, true, now()->addSeconds($totalLockSecs));
         ProcessVopJob::dispatch($upload, $forceRefresh, $lockKey);
 
         return response()->json([
