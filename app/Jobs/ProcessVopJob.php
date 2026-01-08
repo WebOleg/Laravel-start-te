@@ -11,6 +11,7 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Bus;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 class ProcessVopJob implements ShouldQueue, ShouldBeUnique
@@ -38,6 +39,8 @@ class ProcessVopJob implements ShouldQueue, ShouldBeUnique
     public function handle(): void
     {
         Log::info('ProcessVopJob started', ['upload_id' => $this->upload->id]);
+        $uploadId = $this->upload->id;
+        $lockKey = "vop_verify_{$uploadId}";
 
         $debtorIds = Debtor::where('upload_id', $this->upload->id)
             ->where('validation_status', Debtor::VALIDATION_VALID)
@@ -47,6 +50,7 @@ class ProcessVopJob implements ShouldQueue, ShouldBeUnique
             ->toArray();
 
         if (empty($debtorIds)) {
+            Cache::forget($lockKey);
             Log::info('ProcessVopJob: no debtors to verify', ['upload_id' => $this->upload->id]);
             return;
         }
@@ -63,12 +67,14 @@ class ProcessVopJob implements ShouldQueue, ShouldBeUnique
             );
         }
 
-        $uploadId = $this->upload->id;
-
         Bus::batch($jobs)
             ->name("VOP Upload #{$uploadId}")
             ->allowFailures()
             ->onQueue('vop')
+            ->finally(function () use ($lockKey, $uploadId) {
+                Cache::forget($lockKey);
+                Log::info('ProcessVopJob completed and Cache Forget: ', ['Lock key' => $lockKey, 'Upload ID' => $uploadId]);
+            })
             ->dispatch();
 
         Log::info('ProcessVopJob dispatched', [

@@ -19,8 +19,8 @@ class EmpRefreshService
     private EmpClient $client;
     
     public const PER_PAGE = 100;
-    public const CHUNK_SIZE = 50;
-    public const RATE_LIMIT_DELAY_MS = 100;
+    public const BATCH_SIZE = 100;
+    public const RATE_LIMIT_DELAY_MS = 50;
 
     public function __construct(EmpClient $client)
     {
@@ -62,28 +62,182 @@ class EmpRefreshService
     }
 
     /**
-     * Process a batch of transactions (upsert).
+     * Process a batch of transactions using bulk upsert.
      */
     public function processTransactions(array $transactions): array
     {
-        $stats = ['inserted' => 0, 'updated' => 0, 'errors' => 0];
+        $stats = ['inserted' => 0, 'updated' => 0, 'unchanged' => 0, 'errors' => 0];
+        
+        $batches = array_chunk($transactions, self::BATCH_SIZE);
+        
+        foreach ($batches as $batch) {
+            $result = $this->processBatch($batch);
+            $stats['inserted'] += $result['inserted'];
+            $stats['updated'] += $result['updated'];
+            $stats['unchanged'] += $result['unchanged'];
+            $stats['errors'] += $result['errors'];
+            
+            usleep(self::RATE_LIMIT_DELAY_MS * 1000);
+        }
 
+        return $stats;
+    }
+
+    /**
+     * Process a single batch with bulk upsert.
+     * Compares status to detect real changes vs unchanged.
+     */
+    private function processBatch(array $transactions): array
+    {
+        $rows = [];
+        $uniqueIds = [];
+        $newDataByUniqueId = [];
+        $now = now();
+        
+        foreach ($transactions as $tx) {
+            $uniqueId = $tx['unique_id'] ?? null;
+            if (!$uniqueId) {
+                continue;
+            }
+            
+            $uniqueIds[] = $uniqueId;
+            $transactionId = $tx['transaction_id'] ?? null;
+            $status = $this->mapStatus($tx['status'] ?? 'unknown');
+            $amount = isset($tx['amount']) ? ((float) $tx['amount']) / 100 : 0;
+            
+            // Store for comparison
+            $newDataByUniqueId[$uniqueId] = [
+                'status' => $status,
+                'amount' => $amount,
+            ];
+            
+            $rows[] = [
+                'unique_id' => $uniqueId,
+                'transaction_id' => $transactionId ?: 'emp_import_' . $uniqueId,
+                'status' => $status,
+                'amount' => $amount,
+                'currency' => $tx['currency'] ?? 'EUR',
+                'error_code' => $tx['code'] ?? $tx['reason_code'] ?? null,
+                'error_message' => $tx['message'] ?? null,
+                'technical_message' => $tx['technical_message'] ?? null,
+                'emp_created_at' => isset($tx['timestamp']) ? Carbon::parse($tx['timestamp']) : null,
+                'processed_at' => $now,
+                'response_payload' => json_encode($tx),
+                'attempt_number' => 1,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ];
+        }
+        
+        if (empty($rows)) {
+            return ['inserted' => 0, 'updated' => 0, 'unchanged' => 0, 'errors' => 0];
+        }
+        
+        try {
+            // Get existing records with status and amount for comparison
+            $existing = BillingAttempt::whereIn('unique_id', $uniqueIds)
+                ->select('unique_id', 'status', 'amount')
+                ->get()
+                ->keyBy('unique_id');
+            
+            $inserted = 0;
+            $updated = 0;
+            $unchanged = 0;
+            
+            foreach ($newDataByUniqueId as $uniqueId => $newData) {
+                if (!$existing->has($uniqueId)) {
+                    // New record
+                    $inserted++;
+                } else {
+                    $old = $existing->get($uniqueId);
+                    // Compare status (main indicator of change)
+                    if ($old->status !== $newData['status']) {
+                        $updated++;
+                    } else {
+                        $unchanged++;
+                    }
+                }
+            }
+            
+            // Perform upsert
+            BillingAttempt::upsert(
+                $rows,
+                ['unique_id'],
+                ['status', 'amount', 'currency', 'error_code', 'error_message', 'technical_message', 'emp_created_at', 'processed_at', 'response_payload', 'updated_at']
+            );
+            
+            Log::debug('EMP Refresh: batch upserted', [
+                'total' => count($rows),
+                'inserted' => $inserted,
+                'updated' => $updated,
+                'unchanged' => $unchanged,
+            ]);
+            
+            return ['inserted' => $inserted, 'updated' => $updated, 'unchanged' => $unchanged, 'errors' => 0];
+            
+        } catch (\Exception $e) {
+            Log::error('EMP Refresh: batch upsert failed, falling back to individual', [
+                'error' => $e->getMessage(),
+                'batch_size' => count($rows),
+            ]);
+            
+            return $this->processIndividually($transactions);
+        }
+    }
+
+    /**
+     * Fallback: process transactions individually if batch fails.
+     */
+    private function processIndividually(array $transactions): array
+    {
+        $stats = ['inserted' => 0, 'updated' => 0, 'unchanged' => 0, 'errors' => 0];
+        
         foreach ($transactions as $tx) {
             try {
                 $result = $this->upsertTransaction($tx);
                 $stats[$result]++;
             } catch (\Exception $e) {
-                Log::error('EMP Refresh: upsert failed', [
+                Log::warning('EMP Refresh: individual upsert failed', [
                     'error' => $e->getMessage(),
                     'unique_id' => $tx['unique_id'] ?? 'unknown',
                 ]);
                 $stats['errors']++;
             }
-            
-            usleep(self::RATE_LIMIT_DELAY_MS * 100);
+        }
+        
+        return $stats;
+    }
+
+    /**
+     * Upsert a single transaction (fallback method).
+     */
+    private function upsertTransaction(array $tx): string
+    {
+        $uniqueId = $tx['unique_id'] ?? null;
+        $transactionId = $tx['transaction_id'] ?? null;
+
+        if (!$uniqueId) {
+            return 'errors';
         }
 
-        return $stats;
+        $existing = BillingAttempt::where('unique_id', $uniqueId)->first();
+        $data = $this->mapTransactionData($tx);
+
+        if ($existing) {
+            // Check if status actually changed
+            if ($existing->status === $data['status']) {
+                return 'unchanged';
+            }
+            $existing->update($data);
+            return 'updated';
+        }
+
+        BillingAttempt::create(array_merge($data, [
+            'transaction_id' => $transactionId ?: 'emp_import_' . $uniqueId,
+            'attempt_number' => 1,
+        ]));
+
+        return 'inserted';
     }
 
     /**
@@ -120,7 +274,6 @@ class EmpRefreshService
 
     /**
      * Extract transactions array from API response.
-     * Handles multiple EMP response formats.
      */
     private function extractTransactions(array $response): array
     {
@@ -154,64 +307,9 @@ class EmpRefreshService
             return array_values($response['payment_responses']);
         }
 
-        Log::warning('EMP Refresh: unknown response format', [
-            'keys' => array_keys($response),
-        ]);
+        Log::warning('EMP Refresh: unknown response format', ['keys' => array_keys($response)]);
 
         return [];
-    }
-
-    /**
-     * Upsert a single transaction.
-     */
-    private function upsertTransaction(array $tx): string
-    {
-        $uniqueId = $tx['unique_id'] ?? null;
-        $transactionId = $tx['transaction_id'] ?? null;
-
-        if (!$uniqueId) {
-            Log::warning('EMP Refresh: transaction without unique_id', ['tx' => $tx]);
-            return 'errors';
-        }
-
-        $existing = BillingAttempt::where('unique_id', $uniqueId)->first();
-        
-        if (!$existing && $transactionId) {
-            $existing = BillingAttempt::where('transaction_id', $transactionId)->first();
-        }
-
-        $data = $this->mapTransactionData($tx);
-
-        if ($existing) {
-            $existing->update($data);
-            Log::debug('EMP Refresh: updated', ['unique_id' => $uniqueId]);
-            return 'updated';
-        }
-
-        $debtorId = $this->extractDebtorId($transactionId);
-        $debtor = $debtorId ? Debtor::find($debtorId) : null;
-
-        if (!$debtor) {
-            Log::info('EMP Refresh: orphan transaction', [
-                'unique_id' => $uniqueId,
-                'transaction_id' => $transactionId,
-            ]);
-        }
-
-        BillingAttempt::create(array_merge($data, [
-            'debtor_id' => $debtor?->id,
-            'upload_id' => $debtor?->upload_id,
-            'transaction_id' => $transactionId ?: 'emp_import_' . $uniqueId,
-            'attempt_number' => 1,
-        ]));
-
-        Log::debug('EMP Refresh: inserted', ['unique_id' => $uniqueId]);
-
-        if ($debtor && $data['status'] === BillingAttempt::STATUS_APPROVED) {
-            $debtor->update(['status' => Debtor::STATUS_RECOVERED]);
-        }
-
-        return 'inserted';
     }
 
     /**
@@ -250,21 +348,5 @@ class EmpRefreshService
             'pending', 'pending_async', 'pending_review' => BillingAttempt::STATUS_PENDING,
             default => BillingAttempt::STATUS_ERROR,
         };
-    }
-
-    /**
-     * Extract debtor ID from transaction_id pattern.
-     */
-    private function extractDebtorId(?string $transactionId): ?int
-    {
-        if (!$transactionId) {
-            return null;
-        }
-
-        if (preg_match('/^tether_(\d+)_/', $transactionId, $matches)) {
-            return (int) $matches[1];
-        }
-
-        return null;
     }
 }

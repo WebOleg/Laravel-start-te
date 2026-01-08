@@ -42,7 +42,7 @@ class EmpRefreshByDateJob implements ShouldQueue
                 'status' => 'processing',
                 'started_at' => now()->toIso8601String(),
                 'progress' => 0,
-                'stats' => ['inserted' => 0, 'updated' => 0, 'errors' => 0, 'total' => 0],
+                'stats' => ['inserted' => 0, 'updated' => 0, 'unchanged' => 0, 'errors' => 0, 'total' => 0],
             ], 7200);
 
             Log::info('EmpRefreshByDateJob: starting', [
@@ -51,7 +51,7 @@ class EmpRefreshByDateJob implements ShouldQueue
                 'end_date' => $this->endDate,
             ]);
 
-            $totalStats = ['inserted' => 0, 'updated' => 0, 'errors' => 0, 'total' => 0];
+            $totalStats = ['inserted' => 0, 'updated' => 0, 'unchanged' => 0, 'errors' => 0, 'total' => 0];
             $page = 1;
             $hasMore = true;
 
@@ -77,6 +77,7 @@ class EmpRefreshByDateJob implements ShouldQueue
                 
                 $totalStats['inserted'] += $pageStats['inserted'];
                 $totalStats['updated'] += $pageStats['updated'];
+                $totalStats['unchanged'] += $pageStats['unchanged'] ?? 0;
                 $totalStats['errors'] += $pageStats['errors'];
                 $totalStats['total'] += count($transactions);
 
