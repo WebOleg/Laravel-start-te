@@ -42,7 +42,7 @@ class EmpRefreshChunkJob implements ShouldQueue
         }
 
         $cacheKey = "emp_refresh_{$this->jobId}";
-        $chunkStats = ['inserted' => 0, 'updated' => 0, 'errors' => 0, 'total' => 0];
+        $chunkStats = ['inserted' => 0, 'updated' => 0, 'unchanged' => 0, 'errors' => 0, 'total' => 0];
 
         Log::info('EmpRefreshChunkJob: starting', [
             'job_id' => $this->jobId,
@@ -73,8 +73,9 @@ class EmpRefreshChunkJob implements ShouldQueue
             
             $chunkStats['inserted'] += $pageStats['inserted'];
             $chunkStats['updated'] += $pageStats['updated'];
+            $chunkStats['unchanged'] += $pageStats['unchanged'] ?? 0;
             $chunkStats['errors'] += $pageStats['errors'];
-            $chunkStats['total'] += $pageStats['inserted'] + $pageStats['updated'];
+            $chunkStats['total'] += $pageStats['inserted'] + $pageStats['updated'] + ($pageStats['unchanged'] ?? 0);
 
             // Rate limiting between pages
             usleep(200000); // 200ms = max 5 pages/second
@@ -100,10 +101,11 @@ class EmpRefreshChunkJob implements ShouldQueue
         // Atomic update using cache lock
         Cache::lock("{$cacheKey}_lock", 10)->block(5, function () use ($cacheKey, $chunkStats) {
             $current = Cache::get($cacheKey, []);
-            $stats = $current['stats'] ?? ['inserted' => 0, 'updated' => 0, 'errors' => 0, 'total' => 0];
+            $stats = $current['stats'] ?? ['inserted' => 0, 'updated' => 0, 'unchanged' => 0, 'errors' => 0, 'total' => 0];
 
             $stats['inserted'] += $chunkStats['inserted'];
             $stats['updated'] += $chunkStats['updated'];
+            $stats['unchanged'] += $chunkStats['unchanged'] ?? 0;
             $stats['errors'] += $chunkStats['errors'];
             $stats['total'] += $chunkStats['total'];
 

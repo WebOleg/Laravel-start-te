@@ -37,9 +37,6 @@ class EmpClient
 
     /**
      * Send SDD Sale (SEPA Direct Debit) transaction.
-     *
-     * @param array $data Transaction data
-     * @return array Parsed response
      */
     public function sddSale(array $data): array
     {
@@ -50,9 +47,6 @@ class EmpClient
 
     /**
      * Reconcile a transaction by unique_id.
-     *
-     * @param string $uniqueId
-     * @return array
      */
     public function reconcile(string $uniqueId): array
     {
@@ -63,16 +57,10 @@ class EmpClient
 
     /**
      * Get transactions by date range (for EMP Refresh).
-     *
-     * @param string $startDate Y-m-d format
-     * @param string $endDate Y-m-d format
-     * @param int $page Page number (1-based)
-     * @param int $perPage Items per page
-     * @return array
      */
-    public function getTransactionsByDate(string $startDate, string $endDate, int $page = 1, int $perPage = 100): array
+    public function getTransactionsByDate(string $startDate, string $endDate, int $page = 1): array
     {
-        $xml = $this->buildGetByDateXml($startDate, $endDate, $page, $perPage);
+        $xml = $this->buildGetByDateXml($startDate, $endDate, $page);
         
         return $this->sendRequest('/reconcile/by_date/' . $this->terminalToken, $xml);
     }
@@ -80,13 +68,12 @@ class EmpClient
     /**
      * Build XML for get transactions by date request.
      */
-    private function buildGetByDateXml(string $startDate, string $endDate, int $page, int $perPage): string
+    private function buildGetByDateXml(string $startDate, string $endDate, int $page): string
     {
         $xml = new \SimpleXMLElement('<?xml version="1.0" encoding="UTF-8"?><reconcile/>');
         $xml->addChild('start_date', $startDate);
         $xml->addChild('end_date', $endDate);
-        $xml->addChild('page', $page);
-        $xml->addChild('per_page', $perPage);
+        $xml->addChild('page', (string) $page);
         
         return $xml->asXML();
     }
@@ -96,7 +83,7 @@ class EmpClient
      */
     private function buildSddSaleXml(array $data): string
     {
-        $amount = (int) round($data['amount'] * 100); // Convert to cents
+        $amount = (int) round($data['amount'] * 100);
         
         $xml = new \SimpleXMLElement('<?xml version="1.0" encoding="UTF-8"?><payment_transaction/>');
         
@@ -104,7 +91,7 @@ class EmpClient
         $xml->addChild('transaction_id', $data['transaction_id']);
         $xml->addChild('usage', $data['usage'] ?? 'Payment');
         $xml->addChild('remote_ip', $data['remote_ip'] ?? request()->ip() ?? '127.0.0.1');
-        $xml->addChild('amount', $amount);
+        $xml->addChild('amount', (string) $amount);
         $xml->addChild('currency', $data['currency'] ?? 'EUR');
         $xml->addChild('iban', $data['iban']);
         
@@ -112,24 +99,20 @@ class EmpClient
             $xml->addChild('bic', $data['bic']);
         }
         
-        // Notification URL for async responses
         if (!empty($data['notification_url'])) {
             $xml->addChild('notification_url', $data['notification_url']);
         }
         
-        // Return URLs for SDDVP flow
         if (!empty($data['return_success_url'])) {
             $xml->addChild('return_success_url', $data['return_success_url']);
             $xml->addChild('return_failure_url', $data['return_failure_url'] ?? $data['return_success_url']);
             $xml->addChild('return_cancel_url', $data['return_cancel_url'] ?? $data['return_success_url']);
         }
         
-        // Customer email
         if (!empty($data['email'])) {
             $xml->addChild('customer_email', $data['email']);
         }
         
-        // Billing address
         $billing = $xml->addChild('billing_address');
         $billing->addChild('first_name', $this->sanitizeName($data['first_name'] ?? ''));
         $billing->addChild('last_name', $this->sanitizeName($data['last_name'] ?? ''));
@@ -144,7 +127,6 @@ class EmpClient
             $billing->addChild('city', $data['city']);
         }
         
-        // Extract country from IBAN
         $country = strtoupper(substr($data['iban'], 0, 2));
         $billing->addChild('country', $country);
 
@@ -236,18 +218,38 @@ class EmpClient
     }
 
     /**
-     * Convert SimpleXMLElement to array.
+     * Convert SimpleXMLElement to array with attributes support.
      */
     private function xmlToArray(\SimpleXMLElement $xml): array
     {
         $result = [];
         
+        foreach ($xml->attributes() as $attrName => $attrValue) {
+            $result['@' . $attrName] = (string) $attrValue;
+        }
+        
+        $children = [];
         foreach ($xml->children() as $key => $value) {
-            $children = $value->children();
-            if (count($children) > 0) {
-                $result[$key] = $this->xmlToArray($value);
+            $children[$key][] = $value;
+        }
+        
+        foreach ($children as $key => $items) {
+            if (count($items) === 1) {
+                $child = $items[0];
+                if ($child->count() > 0 || $child->attributes()->count() > 0) {
+                    $result[$key] = $this->xmlToArray($child);
+                } else {
+                    $result[$key] = (string) $child;
+                }
             } else {
-                $result[$key] = (string) $value;
+                $result[$key] = [];
+                foreach ($items as $child) {
+                    if ($child->count() > 0 || $child->attributes()->count() > 0) {
+                        $result[$key][] = $this->xmlToArray($child);
+                    } else {
+                        $result[$key][] = (string) $child;
+                    }
+                }
             }
         }
         
@@ -259,10 +261,8 @@ class EmpClient
      */
     private function sanitizeName(string $name): string
     {
-        // Remove non-ASCII characters except common European ones
         $name = preg_replace('/[^\p{L}\p{N}\s\-\'\.]/u', '', $name);
         
-        // Limit to 35 characters (SEPA limit)
         return substr(trim($name), 0, 35);
     }
 
