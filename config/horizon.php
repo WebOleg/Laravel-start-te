@@ -8,6 +8,8 @@
  * - high: VOP verification, alerts
  * - vop: VOP verification jobs (processed with high priority)
  * - billing: EMP billing jobs (processed with high priority)
+ * - reconciliation: Reconciliation jobs
+ * - emp-refresh: EMP inbound sync (long-running import)
  * - default: File processing, imports
  * - low: Reports, notifications, cleanup
  */
@@ -25,6 +27,8 @@ return [
         'redis:high' => 60,
         'redis:vop' => 60,
         'redis:billing' => 60,
+        'redis:reconciliation' => 60,
+        'redis:emp-refresh' => 120,
         'redis:default' => 120,
         'redis:low' => 300,
     ],
@@ -88,6 +92,18 @@ return [
             'timeout' => 180,
             'nice' => 0,
         ],
+        'supervisor-emp-refresh' => [
+            'connection' => 'redis',
+            'queue' => ['emp-refresh'],
+            'balance' => 'simple',
+            'maxProcesses' => 2,
+            'maxTime' => 0,
+            'maxJobs' => 100,
+            'memory' => 256,
+            'tries' => 3,
+            'timeout' => 900,
+            'nice' => 5,
+        ],
         'supervisor-default' => [
             'connection' => 'redis',
             'queue' => ['default'],
@@ -132,6 +148,9 @@ return [
                 'balanceMaxShift' => 2,
                 'balanceCooldown' => 3,
             ],
+            'supervisor-emp-refresh' => [
+                'maxProcesses' => 3,
+            ],
             'supervisor-default' => [
                 'maxProcesses' => 5,
                 'balanceMaxShift' => 2,
@@ -152,6 +171,9 @@ return [
             ],
             'supervisor-high' => [
                 'maxProcesses' => 2,
+            ],
+            'supervisor-emp-refresh' => [
+                'maxProcesses' => 1,
             ],
             'supervisor-default' => [
                 'maxProcesses' => 2,

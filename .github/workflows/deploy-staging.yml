@@ -1,0 +1,47 @@
+name: Deploy Backend (Staging)
+
+on:
+  push:
+    branches: ["staging"]
+
+concurrency:
+  group: deploy-backend-staging
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy backend via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+
+          script: |
+            set -euo pipefail
+
+            cd /opt/tether-staging/backend
+
+            git fetch --all --prune
+            git checkout -B staging origin/staging
+
+            docker compose -f docker-compose.staging.yml build
+            docker compose -f docker-compose.staging.yml up -d
+
+            # Composer
+            docker compose -f docker-compose.staging.yml exec -T app composer install \
+              --no-interaction --no-dev --prefer-dist --optimize-autoloader
+
+            # Laravel
+            docker compose -f docker-compose.staging.yml exec -T app php artisan package:discover --ansi
+
+            docker compose -f docker-compose.staging.yml exec -T app php artisan config:clear || true
+            docker compose -f docker-compose.staging.yml exec -T app php artisan cache:clear || true
+            docker compose -f docker-compose.staging.yml exec -T app php artisan route:clear || true
+            docker compose -f docker-compose.staging.yml exec -T app php artisan view:clear || true
+
+            docker compose -f docker-compose.staging.yml exec -T app php artisan migrate --force
+
+            docker compose -f docker-compose.staging.yml ps

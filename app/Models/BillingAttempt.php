@@ -56,6 +56,7 @@ class BillingAttempt extends Model
         'response_payload',
         'meta',
         'processed_at',
+        'emp_created_at',
         'last_reconciled_at',
         'reconciliation_attempts',
     ];
@@ -68,6 +69,7 @@ class BillingAttempt extends Model
         'attempt_number' => 'integer',
         'reconciliation_attempts' => 'integer',
         'processed_at' => 'datetime',
+        'emp_created_at' => 'datetime',
         'last_reconciled_at' => 'datetime',
     ];
 
