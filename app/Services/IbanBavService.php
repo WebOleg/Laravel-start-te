@@ -1,9 +1,8 @@
 <?php
-
 /**
  * IBAN.com BAV (Bank Account Verification) API service.
+ * Uses BAV v3 endpoint for name matching verification.
  */
-
 namespace App\Services;
 
 use Illuminate\Support\Facades\Http;
@@ -29,6 +28,12 @@ class IbanBavService
     private const RESULT_MISMATCH = 'mismatch';
     private const RESULT_REJECTED = 'rejected';
 
+    /** @var array<string> Valid error codes that indicate successful verification */
+    private const VALID_RESPONSES = [
+        'NAME_NOT_MATCH',
+        'NAME_PARTIAL_MATCH',
+    ];
+
     private string $apiKey;
     private string $apiUrl;
     private bool $mockMode;
@@ -37,7 +42,7 @@ class IbanBavService
     public function __construct(IbanValidator $ibanValidator)
     {
         $this->apiKey = config('services.iban.api_key', '');
-        $this->apiUrl = config('services.iban.api_url', 'https://api.iban.com/clients/verify/v3/');
+        $this->apiUrl = config('services.iban.bav_api_url', 'https://api.iban.com/clients/api/verify/v3/');
         $this->mockMode = config('services.iban.mock', true);
         $this->ibanValidator = $ibanValidator;
     }
@@ -80,32 +85,50 @@ class IbanBavService
             $response = Http::withHeaders([
                 'x-api-key' => $this->apiKey,
                 'Content-Type' => 'application/json',
-            ])->post($this->apiUrl, [
+            ])->timeout(60)->post($this->apiUrl, [
                 'IBAN' => $iban,
                 'name' => $name,
             ]);
 
             $data = $response->json();
+            $errorCode = $data['error'] ?? '';
+            $querySuccess = $data['query']['success'] ?? false;
 
             Log::info('BAV API response', [
                 'iban_masked' => $this->ibanValidator->mask($iban),
                 'status' => $response->status(),
-                'success' => $data['query']['success'] ?? false,
+                'success' => $querySuccess,
+                'name_match' => $data['result']['name_match'] ?? null,
+                'error' => $errorCode,
             ]);
 
-            if (!empty($data['error'])) {
-                return $this->buildResult(success: false, error: $data['error']);
+            // Check if query was successful
+            if (!$querySuccess) {
+                // Real error - not a valid response
+                return $this->buildResult(success: false, error: $errorCode ?: 'BAV verification failed');
             }
 
-            if (!($data['query']['success'] ?? false)) {
-                return $this->buildResult(success: false, error: 'BAV verification failed');
+            // Query successful - even if error contains NAME_NOT_MATCH etc, it's a valid result
+            $nameMatch = $data['result']['name_match'] ?? 'unavailable';
+            $valid = !empty($data['result']['valid']);
+            $bic = $data['result']['bic'] ?? null;
+
+            // If we got a name_match result, the verification was successful
+            if (in_array($nameMatch, ['yes', 'partial', 'no'], true)) {
+                return $this->buildResult(
+                    success: true,
+                    valid: true,
+                    nameMatch: $nameMatch,
+                    bic: $bic
+                );
             }
 
+            // Verification succeeded but bank doesn't support name matching
             return $this->buildResult(
                 success: true,
-                valid: $data['result']['valid'] ?? false,
-                nameMatch: $data['result']['name_match'] ?? 'unavailable',
-                bic: $data['result']['bic'] ?? null
+                valid: $valid,
+                nameMatch: 'unavailable',
+                bic: $bic
             );
 
         } catch (\Exception $e) {

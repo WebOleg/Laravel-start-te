@@ -1,16 +1,15 @@
 <?php
-
 /**
  * VOP Scoring Engine for calculating debtor verification scores.
- * 
+ *
  * Calculates a 0-100 score based on IBAN validation, bank identification,
- * SEPA support, and country verification.
+ * SEPA support, country verification, and BAV name matching.
  */
-
 namespace App\Services;
 
 use App\Models\Debtor;
 use App\Models\VopLog;
+use Illuminate\Support\Facades\Log;
 
 class VopScoringService
 {
@@ -29,18 +28,21 @@ class VopScoringService
 
     private IbanValidator $ibanValidator;
     private IbanApiService $ibanApiService;
+    private IbanBavService $ibanBavService;
 
-    public function __construct(IbanValidator $ibanValidator, IbanApiService $ibanApiService)
-    {
+    public function __construct(
+        IbanValidator $ibanValidator,
+        IbanApiService $ibanApiService,
+        IbanBavService $ibanBavService
+    ) {
         $this->ibanValidator = $ibanValidator;
         $this->ibanApiService = $ibanApiService;
+        $this->ibanBavService = $ibanBavService;
     }
 
     /**
-     * Calculate VOP score and create VopLog for debtor.
-     *
      * @param Debtor $debtor
-     * @param bool $forceRefresh Skip cache and force API call
+     * @param bool $forceRefresh
      * @return VopLog
      */
     public function score(Debtor $debtor, bool $forceRefresh = false): VopLog
@@ -49,7 +51,6 @@ class VopScoringService
         $score = 0;
         $meta = [];
 
-        // 1. IBAN checksum validation (local)
         $ibanValid = $this->ibanValidator->isValid($iban);
         if ($ibanValid) {
             $score += self::SCORE_IBAN_VALID;
@@ -58,7 +59,6 @@ class VopScoringService
             $meta['iban_valid'] = false;
         }
 
-        // 2. Country in SEPA zone
         $country = $this->ibanValidator->getCountryCode($iban);
         $countrySupported = in_array($country, self::SEPA_COUNTRIES);
         if ($countrySupported) {
@@ -68,7 +68,6 @@ class VopScoringService
             $meta['country_supported'] = false;
         }
 
-        // 3. Bank identification via API
         $bankIdentified = false;
         $bankName = null;
         $bic = null;
@@ -76,7 +75,7 @@ class VopScoringService
 
         if ($ibanValid) {
             $apiResult = $this->ibanApiService->verify($iban, $forceRefresh);
-            
+
             if ($apiResult['success']) {
                 $bankData = $apiResult['bank_data'] ?? [];
                 $sepaData = $apiResult['sepa_data'] ?? [];
@@ -90,7 +89,6 @@ class VopScoringService
                     $meta['bank_identified'] = true;
                 }
 
-                // 4. SEPA SDD support
                 $sepaSdd = strtoupper($sepaData['SDD'] ?? '') === 'YES';
                 if ($sepaSdd) {
                     $score += self::SCORE_SEPA_SDD;
@@ -106,15 +104,28 @@ class VopScoringService
             }
         }
 
-        // 5. Name match (placeholder for future BAV integration)
-        // $score += self::SCORE_NAME_MATCH;
-        $meta['name_match'] = null; // Not implemented yet
+        $nameMatch = null;
+        $nameMatchScore = null;
+        $bavVerified = false;
 
-        // Calculate result based on score
+        if ($debtor->bav_selected && $ibanValid && $this->ibanBavService->isCountrySupported($country)) {
+            $bavResult = $this->verifyBav($debtor, $iban);
+            $bavVerified = true;
+            $nameMatch = $bavResult['name_match'];
+            $nameMatchScore = $bavResult['name_match_score'];
+
+            if ($bavResult['success'] && in_array($nameMatch, [VopLog::NAME_MATCH_YES, VopLog::NAME_MATCH_PARTIAL])) {
+                $namePoints = $this->calculateNameMatchPoints($nameMatch, $nameMatchScore);
+                $score += $namePoints;
+                $meta['name_match_points'] = $namePoints;
+            }
+
+            $meta['bav_result'] = $bavResult;
+        }
+
         $result = $this->calculateResult($score);
 
-        // Create VopLog
-        return VopLog::create([
+        $vopLog = VopLog::create([
             'debtor_id' => $debtor->id,
             'upload_id' => $debtor->upload_id,
             'iban_masked' => $this->ibanValidator->mask($iban),
@@ -125,15 +136,106 @@ class VopScoringService
             'country' => $country,
             'vop_score' => $score,
             'result' => $result,
+            'name_match' => $nameMatch,
+            'name_match_score' => $nameMatchScore,
+            'bav_verified' => $bavVerified,
             'meta' => $meta,
         ]);
+
+        $this->updateDebtorStatus($debtor, $vopLog);
+
+        return $vopLog;
     }
 
     /**
-     * Calculate score without creating VopLog (dry run).
-     *
      * @param Debtor $debtor
-     * @return array{score: int, result: string, breakdown: array}
+     * @param string $iban
+     * @return array{success: bool, name_match: string, name_match_score: ?int, error: ?string}
+     */
+    private function verifyBav(Debtor $debtor, string $iban): array
+    {
+        $name = $debtor->getNameForBav();
+
+        Log::info('BAV verification started', [
+            'debtor_id' => $debtor->id,
+            'iban_masked' => $this->ibanValidator->mask($iban),
+        ]);
+
+        $result = $this->ibanBavService->verify($iban, $name);
+
+        if (!$result['success']) {
+            Log::warning('BAV verification failed', [
+                'debtor_id' => $debtor->id,
+                'error' => $result['error'],
+            ]);
+
+            return [
+                'success' => false,
+                'name_match' => VopLog::NAME_MATCH_ERROR,
+                'name_match_score' => null,
+                'error' => $result['error'],
+            ];
+        }
+
+        Log::info('BAV verification completed', [
+            'debtor_id' => $debtor->id,
+            'name_match' => $result['name_match'],
+            'vop_score' => $result['vop_score'],
+        ]);
+
+        return [
+            'success' => true,
+            'name_match' => $result['name_match'],
+            'name_match_score' => $result['vop_score'],
+            'error' => null,
+        ];
+    }
+
+    /**
+     * @param string $nameMatch
+     * @param ?int $nameMatchScore
+     * @return int
+     */
+    private function calculateNameMatchPoints(string $nameMatch, ?int $nameMatchScore): int
+    {
+        if ($nameMatch === VopLog::NAME_MATCH_YES) {
+            return self::SCORE_NAME_MATCH;
+        }
+
+        if ($nameMatch === VopLog::NAME_MATCH_PARTIAL && $nameMatchScore !== null) {
+            return (int) round(($nameMatchScore / 100) * self::SCORE_NAME_MATCH);
+        }
+
+        return 0;
+    }
+
+    /**
+     * @param Debtor $debtor
+     * @param VopLog $vopLog
+     * @return void
+     */
+    private function updateDebtorStatus(Debtor $debtor, VopLog $vopLog): void
+    {
+        $nameMatch = null;
+
+        if ($vopLog->bav_verified) {
+            if (in_array($vopLog->name_match, [VopLog::NAME_MATCH_YES, VopLog::NAME_MATCH_PARTIAL])) {
+                $nameMatch = true;
+            } elseif ($vopLog->name_match === VopLog::NAME_MATCH_NO) {
+                $nameMatch = false;
+            }
+        }
+
+        if ($vopLog->name_match === VopLog::NAME_MATCH_ERROR) {
+            $debtor->markVopError();
+        } else {
+            $debtor->markVopVerified($nameMatch);
+        }
+    }
+
+    /**
+     * @param Debtor $debtor
+     * @return array{score: int, max_score: int, result: string, breakdown: array}
      */
     public function calculate(Debtor $debtor): array
     {
@@ -141,16 +243,16 @@ class VopScoringService
         $breakdown = [];
         $score = 0;
 
-        // IBAN valid
         $ibanValid = $this->ibanValidator->isValid($iban);
         $breakdown['iban_valid'] = [
             'passed' => $ibanValid,
             'points' => $ibanValid ? self::SCORE_IBAN_VALID : 0,
             'max' => self::SCORE_IBAN_VALID,
         ];
-        if ($ibanValid) $score += self::SCORE_IBAN_VALID;
+        if ($ibanValid) {
+            $score += self::SCORE_IBAN_VALID;
+        }
 
-        // Country supported
         $country = $this->ibanValidator->getCountryCode($iban);
         $countrySupported = in_array($country, self::SEPA_COUNTRIES);
         $breakdown['country_supported'] = [
@@ -159,9 +261,10 @@ class VopScoringService
             'max' => self::SCORE_COUNTRY_SUPPORTED,
             'country' => $country,
         ];
-        if ($countrySupported) $score += self::SCORE_COUNTRY_SUPPORTED;
+        if ($countrySupported) {
+            $score += self::SCORE_COUNTRY_SUPPORTED;
+        }
 
-        // Bank identified
         $bankIdentified = false;
         $sepaSdd = false;
         if ($ibanValid) {
@@ -171,28 +274,32 @@ class VopScoringService
                 $sepaSdd = strtoupper($apiResult['sepa_data']['SDD'] ?? '') === 'YES';
             }
         }
-        
+
         $breakdown['bank_identified'] = [
             'passed' => $bankIdentified,
             'points' => $bankIdentified ? self::SCORE_BANK_IDENTIFIED : 0,
             'max' => self::SCORE_BANK_IDENTIFIED,
         ];
-        if ($bankIdentified) $score += self::SCORE_BANK_IDENTIFIED;
+        if ($bankIdentified) {
+            $score += self::SCORE_BANK_IDENTIFIED;
+        }
 
-        // SEPA SDD
         $breakdown['sepa_sdd'] = [
             'passed' => $sepaSdd,
             'points' => $sepaSdd ? self::SCORE_SEPA_SDD : 0,
             'max' => self::SCORE_SEPA_SDD,
         ];
-        if ($sepaSdd) $score += self::SCORE_SEPA_SDD;
+        if ($sepaSdd) {
+            $score += self::SCORE_SEPA_SDD;
+        }
 
-        // Name match (future)
+        $bavSupported = $this->ibanBavService->isCountrySupported($country);
         $breakdown['name_match'] = [
             'passed' => null,
             'points' => 0,
             'max' => self::SCORE_NAME_MATCH,
-            'note' => 'Not implemented',
+            'bav_supported' => $bavSupported,
+            'note' => $debtor->bav_selected ? 'Will be verified' : 'Not selected for BAV',
         ];
 
         return [
@@ -219,7 +326,7 @@ class VopScoringService
     }
 
     /**
-     * @return array
+     * @return array<string, int>
      */
     public static function getScoreBreakdown(): array
     {
@@ -234,7 +341,7 @@ class VopScoringService
     }
 
     /**
-     * @return array
+     * @return array<string, string>
      */
     public static function getResultThresholds(): array
     {

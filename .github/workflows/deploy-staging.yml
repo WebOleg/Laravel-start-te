@@ -18,30 +18,59 @@ jobs:
           host: ${{ secrets.STAGING_HOST }}
           username: ${{ secrets.STAGING_USER }}
           key: ${{ secrets.STAGING_SSH_KEY }}
-
+          port: ${{ secrets.STAGING_SSH_PORT || 22 }}
           script: |
             set -euo pipefail
 
-            cd /opt/tether-staging/backend
+            REPO_DIR="/opt/tether-staging/backend"
+            COMPOSE="docker compose -f docker-compose.staging.yml"
 
-            git fetch --all --prune
+            cd "$REPO_DIR"
+
+            echo "== whoami =="; whoami; id
+            echo "== repo perms =="; ls -ld .git .git/objects .git/objects/pack || true
+
+            sudo chown -R "${USER}:${USER}" .git || true
+            sudo chmod -R u+rwX .git || true
+            sudo rm -f .git/index.lock .git/packed-refs.lock .git/objects/pack/*.lock || true
+
+            # Retry fetch in case of transient repo contention/network hiccups
+            for i in 1 2 3; do
+              git fetch --all --prune && break
+              echo "git fetch failed (attempt $i). retrying..."
+              sleep 2
+            done
+
             git checkout -B staging origin/staging
+            git reset --hard origin/staging
 
-            docker compose -f docker-compose.staging.yml build
-            docker compose -f docker-compose.staging.yml up -d
+            # --- Docker ---
+            $COMPOSE build
+            $COMPOSE up -d
 
-            # Composer
-            docker compose -f docker-compose.staging.yml exec -T app composer install \
+            # --- Laravel writable (inside container) ---
+            # Do NOT touch .git here; only app writable dirs.
+            $COMPOSE exec -T --user root app sh -lc '
+              set -e
+              mkdir -p storage/logs storage/framework/{cache,sessions,views} bootstrap/cache
+              touch storage/logs/laravel.log
+              chown -R www-data:www-data storage bootstrap/cache
+              find storage bootstrap/cache -type d -exec chmod 775 {} \;
+              find storage bootstrap/cache -type f -exec chmod 664 {} \;
+            '
+
+            # --- Composer
+            $COMPOSE exec -T --user www-data app composer install \
               --no-interaction --no-dev --prefer-dist --optimize-autoloader
 
-            # Laravel
-            docker compose -f docker-compose.staging.yml exec -T app php artisan package:discover --ansi
+            # --- Laravel ---
+            $COMPOSE exec -T --user www-data app php artisan package:discover --ansi
 
-            docker compose -f docker-compose.staging.yml exec -T app php artisan config:clear || true
-            docker compose -f docker-compose.staging.yml exec -T app php artisan cache:clear || true
-            docker compose -f docker-compose.staging.yml exec -T app php artisan route:clear || true
-            docker compose -f docker-compose.staging.yml exec -T app php artisan view:clear || true
+            $COMPOSE exec -T --user www-data app php artisan config:clear || true
+            $COMPOSE exec -T --user www-data app php artisan cache:clear || true
+            $COMPOSE exec -T --user www-data app php artisan route:clear || true
+            $COMPOSE exec -T --user www-data app php artisan view:clear || true
 
-            docker compose -f docker-compose.staging.yml exec -T app php artisan migrate --force
+            $COMPOSE exec -T --user www-data app php artisan migrate --force
 
-            docker compose -f docker-compose.staging.yml ps
+            $COMPOSE ps
