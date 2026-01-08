@@ -14,9 +14,6 @@ class ChargebackStatsService
 {
     public function getStats(string $period = '7d'): array
     {
-        //TODO: remove below line
-        $this->clearCache();
-
         $cacheKey = "chargeback_stats_{$period}";
         $ttl = config('tether.chargeback.cache_ttl', 900);
 
