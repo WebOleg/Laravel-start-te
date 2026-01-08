@@ -32,11 +32,12 @@ class ChargebackStatsService
             ->select([
                 DB::raw("COALESCE(debtors.country, 'LEGACY') as country"),
                 DB::raw('COUNT(*) as total'),
-                DB::raw("SUM(CASE WHEN billing_attempts.status = 'approved' THEN 1 ELSE 0 END) as approved"),
-                DB::raw("SUM(CASE WHEN billing_attempts.status = 'declined' THEN 1 ELSE 0 END) as declined"),
-                DB::raw("SUM(CASE WHEN billing_attempts.status = 'error' THEN 1 ELSE 0 END) as errors"),
-                DB::raw("SUM(CASE WHEN billing_attempts.status = 'chargebacked' THEN 1 ELSE 0 END) as chargebacks"),
-                DB::raw("SUM(CASE WHEN billing_attempts.status = 'chargebacked' THEN billing_attempts.amount ELSE 0 END) as chargeback_amount"),
+                DB::raw("SUM(CASE WHEN billing_attempts.status = '".BillingAttempt::STATUS_APPROVED."' THEN 1 ELSE 0 END) as approved"),
+                DB::raw("SUM(CASE WHEN billing_attempts.status = '".BillingAttempt::STATUS_DECLINED."' THEN 1 ELSE 0 END) as declined"),
+                DB::raw("SUM(CASE WHEN billing_attempts.status = '".BillingAttempt::STATUS_ERROR."' THEN 1 ELSE 0 END) as errors"),
+                DB::raw("SUM(CASE WHEN billing_attempts.status = '".BillingAttempt::STATUS_CHARGEBACKED."' THEN 1 ELSE 0 END) as chargebacks"),
+                DB::raw("SUM(CASE WHEN billing_attempts.status = '".BillingAttempt::STATUS_CHARGEBACKED."' THEN billing_attempts.amount ELSE 0 END) as chargeback_amount"),
+                DB::raw("SUM(CASE WHEN billing_attempts.status = '".BillingAttempt::STATUS_APPROVED."' THEN billing_attempts.amount ELSE 0 END) as approved_amount"),
             ])
             ->get();
 
@@ -48,6 +49,7 @@ class ChargebackStatsService
             'errors' => 0,
             'chargebacks' => 0,
             'chargeback_amount' => 0,
+            'approved_amount' => 0,
         ];
 
         foreach ($stats as $row) {
@@ -77,6 +79,7 @@ class ChargebackStatsService
             $totals['errors'] += $row->errors;
             $totals['chargebacks'] += $row->chargebacks;
             $totals['chargeback_amount'] += (float) $row->chargeback_amount;
+            $totals['approved_amount'] += (float) $row->approved_amount;
         }
 
         // Sort: LEGACY last, then by chargebacks desc
@@ -87,6 +90,7 @@ class ChargebackStatsService
         });
 
         $totals['chargeback_amount'] = round($totals['chargeback_amount'], 2);
+        $totals['approved_amount'] = round($totals['approved_amount'], 2);
         $totals['cb_rate_total'] = $totals['total'] > 0 
             ? round(($totals['chargebacks'] / $totals['total']) * 100, 2) 
             : 0;
@@ -94,6 +98,10 @@ class ChargebackStatsService
             ? round(($totals['chargebacks'] / $totals['approved']) * 100, 2) 
             : 0;
         $totals['alert'] = $totals['cb_rate_total'] >= $threshold || $totals['cb_rate_approved'] >= $threshold;
+        $totals['cb_rate_amount_approved'] = $totals['approved_amount'] > 0 
+            ? round(($totals['chargeback_amount'] / $totals['approved_amount']) * 100, 2) 
+            : 0;
+        $totals['cb_alert_amount_approved'] = $totals['cb_rate_amount_approved'] >= $threshold;
 
         return [
             'period' => $period,
