@@ -1,9 +1,7 @@
 <?php
-
 /**
  * API resource for Debtor model.
  */
-
 namespace App\Http\Resources;
 
 use App\Services\IbanValidator;
@@ -16,7 +14,6 @@ class DebtorResource extends JsonResource
     {
         $ibanValidator = app(IbanValidator::class);
 
-        // Get bank reference from latestVopLog relationship
         $bankReference = $this->whenLoaded('latestVopLog', function () {
             return $this->latestVopLog?->bankReference;
         });
@@ -44,6 +41,10 @@ class DebtorResource extends JsonResource
             'validation_status' => $this->validation_status,
             'validation_errors' => $this->validation_errors,
             'validated_at' => $this->validated_at?->toISOString(),
+            'vop_status' => $this->vop_status,
+            'vop_match' => $this->vop_match,
+            'vop_verified_at' => $this->vop_verified_at?->toISOString(),
+            'bav_selected' => $this->bav_selected,
             'risk_class' => $this->risk_class,
             'external_reference' => $this->external_reference,
             'bank_name' => $this->bank_name,
@@ -64,8 +65,7 @@ class DebtorResource extends JsonResource
         if ($bankReference instanceof \App\Models\BankReference) {
             return $bankReference->bank_name;
         }
-        
-        // Fallback: try from latestVopLog directly
+
         if ($this->relationLoaded('latestVopLog') && $this->latestVopLog) {
             return $this->latestVopLog->bank_name;
         }
@@ -79,7 +79,6 @@ class DebtorResource extends JsonResource
             return $bankReference->country_iso;
         }
 
-        // Fallback: try from latestVopLog country
         if ($this->relationLoaded('latestVopLog') && $this->latestVopLog) {
             return $this->latestVopLog->country;
         }

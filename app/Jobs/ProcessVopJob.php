@@ -1,5 +1,8 @@
 <?php
-
+/**
+ * Dispatches VOP verification jobs for upload debtors.
+ * Handles BAV sampling selection based on configured percentage.
+ */
 namespace App\Jobs;
 
 use App\Models\Upload;
@@ -39,21 +42,22 @@ class ProcessVopJob implements ShouldQueue, ShouldBeUnique
     public function handle(): void
     {
         Log::info('ProcessVopJob started', ['upload_id' => $this->upload->id]);
+
         $uploadId = $this->upload->id;
         $lockKey = "vop_verify_{$uploadId}";
 
-        $debtorIds = Debtor::where('upload_id', $this->upload->id)
-            ->where('validation_status', Debtor::VALIDATION_VALID)
-            ->where('iban_valid', true)
-            ->whereDoesntHave('vopLogs')
+        $debtorIds = Debtor::where('upload_id', $uploadId)
+            ->readyForVop()
             ->pluck('id')
             ->toArray();
 
         if (empty($debtorIds)) {
             Cache::forget($lockKey);
-            Log::info('ProcessVopJob: no debtors to verify', ['upload_id' => $this->upload->id]);
+            Log::info('ProcessVopJob: no debtors to verify', ['upload_id' => $uploadId]);
             return;
         }
+
+        $bavSelectedCount = $this->selectDebtorsForBav($debtorIds);
 
         $chunks = array_chunk($debtorIds, self::CHUNK_SIZE);
         $jobs = [];
@@ -61,7 +65,7 @@ class ProcessVopJob implements ShouldQueue, ShouldBeUnique
         foreach ($chunks as $index => $chunk) {
             $jobs[] = new ProcessVopChunkJob(
                 debtorIds: $chunk,
-                uploadId: $this->upload->id,
+                uploadId: $uploadId,
                 chunkIndex: $index,
                 forceRefresh: $this->forceRefresh
             );
@@ -73,14 +77,68 @@ class ProcessVopJob implements ShouldQueue, ShouldBeUnique
             ->onQueue('vop')
             ->finally(function () use ($lockKey, $uploadId) {
                 Cache::forget($lockKey);
-                Log::info('ProcessVopJob completed and Cache Forget: ', ['Lock key' => $lockKey, 'Upload ID' => $uploadId]);
+                Log::info('ProcessVopJob batch completed', [
+                    'upload_id' => $uploadId,
+                ]);
             })
             ->dispatch();
 
         Log::info('ProcessVopJob dispatched', [
-            'upload_id' => $this->upload->id,
+            'upload_id' => $uploadId,
             'debtors' => count($debtorIds),
+            'bav_selected' => $bavSelectedCount,
             'chunks' => count($chunks),
         ]);
+    }
+
+    /**
+     * @param array<int> $debtorIds
+     * @return int
+     */
+    private function selectDebtorsForBav(array $debtorIds): int
+    {
+        if (!config('services.iban.bav_enabled', false)) {
+            return 0;
+        }
+
+        $percentage = config('services.iban.bav_sampling_percentage', 10);
+        $dailyLimit = config('services.iban.bav_daily_limit', 100);
+
+        $todayCount = Debtor::where('bav_selected', true)
+            ->whereDate('updated_at', today())
+            ->count();
+
+        $remaining = max(0, $dailyLimit - $todayCount);
+        if ($remaining === 0) {
+            Log::info('ProcessVopJob: BAV daily limit reached', [
+                'daily_limit' => $dailyLimit,
+                'today_count' => $todayCount,
+            ]);
+            return 0;
+        }
+
+        $selectCount = (int) ceil(count($debtorIds) * ($percentage / 100));
+        $selectCount = min($selectCount, $remaining);
+
+        if ($selectCount === 0) {
+            return 0;
+        }
+
+        $selectedIds = collect($debtorIds)
+            ->shuffle()
+            ->take($selectCount)
+            ->toArray();
+
+        Debtor::whereIn('id', $selectedIds)->update(['bav_selected' => true]);
+
+        Log::info('ProcessVopJob: BAV selection completed', [
+            'upload_id' => $this->upload->id,
+            'total_debtors' => count($debtorIds),
+            'percentage' => $percentage,
+            'selected' => count($selectedIds),
+            'daily_remaining' => $remaining - count($selectedIds),
+        ]);
+
+        return count($selectedIds);
     }
 }

@@ -1,5 +1,8 @@
 <?php
-
+/**
+ * Processes VOP verification for a chunk of debtors.
+ * Handles BAV API calls with appropriate delays and timeouts.
+ */
 namespace App\Jobs;
 
 use App\Models\Debtor;
@@ -17,10 +20,11 @@ class ProcessVopChunkJob implements ShouldQueue
     use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     public int $tries = 3;
-    public int $timeout = 180;
+    public int $timeout = 300;
     public array $backoff = [10, 30, 60];
 
     private const DELAY_BETWEEN_REQUESTS_MS = 500;
+    private const DELAY_AFTER_BAV_MS = 1000;
 
     public function __construct(
         public array $debtorIds,
@@ -44,6 +48,7 @@ class ProcessVopChunkJob implements ShouldQueue
         ]);
 
         $verified = 0;
+        $bavVerified = 0;
         $failed = 0;
 
         foreach ($this->debtorIds as $debtorId) {
@@ -57,11 +62,16 @@ class ProcessVopChunkJob implements ShouldQueue
 
                 if ($vopLog) {
                     $verified++;
+                    if ($vopLog->bav_verified) {
+                        $bavVerified++;
+                        usleep(self::DELAY_AFTER_BAV_MS * 1000);
+                    } else {
+                        usleep(self::DELAY_BETWEEN_REQUESTS_MS * 1000);
+                    }
                 } else {
                     $failed++;
+                    usleep(self::DELAY_BETWEEN_REQUESTS_MS * 1000);
                 }
-
-                usleep(self::DELAY_BETWEEN_REQUESTS_MS * 1000);
 
             } catch (\Exception $e) {
                 $failed++;
@@ -76,6 +86,7 @@ class ProcessVopChunkJob implements ShouldQueue
             'upload_id' => $this->uploadId,
             'chunk' => $this->chunkIndex,
             'verified' => $verified,
+            'bav_verified' => $bavVerified,
             'failed' => $failed,
         ]);
     }
