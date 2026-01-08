@@ -26,6 +26,8 @@ class ProcessVopJob implements ShouldQueue, ShouldBeUnique
     public array $backoff = [30, 60, 120];
 
     private const CHUNK_SIZE = 50;
+    private const LARGE_UPLOAD_THRESHOLD = 1000;
+    private const LARGE_UPLOAD_BAV_LIMIT = 100;
 
     public function __construct(
         public Upload $upload,
@@ -92,6 +94,10 @@ class ProcessVopJob implements ShouldQueue, ShouldBeUnique
     }
 
     /**
+     * Select debtors for BAV verification.
+     * - For uploads <= 1000 records: use percentage sampling (default 10%)
+     * - For uploads > 1000 records: max 100 BAV verifications
+     *
      * @param array<int> $debtorIds
      * @return int
      */
@@ -101,9 +107,11 @@ class ProcessVopJob implements ShouldQueue, ShouldBeUnique
             return 0;
         }
 
+        $totalDebtors = count($debtorIds);
         $percentage = config('services.iban.bav_sampling_percentage', 10);
         $dailyLimit = config('services.iban.bav_daily_limit', 100);
 
+        // Check daily limit
         $todayCount = Debtor::where('bav_selected', true)
             ->whereDate('updated_at', today())
             ->count();
@@ -117,7 +125,16 @@ class ProcessVopJob implements ShouldQueue, ShouldBeUnique
             return 0;
         }
 
-        $selectCount = (int) ceil(count($debtorIds) * ($percentage / 100));
+        // Calculate how many to select
+        if ($totalDebtors > self::LARGE_UPLOAD_THRESHOLD) {
+            // Large upload: max 100 BAV verifications
+            $selectCount = self::LARGE_UPLOAD_BAV_LIMIT;
+        } else {
+            // Normal upload: use percentage
+            $selectCount = (int) ceil($totalDebtors * ($percentage / 100));
+        }
+
+        // Apply daily limit
         $selectCount = min($selectCount, $remaining);
 
         if ($selectCount === 0) {
@@ -133,7 +150,8 @@ class ProcessVopJob implements ShouldQueue, ShouldBeUnique
 
         Log::info('ProcessVopJob: BAV selection completed', [
             'upload_id' => $this->upload->id,
-            'total_debtors' => count($debtorIds),
+            'total_debtors' => $totalDebtors,
+            'large_upload' => $totalDebtors > self::LARGE_UPLOAD_THRESHOLD,
             'percentage' => $percentage,
             'selected' => count($selectedIds),
             'daily_remaining' => $remaining - count($selectedIds),
