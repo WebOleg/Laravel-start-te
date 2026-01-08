@@ -10,6 +10,7 @@ namespace App\Services;
 
 use App\Models\Debtor;
 use App\Models\VopLog;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 class VopVerificationService
@@ -145,6 +146,7 @@ class VopVerificationService
             'pending' => $total - $verified,
             'by_result' => $byResult,
             'avg_score' => round($avgScore ?? 0),
+            'is_processing' => Cache::has("vop_verify_{$uploadId}"),
         ];
     }
 }

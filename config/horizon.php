@@ -1,7 +1,7 @@
 <?php
 /**
  * Horizon configuration for Tether fintech platform.
- * 
+ *
  * Queue Priority:
  * - critical: Payments, refunds (highest)
  * - webhooks: Webhook notifications (high priority, isolated processing)
@@ -181,6 +181,26 @@ return [
             'supervisor-low' => [
                 'maxProcesses' => 1,
             ],
+        ], 'staging' => [
+            'supervisor-critical' => [
+                'maxProcesses' => 2,
+            ],
+            'supervisor-webhooks' => [
+                'maxProcesses' => 2,
+            ],
+            'supervisor-high' => [
+                'maxProcesses' => 2,
+            ],
+            'supervisor-emp-refresh' => [
+                'maxProcesses' => 1,
+            ],
+            'supervisor-default' => [
+                'maxProcesses' => 2,
+            ],
+            'supervisor-low' => [
+                'maxProcesses' => 1,
+            ],
         ],
+
     ],
 ];
