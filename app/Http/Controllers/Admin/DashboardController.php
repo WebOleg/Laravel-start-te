@@ -100,7 +100,9 @@ class DashboardController extends Controller
     {
         $total = BillingAttempt::count();
         $successful = BillingAttempt::where('status', BillingAttempt::STATUS_APPROVED)->count();
+        $chargebacked = BillingAttempt::where('status', BillingAttempt::STATUS_CHARGEBACKED)->count();
         $totalAmount = BillingAttempt::where('status', BillingAttempt::STATUS_APPROVED)->sum('amount');
+        $chargebackAmount = BillingAttempt::where('status', BillingAttempt::STATUS_CHARGEBACKED)->sum('amount');
 
         return [
             'total_attempts' => $total,
@@ -110,9 +112,12 @@ class DashboardController extends Controller
                 'declined' => BillingAttempt::where('status', BillingAttempt::STATUS_DECLINED)->count(),
                 'error' => BillingAttempt::where('status', BillingAttempt::STATUS_ERROR)->count(),
                 'voided' => BillingAttempt::where('status', BillingAttempt::STATUS_VOIDED)->count(),
+                'chargebacked' => $chargebacked,
             ],
             'approval_rate' => $this->calculateRate($successful, $total),
+            'chargeback_rate' => $this->calculateRate($chargebacked, $successful + $chargebacked),
             'total_approved_amount' => round($totalAmount, 2),
+            'total_chargeback_amount' => round($chargebackAmount, 2),
             'today' => BillingAttempt::whereDate('created_at', today())->count(),
             'average_attempts_per_debtor' => round(
                 $total / max(Debtor::count(), 1),
@@ -150,6 +155,9 @@ class DashboardController extends Controller
                 'billing_attempts' => BillingAttempt::whereDate('created_at', $date)->count(),
                 'successful_payments' => BillingAttempt::whereDate('created_at', $date)
                     ->where('status', BillingAttempt::STATUS_APPROVED)
+                    ->count(),
+                'chargebacks' => BillingAttempt::whereDate('created_at', $date)
+                    ->where('status', BillingAttempt::STATUS_CHARGEBACKED)
                     ->count(),
             ];
         }
