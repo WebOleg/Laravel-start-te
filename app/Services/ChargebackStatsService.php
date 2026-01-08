@@ -26,11 +26,11 @@ class ChargebackStatsService
         $threshold = config('tether.chargeback.alert_threshold', 25);
 
         $stats = DB::table('billing_attempts')
-            ->join('debtors', 'billing_attempts.debtor_id', '=', 'debtors.id')
+            ->leftJoin('debtors', 'billing_attempts.debtor_id', '=', 'debtors.id')
             ->where('billing_attempts.created_at', '>=', $startDate)
             ->groupBy('debtors.country')
             ->select([
-                'debtors.country',
+                DB::raw("COALESCE(debtors.country, 'LEGACY') as country"),
                 DB::raw('COUNT(*) as total'),
                 DB::raw("SUM(CASE WHEN billing_attempts.status = 'approved' THEN 1 ELSE 0 END) as approved"),
                 DB::raw("SUM(CASE WHEN billing_attempts.status = 'declined' THEN 1 ELSE 0 END) as declined"),
@@ -74,6 +74,13 @@ class ChargebackStatsService
             $totals['errors'] += $row->errors;
             $totals['chargebacks'] += $row->chargebacks;
         }
+
+        // Sort: LEGACY last, then by chargebacks desc
+        usort($countries, function ($a, $b) {
+            if ($a['country'] === 'LEGACY') return 1;
+            if ($b['country'] === 'LEGACY') return -1;
+            return $b['chargebacks'] <=> $a['chargebacks'];
+        });
 
         $totals['cb_rate_total'] = $totals['total'] > 0 
             ? round(($totals['chargebacks'] / $totals['total']) * 100, 2) 
@@ -171,11 +178,11 @@ class ChargebackStatsService
         $startDate = $this->getStartDate($period);
 
         $banks = DB::table('billing_attempts')
-            ->join('debtors', 'billing_attempts.debtor_id', '=', 'debtors.id')
-            ->join('vop_logs', 'debtors.id', '=', 'vop_logs.debtor_id')
+            ->leftJoin('debtors', 'billing_attempts.debtor_id', '=', 'debtors.id')
+            ->leftJoin('vop_logs', 'debtors.id', '=', 'vop_logs.debtor_id')
             ->where('billing_attempts.created_at', '>=', $startDate)
             ->select([
-                'vop_logs.bank_name',
+                DB::raw("COALESCE(vop_logs.bank_name, 'Unknown') as bank_name"),
                 DB::raw('COUNT(*) as total'),
                 DB::raw('SUM(billing_attempts.amount) as total_amount'),
                 DB::raw("SUM(CASE WHEN billing_attempts.status = '".BillingAttempt::STATUS_CHARGEBACKED."' THEN 1 ELSE 0 END) as chargebacks"),
@@ -201,7 +208,7 @@ class ChargebackStatsService
                 : 0;
             
             $result['banks'][] = [
-                'bank_name' => $row->bank_name ?? 'Not Identified',
+                'bank_name' => $row->bank_name,
                 'total_amount' => (float) $row->total_amount,
                 'chargebacks' => (int) $row->chargebacks,
                 'cb_rate' => (float) $cbBankRate,
