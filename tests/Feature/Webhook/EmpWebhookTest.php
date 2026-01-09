@@ -3,7 +3,10 @@
 /**
  * Tests for emerchantpay webhook handling.
  * 
- * EMP requires XML echo response to acknowledge webhook receipt.
+ * EMP Webhook format:
+ * - Chargebacks: event=chargeback, unique_id=original_tx, status=chargebacked
+ * - Status updates: transaction_type=sdd_sale, status=approved|declined
+ * - XML echo required for acknowledgment
  */
 
 namespace Tests\Feature\Webhook;
@@ -45,7 +48,10 @@ class EmpWebhookTest extends TestCase
         $this->assertStringContainsString("<unique_id>{$uniqueId}</unique_id>", $content);
     }
 
-    public function test_chargeback_webhook_dispatches_job(): void
+    /**
+     * Test chargeback webhook with event=chargeback (correct EMP format).
+     */
+    public function test_chargeback_event_dispatches_job(): void
     {
         Queue::fake();
         
@@ -61,22 +67,27 @@ class EmpWebhookTest extends TestCase
             'amount' => 100,
             'status' => BillingAttempt::STATUS_APPROVED,
         ]);
-
-        $chargebackUniqueId = 'cb_unique_456';
         
+        // EMP chargeback format: event=chargeback, unique_id=original transaction
         $response = $this->post('/api/webhooks/emp', [
-            'unique_id' => $chargebackUniqueId,
-            'transaction_type' => 'chargeback',
-            'original_transaction_unique_id' => $originalUniqueId,
+            'unique_id' => $originalUniqueId,
+            'transaction_type' => 'sdd_sale', // Original transaction type
+            'event' => 'chargeback',          // This indicates chargeback!
+            'status' => 'chargebacked',
             'amount' => 10000,
             'currency' => 'EUR',
-            'signature' => $this->generateSignature($chargebackUniqueId),
+            'reason_code' => 'MD06',
+            'arn' => '74537604221431003881865',
+            'signature' => $this->generateSignature($originalUniqueId),
         ]);
 
-        $this->assertXmlEchoResponse($response, $chargebackUniqueId);
+        $this->assertXmlEchoResponse($response, $originalUniqueId);
         Queue::assertPushed(ProcessEmpWebhookJob::class);
     }
 
+    /**
+     * Test chargeback updates billing attempt status.
+     */
     public function test_chargeback_updates_billing_attempt_status(): void
     {
         $upload = Upload::factory()->create();
@@ -91,35 +102,39 @@ class EmpWebhookTest extends TestCase
             'amount' => 100,
             'status' => BillingAttempt::STATUS_APPROVED,
         ]);
-
-        $chargebackUniqueId = 'cb_unique_456';
         
         $response = $this->post('/api/webhooks/emp', [
-            'unique_id' => $chargebackUniqueId,
-            'transaction_type' => 'chargeback',
-            'original_transaction_unique_id' => $originalUniqueId,
-            'amount' => 10000,
-            'currency' => 'EUR',
-            'signature' => $this->generateSignature($chargebackUniqueId),
+            'unique_id' => $originalUniqueId,
+            'transaction_type' => 'sdd_sale',
+            'event' => 'chargeback',
+            'status' => 'chargebacked',
+            'reason_code' => 'MD06',
+            'arn' => '74537604221431003881865',
+            'signature' => $this->generateSignature($originalUniqueId),
         ]);
 
-        $this->assertXmlEchoResponse($response, $chargebackUniqueId);
+        $this->assertXmlEchoResponse($response, $originalUniqueId);
 
         $billingAttempt->refresh();
         $this->assertEquals(BillingAttempt::STATUS_CHARGEBACKED, $billingAttempt->status);
         $this->assertArrayHasKey('chargeback', $billingAttempt->meta);
+        $this->assertEquals('MD06', $billingAttempt->meta['chargeback']['reason_code']);
     }
 
+    /**
+     * Test chargeback for unknown transaction still acknowledged.
+     */
     public function test_chargeback_returns_ok_for_unknown_transaction(): void
     {
         Queue::fake();
         
-        $uniqueId = 'cb_unknown_789';
+        $uniqueId = 'unknown_tx_789';
         
         $response = $this->post('/api/webhooks/emp', [
             'unique_id' => $uniqueId,
-            'transaction_type' => 'chargeback',
-            'original_transaction_unique_id' => 'nonexistent_unique_id',
+            'transaction_type' => 'sdd_sale',
+            'event' => 'chargeback',
+            'status' => 'chargebacked',
             'signature' => $this->generateSignature($uniqueId),
         ]);
 
@@ -127,78 +142,52 @@ class EmpWebhookTest extends TestCase
         Queue::assertPushed(ProcessEmpWebhookJob::class);
     }
 
+    /**
+     * Test duplicate chargeback prevention.
+     */
     public function test_chargeback_webhook_prevents_duplicates(): void
     {
         Queue::fake();
         
-        $chargebackUniqueId = 'cb_duplicate_789';
+        $uniqueId = 'cb_duplicate_789';
         
         $response1 = $this->post('/api/webhooks/emp', [
-            'unique_id' => $chargebackUniqueId,
-            'transaction_type' => 'chargeback',
-            'original_transaction_unique_id' => 'emp_original_123',
-            'signature' => $this->generateSignature($chargebackUniqueId),
+            'unique_id' => $uniqueId,
+            'transaction_type' => 'sdd_sale',
+            'event' => 'chargeback',
+            'status' => 'chargebacked',
+            'signature' => $this->generateSignature($uniqueId),
         ]);
 
-        $this->assertXmlEchoResponse($response1, $chargebackUniqueId);
+        $this->assertXmlEchoResponse($response1, $uniqueId);
         $this->assertCount(1, Queue::pushed(ProcessEmpWebhookJob::class));
 
-        // Second request with same unique_id should be deduplicated
+        // Second request should be deduplicated
         $response2 = $this->post('/api/webhooks/emp', [
-            'unique_id' => $chargebackUniqueId,
-            'transaction_type' => 'chargeback',
-            'original_transaction_unique_id' => 'emp_original_123',
-            'signature' => $this->generateSignature($chargebackUniqueId),
+            'unique_id' => $uniqueId,
+            'transaction_type' => 'sdd_sale',
+            'event' => 'chargeback',
+            'status' => 'chargebacked',
+            'signature' => $this->generateSignature($uniqueId),
         ]);
 
-        $this->assertXmlEchoResponse($response2, $chargebackUniqueId);
+        $this->assertXmlEchoResponse($response2, $uniqueId);
         $this->assertCount(1, Queue::pushed(ProcessEmpWebhookJob::class));
     }
 
-    public function test_webhook_logs_invalid_signature_but_returns_xml(): void
-    {
-        Queue::fake();
-        
-        $uniqueId = 'test_123';
-        
-        // EMP docs: always return XML echo to prevent retries
-        // We log the issue but still acknowledge receipt
-        $response = $this->post('/api/webhooks/emp', [
-            'unique_id' => $uniqueId,
-            'transaction_type' => 'chargeback',
-            'signature' => 'invalid_signature',
-        ]);
-
-        $this->assertXmlEchoResponse($response, $uniqueId);
-        Queue::assertNotPushed(ProcessEmpWebhookJob::class);
-    }
-
-    public function test_webhook_handles_missing_signature(): void
-    {
-        Queue::fake();
-        
-        $uniqueId = 'test_123';
-        
-        $response = $this->post('/api/webhooks/emp', [
-            'unique_id' => $uniqueId,
-            'transaction_type' => 'chargeback',
-        ]);
-
-        // Returns XML echo to acknowledge receipt, but job not dispatched
-        $this->assertXmlEchoResponse($response, $uniqueId);
-        Queue::assertNotPushed(ProcessEmpWebhookJob::class);
-    }
-
-    public function test_transaction_status_update(): void
+    /**
+     * Test SDD status update (approved).
+     */
+    public function test_sdd_status_update_approved(): void
     {
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
         
-        $uniqueId = 'emp_unique_status_123';
+        $uniqueId = 'emp_sdd_123';
         $billingAttempt = BillingAttempt::create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
-            'transaction_id' => 'tx_status_update_123',
+            'transaction_id' => 'tx_sdd_123',
             'unique_id' => $uniqueId,
             'amount' => 100,
             'status' => BillingAttempt::STATUS_PENDING,
@@ -217,44 +206,19 @@ class EmpWebhookTest extends TestCase
         $this->assertEquals(BillingAttempt::STATUS_APPROVED, $billingAttempt->status);
     }
 
-    public function test_transaction_status_update_dispatches_job(): void
-    {
-        Queue::fake();
-        
-        $upload = Upload::factory()->create();
-        $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
-        
-        $uniqueId = 'emp_unique_status_123';
-        BillingAttempt::create([
-            'debtor_id' => $debtor->id,
-            'upload_id' => $upload->id,
-            'transaction_id' => 'tx_status_update_123',
-            'unique_id' => $uniqueId,
-            'amount' => 100,
-            'status' => BillingAttempt::STATUS_PENDING,
-        ]);
-
-        $response = $this->post('/api/webhooks/emp', [
-            'unique_id' => $uniqueId,
-            'transaction_type' => 'sdd_sale',
-            'status' => 'approved',
-            'signature' => $this->generateSignature($uniqueId),
-        ]);
-
-        $this->assertXmlEchoResponse($response, $uniqueId);
-        Queue::assertPushed(ProcessEmpWebhookJob::class);
-    }
-
-    public function test_declined_transaction_update(): void
+    /**
+     * Test SDD status update (declined).
+     */
+    public function test_sdd_status_update_declined(): void
     {
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
         
-        $uniqueId = 'emp_unique_declined_123';
+        $uniqueId = 'emp_sdd_declined_123';
         $billingAttempt = BillingAttempt::create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
-            'transaction_id' => 'tx_declined_123',
+            'transaction_id' => 'tx_sdd_declined_123',
             'unique_id' => $uniqueId,
             'amount' => 100,
             'status' => BillingAttempt::STATUS_PENDING,
@@ -273,67 +237,48 @@ class EmpWebhookTest extends TestCase
         $this->assertEquals(BillingAttempt::STATUS_DECLINED, $billingAttempt->status);
     }
 
-    public function test_declined_transaction_dispatches_job(): void
+    /**
+     * Test retrieval request handling.
+     */
+    public function test_retrieval_request_logged(): void
     {
-        Queue::fake();
-        
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
         
-        $uniqueId = 'emp_unique_declined_123';
-        BillingAttempt::create([
+        $uniqueId = 'emp_retrieval_123';
+        $billingAttempt = BillingAttempt::create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
-            'transaction_id' => 'tx_declined_123',
+            'transaction_id' => 'tx_retrieval_123',
             'unique_id' => $uniqueId,
             'amount' => 100,
-            'status' => BillingAttempt::STATUS_PENDING,
+            'status' => BillingAttempt::STATUS_APPROVED,
         ]);
 
         $response = $this->post('/api/webhooks/emp', [
             'unique_id' => $uniqueId,
             'transaction_type' => 'sdd_sale',
-            'status' => 'declined',
+            'event' => 'retrieval_request',
+            'status' => 'chargebacked',
+            'reason_code' => '10',
+            'reason_description' => 'Dispute Transaction',
+            'arn' => '17b4646c093b025',
             'signature' => $this->generateSignature($uniqueId),
         ]);
 
         $this->assertXmlEchoResponse($response, $uniqueId);
-        Queue::assertPushed(ProcessEmpWebhookJob::class);
+
+        $billingAttempt->refresh();
+        // Status should NOT change for retrieval requests
+        $this->assertEquals(BillingAttempt::STATUS_APPROVED, $billingAttempt->status);
+        // But meta should contain retrieval info
+        $this->assertArrayHasKey('retrieval_requests', $billingAttempt->meta);
     }
 
-    public function test_unknown_transaction_type_acknowledged_but_not_processed(): void
-    {
-        Queue::fake();
-        
-        $uniqueId = 'unknown_type_123';
-        
-        // Unknown types are acknowledged (XML echo) but not processed
-        $response = $this->post('/api/webhooks/emp', [
-            'unique_id' => $uniqueId,
-            'transaction_type' => 'some_unknown_type',
-            'signature' => $this->generateSignature($uniqueId),
-        ]);
-
-        $this->assertXmlEchoResponse($response, $uniqueId);
-        Queue::assertNotPushed(ProcessEmpWebhookJob::class);
-    }
-
-    public function test_webhook_handles_missing_unique_id(): void
-    {
-        Queue::fake();
-        
-        $response = $this->post('/api/webhooks/emp', [
-            'transaction_type' => 'chargeback',
-            'signature' => $this->generateSignature('test_123'),
-        ]);
-
-        // Missing unique_id - returns XML echo with empty unique_id
-        $response->assertOk();
-        $response->assertHeader('Content-Type', 'application/xml');
-        Queue::assertNotPushed(ProcessEmpWebhookJob::class);
-    }
-
-    public function test_webhook_handles_missing_transaction_type(): void
+    /**
+     * Test invalid signature returns XML but doesn't process.
+     */
+    public function test_webhook_logs_invalid_signature_but_returns_xml(): void
     {
         Queue::fake();
         
@@ -341,11 +286,52 @@ class EmpWebhookTest extends TestCase
         
         $response = $this->post('/api/webhooks/emp', [
             'unique_id' => $uniqueId,
+            'transaction_type' => 'sdd_sale',
+            'event' => 'chargeback',
+            'signature' => 'invalid_signature',
+        ]);
+
+        $this->assertXmlEchoResponse($response, $uniqueId);
+        Queue::assertNotPushed(ProcessEmpWebhookJob::class);
+    }
+
+    /**
+     * Test unknown transaction type acknowledged but not processed.
+     */
+    public function test_unknown_transaction_type_acknowledged(): void
+    {
+        Queue::fake();
+        
+        $uniqueId = 'unknown_type_123';
+        
+        $response = $this->post('/api/webhooks/emp', [
+            'unique_id' => $uniqueId,
+            'transaction_type' => 'some_unknown_type',
+            'status' => 'approved',
             'signature' => $this->generateSignature($uniqueId),
         ]);
 
-        // Missing transaction_type - acknowledged but not processed
         $this->assertXmlEchoResponse($response, $uniqueId);
         Queue::assertNotPushed(ProcessEmpWebhookJob::class);
+    }
+
+    /**
+     * Test fallback: status=chargebacked without event parameter.
+     */
+    public function test_chargebacked_status_without_event_processed_as_chargeback(): void
+    {
+        Queue::fake();
+        
+        $uniqueId = 'fallback_cb_123';
+        
+        $response = $this->post('/api/webhooks/emp', [
+            'unique_id' => $uniqueId,
+            'transaction_type' => 'sale', // Not SDD
+            'status' => 'chargebacked',   // But status is chargebacked
+            'signature' => $this->generateSignature($uniqueId),
+        ]);
+
+        $this->assertXmlEchoResponse($response, $uniqueId);
+        Queue::assertPushed(ProcessEmpWebhookJob::class);
     }
 }

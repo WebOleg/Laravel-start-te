@@ -4,6 +4,11 @@
  * Service for handling emerchantpay webhook processing.
  * 
  * Manages webhook validation, deduplication, and job dispatching.
+ * 
+ * EMP Webhook Types:
+ * 1. Transaction status updates: transaction_type=sdd_sale, status=approved|declined|etc
+ * 2. Chargeback events: event=chargeback, transaction_type=original_type, status=chargebacked
+ * 3. Retrieval requests: event=retrieval_request
  */
 
 namespace App\Services\Emp;
@@ -15,7 +20,12 @@ use Illuminate\Support\Facades\Log;
 
 class EmpWebhookService
 {
-    private const PROCESSABLE_TYPES = ['chargeback', 'sdd_sale'];
+    // Events that we process (from 'event' parameter)
+    private const PROCESSABLE_EVENTS = ['chargeback', 'retrieval_request'];
+    
+    // Transaction types that we process status updates for
+    private const PROCESSABLE_TRANSACTION_TYPES = ['sdd_sale', 'sdd_init_recurring_sale', 'sdd_recurring_sale'];
+    
     private const WEBHOOK_DEDUP_TTL = 3600; // 1 hour
     private const DEDUP_KEY_PREFIX = 'webhook_dedup';
 
@@ -30,32 +40,37 @@ class EmpWebhookService
         
         $this->verifySignature($request);
         
-        $transactionType = $data['transaction_type'] ?? 'unknown';
         $uniqueId = $data['unique_id'] ?? null;
-        
         $this->validateUniqueId($uniqueId);
         
-        // Log all webhooks, but only process known types
-        if (!$this->isProcessableType($transactionType)) {
+        // Determine webhook type: event-based (chargeback) or transaction status update
+        $event = $data['event'] ?? null;
+        $transactionType = $data['transaction_type'] ?? 'unknown';
+        $status = $data['status'] ?? null;
+        
+        // Determine processing type
+        $processingType = $this->determineProcessingType($event, $transactionType, $status);
+        
+        if ($processingType === null) {
             Log::info('EMP webhook received (not processed)', [
                 'unique_id' => $uniqueId,
                 'transaction_type' => $transactionType,
-                'status' => $data['status'] ?? null,
+                'event' => $event,
+                'status' => $status,
             ]);
             
             return [
                 'queued' => false,
                 'message' => 'Webhook acknowledged (type not processed)',
                 'unique_id' => $uniqueId,
-                'type' => $transactionType,
             ];
         }
         
         // Check for duplicates before queuing
-        if ($this->isDuplicate($transactionType, $uniqueId)) {
+        if ($this->isDuplicate($processingType, $uniqueId)) {
             Log::info('EMP webhook duplicate (already queued)', [
                 'unique_id' => $uniqueId,
-                'transaction_type' => $transactionType,
+                'processing_type' => $processingType,
             ]);
             
             return [
@@ -65,21 +80,51 @@ class EmpWebhookService
         }
 
         // Mark as processed and dispatch job
-        $this->markAsProcessed($transactionType, $uniqueId);
-        ProcessEmpWebhookJob::dispatch($data, $transactionType, now()->toIso8601String());
+        $this->markAsProcessed($processingType, $uniqueId);
+        ProcessEmpWebhookJob::dispatch($data, $processingType, now()->toIso8601String());
 
         Log::info('EMP webhook queued for processing', [
             'unique_id' => $uniqueId,
+            'processing_type' => $processingType,
             'transaction_type' => $transactionType,
-            'status' => $data['status'] ?? null,
+            'event' => $event,
+            'status' => $status,
         ]);
 
         return [
             'queued' => true,
-            'message' => $this->getSuccessMessage($transactionType),
+            'message' => $this->getSuccessMessage($processingType),
             'unique_id' => $uniqueId,
-            'type' => $transactionType,
+            'type' => $processingType,
         ];
+    }
+
+    /**
+     * Determine the processing type based on event and transaction type.
+     * 
+     * EMP sends:
+     * - Chargebacks: event=chargeback, transaction_type=original_type, status=chargebacked
+     * - Retrieval: event=retrieval_request
+     * - Status updates: transaction_type=sdd_sale, status=approved|declined|etc
+     */
+    private function determineProcessingType(?string $event, string $transactionType, ?string $status): ?string
+    {
+        // Event-based notifications take priority (chargeback, retrieval_request)
+        if ($event !== null && in_array($event, self::PROCESSABLE_EVENTS, true)) {
+            return $event;
+        }
+        
+        // Transaction status updates for SDD transactions
+        if (in_array($transactionType, self::PROCESSABLE_TRANSACTION_TYPES, true)) {
+            return 'sdd_status_update';
+        }
+        
+        // Status=chargebacked without event parameter (legacy/fallback)
+        if ($status === 'chargebacked') {
+            return 'chargeback';
+        }
+        
+        return null;
     }
 
     /**
@@ -130,28 +175,20 @@ class EmpWebhookService
     }
 
     /**
-     * Check if transaction type should be processed.
-     */
-    private function isProcessableType(?string $type): bool
-    {
-        return in_array($type, self::PROCESSABLE_TYPES, true);
-    }
-
-    /**
      * Check if webhook was already processed using cache.
      */
-    private function isDuplicate(string $transactionType, string $uniqueId): bool
+    private function isDuplicate(string $processingType, string $uniqueId): bool
     {
-        return Cache::has($this->getDedupKey($transactionType, $uniqueId));
+        return Cache::has($this->getDedupKey($processingType, $uniqueId));
     }
 
     /**
      * Mark webhook as processed in cache to prevent duplicates.
      */
-    private function markAsProcessed(string $transactionType, string $uniqueId): void
+    private function markAsProcessed(string $processingType, string $uniqueId): void
     {
         Cache::put(
-            $this->getDedupKey($transactionType, $uniqueId),
+            $this->getDedupKey($processingType, $uniqueId),
             true,
             self::WEBHOOK_DEDUP_TTL
         );
@@ -161,19 +198,20 @@ class EmpWebhookService
      * Generate cache key for webhook deduplication.
      * Format: webhook_dedup_{type}_{unique_id}
      */
-    private function getDedupKey(string $transactionType, string $uniqueId): string
+    private function getDedupKey(string $processingType, string $uniqueId): string
     {
-        return self::DEDUP_KEY_PREFIX . "_{$transactionType}_{$uniqueId}";
+        return self::DEDUP_KEY_PREFIX . "_{$processingType}_{$uniqueId}";
     }
 
     /**
-     * Get user-friendly success message based on transaction type.
+     * Get user-friendly success message based on processing type.
      */
-    private function getSuccessMessage(string $transactionType): string
+    private function getSuccessMessage(string $processingType): string
     {
-        return match ($transactionType) {
+        return match ($processingType) {
             'chargeback' => 'Chargeback processing queued',
-            'sdd_sale' => 'Transaction processing queued',
+            'retrieval_request' => 'Retrieval request processing queued',
+            'sdd_status_update' => 'Transaction status update queued',
             default => 'Processing queued',
         };
     }
