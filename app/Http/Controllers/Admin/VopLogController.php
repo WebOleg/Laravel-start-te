@@ -21,6 +21,10 @@ class VopLogController extends Controller
     {
         $query = VopLog::with(['debtor', 'upload']);
 
+        if ($request->filled('bav_verified')) {
+            $query->where('bav_verified', filter_var($request->bav_verified, FILTER_VALIDATE_BOOLEAN));
+        }
+
         if ($request->has('upload_id')) {
             $query->where('upload_id', $request->input('upload_id'));
         }
