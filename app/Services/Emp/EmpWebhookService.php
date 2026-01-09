@@ -15,7 +15,7 @@ use Illuminate\Support\Facades\Log;
 
 class EmpWebhookService
 {
-    private const VALID_TRANSACTION_TYPES = ['chargeback', 'sdd_sale'];
+    private const PROCESSABLE_TYPES = ['chargeback', 'sdd_sale'];
     private const WEBHOOK_DEDUP_TTL = 3600; // 1 hour
     private const DEDUP_KEY_PREFIX = 'webhook_dedup';
 
@@ -30,11 +30,26 @@ class EmpWebhookService
         
         $this->verifySignature($request);
         
-        $transactionType = $data['transaction_type'] ?? null;
-        $this->validateTransactionType($transactionType);
-        
+        $transactionType = $data['transaction_type'] ?? 'unknown';
         $uniqueId = $data['unique_id'] ?? null;
+        
         $this->validateUniqueId($uniqueId);
+        
+        // Log all webhooks, but only process known types
+        if (!$this->isProcessableType($transactionType)) {
+            Log::info('EMP webhook received (not processed)', [
+                'unique_id' => $uniqueId,
+                'transaction_type' => $transactionType,
+                'status' => $data['status'] ?? null,
+            ]);
+            
+            return [
+                'queued' => false,
+                'message' => 'Webhook acknowledged (type not processed)',
+                'unique_id' => $uniqueId,
+                'type' => $transactionType,
+            ];
+        }
         
         // Check for duplicates before queuing
         if ($this->isDuplicate($transactionType, $uniqueId)) {
@@ -56,6 +71,7 @@ class EmpWebhookService
         Log::info('EMP webhook queued for processing', [
             'unique_id' => $uniqueId,
             'transaction_type' => $transactionType,
+            'status' => $data['status'] ?? null,
         ]);
 
         return [
@@ -98,23 +114,6 @@ class EmpWebhookService
     }
 
     /**
-     * Validate transaction type is supported.
-     * 
-     * @throws \InvalidArgumentException If type is unknown
-     */
-    private function validateTransactionType(?string $type): void
-    {
-        if ($type === null) {
-            throw new \InvalidArgumentException('Missing transaction_type');
-        }
-
-        if (!$this->isValidTransactionType($type)) {
-            Log::info('EMP webhook unknown type', ['type' => $type]);
-            throw new \InvalidArgumentException("Unknown transaction type: {$type}");
-        }
-    }
-
-    /**
      * Validate unique_id is present and non-empty.
      * Required for reconciliation and deduplication.
      * 
@@ -131,11 +130,11 @@ class EmpWebhookService
     }
 
     /**
-     * Check if transaction type is supported.
+     * Check if transaction type should be processed.
      */
-    private function isValidTransactionType(?string $type): bool
+    private function isProcessableType(?string $type): bool
     {
-        return isset(array_flip(self::VALID_TRANSACTION_TYPES)[$type]);
+        return in_array($type, self::PROCESSABLE_TYPES, true);
     }
 
     /**
