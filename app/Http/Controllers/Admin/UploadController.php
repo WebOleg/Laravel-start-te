@@ -62,6 +62,16 @@ class UploadController extends Controller
             'debtors as invalid_count' => function ($q) {
                 $q->where('validation_status', Debtor::VALIDATION_INVALID);
             },
+            'debtors as bav_excluded_count' => function ($q) {
+                $q->whereHas('vopLogs', function ($vopQuery) {
+                    $vopQuery->where('name_match', 'no');
+                });
+            },
+            'debtors as bav_verified_count' => function ($q) {
+                $q->whereHas('vopLogs', function ($vopQuery) {
+                    $vopQuery->whereNotNull('name_match');
+                });
+            },
         ]);
 
         return new UploadResource($upload);
