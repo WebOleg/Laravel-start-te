@@ -14,6 +14,24 @@ services:
     depends_on:
       - redis
 
+  horizon:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tether_horizon
+    restart: unless-stopped
+    working_dir: /var/www
+    env_file:
+      - .env
+    command: php artisan horizon
+    volumes:
+      - ./:/var/www
+      - ./storage:/var/www/storage
+    networks:
+      - tether_network
+    depends_on:
+      - app
+
   queue:
     build:
       context: .
