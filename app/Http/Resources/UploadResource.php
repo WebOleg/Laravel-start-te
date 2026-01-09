@@ -1,9 +1,7 @@
 <?php
-
 /**
  * API resource for Upload model.
  */
-
 namespace App\Http\Resources;
 
 use Illuminate\Http\Request;
@@ -34,6 +32,8 @@ class UploadResource extends JsonResource
             'debtors_count' => $this->whenCounted('debtors'),
             'valid_count' => $this->when(isset($this->valid_count), $this->valid_count),
             'invalid_count' => $this->when(isset($this->invalid_count), $this->invalid_count),
+            'bav_excluded_count' => $this->when(isset($this->bav_excluded_count), $this->bav_excluded_count),
+            'bav_verified_count' => $this->when(isset($this->bav_verified_count), $this->bav_verified_count),
             'skipped' => $this->when(isset($meta['skipped']), $meta['skipped'] ?? null),
             'skipped_rows' => $this->when(isset($meta['skipped_rows']), $meta['skipped_rows'] ?? null),
             'uploader' => new UserResource($this->whenLoaded('uploader')),
