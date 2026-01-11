@@ -28,7 +28,7 @@ Tether enables merchants to recover outstanding debts through automated SEPA Dir
 | ------------------------- | ---------------------------------------------------------------------------- |
 | **CSV Upload Processing** | Bulk debtor import with chunked processing for large files (100k+ rows)      |
 | **Two-Stage Validation**  | Stage A: Accept all rows → Stage B: Validate fields → Stage C: Sync eligible |
-| **VOP Verification**      | IBAN validation, bank identification, and name matching via Sumsub           |
+| **VOP Verification**      | IBAN validation, bank identification, and name matching via IBAN.com         |
 | **SEPA Direct Debit**     | Payment processing via emerchantpay Genesis API                              |
 | **Webhook Handler**       | Automatic status updates from payment gateway                                |
 | **Reconciliation**        | Backup mechanism for missed webhooks - query EMP for actual status           |
@@ -61,7 +61,7 @@ CSV Upload → Validation → VOP Verify → Billing Sync → EMP Processing
 | Queue            | Redis + Laravel Queue    |
 | Authentication   | Laravel Sanctum          |
 | Payment Gateway  | emerchantpay Genesis API |
-| VOP Provider     | Sumsub                   |
+| VOP Provider     | IBAN.com API             |
 | Containerization | Docker & Docker Compose  |
 | Testing          | PHPUnit                  |
 
@@ -98,14 +98,15 @@ DB_USERNAME=tether
 DB_PASSWORD=secret
 
 # emerchantpay
-EMP_API_LOGIN=your_api_login
-EMP_API_PASSWORD=your_api_password
-EMP_TERMINAL_TOKEN=your_terminal_token
-EMP_ENVIRONMENT=staging  # or production
+EMP_GENESIS_ENDPOINT=staging.gate.emerchantpay.net  # or gate.emerchantpay.net for production
+EMP_GENESIS_USERNAME=your_username
+EMP_GENESIS_PASSWORD=your_password
+EMP_GENESIS_TERMINAL_TOKEN=your_terminal_token
 
-# Sumsub VOP
-SUMSUB_APP_TOKEN=your_token
-SUMSUB_SECRET_KEY=your_secret
+# IBAN.com VOP
+IBAN_API_KEY=your_api_key
+IBAN_API_URL=https://api.iban.com/clients/verify/v3/
+IBAN_API_MOCK=false  # Set to true for testing
 ```
 
 4. **Start containers**
@@ -298,22 +299,58 @@ tests/
 
 ### Required
 
-| Variable             | Description               |
-| -------------------- | ------------------------- |
-| `EMP_API_LOGIN`      | emerchantpay API login    |
-| `EMP_API_PASSWORD`   | emerchantpay API password |
-| `EMP_TERMINAL_TOKEN` | Terminal token            |
-| `EMP_ENVIRONMENT`    | `staging` or `production` |
-| `SUMSUB_APP_TOKEN`   | Sumsub application token  |
-| `SUMSUB_SECRET_KEY`  | Sumsub secret key         |
+| Variable                    | Description                                           |
+| --------------------------- | ----------------------------------------------------- |
+| `EMP_GENESIS_ENDPOINT`      | emerchantpay API endpoint (staging or production)     |
+| `EMP_GENESIS_USERNAME`      | emerchantpay API username                             |
+| `EMP_GENESIS_PASSWORD`      | emerchantpay API password                             |
+| `EMP_GENESIS_TERMINAL_TOKEN`| emerchantpay terminal token                           |
+| `IBAN_API_KEY`              | IBAN.com API key for VOP verification                 |
+| `IBAN_API_URL`              | IBAN.com BAV API endpoint (default: v3)               |
 
 ### Optional
 
-| Variable                       | Default | Description                   |
-| ------------------------------ | ------- | ----------------------------- |
-| `BILLING_CHUNK_SIZE`           | 100     | Records per billing chunk     |
-| `RECONCILIATION_MIN_AGE_HOURS` | 2       | Min age before reconciliation |
-| `RECONCILIATION_MAX_ATTEMPTS`  | 10      | Max reconciliation attempts   |
+| Variable                       | Default | Description                         |
+| ------------------------------ | ------- | ----------------------------------- |
+| `IBAN_API_MOCK`                | false   | Enable mock mode for testing        |
+| `BILLING_CHUNK_SIZE`           | 100     | Records per billing chunk           |
+| `RECONCILIATION_MIN_AGE_HOURS` | 2       | Min age before reconciliation       |
+| `RECONCILIATION_MAX_ATTEMPTS`  | 10      | Max reconciliation attempts         |
+
+## VOP Verification Details
+
+The platform uses **IBAN.com API** for VOP (Verification of Payee) with a scoring system (0-100 points):
+
+### Scoring Breakdown
+
+| Check                  | Points | Description                                    |
+| ---------------------- | ------ | ---------------------------------------------- |
+| IBAN Valid             | 20     | IBAN format validation                         |
+| Bank Identified        | 25     | Bank details retrieved successfully            |
+| SEPA SDD Support       | 25     | Bank supports SEPA Direct Debit                |
+| Country Supported      | 15     | Country in SEPA zone                           |
+| Name Match (BAV)       | 15     | Account holder name matches (20 countries)     |
+| **Total**              | **100**| Maximum possible score                         |
+
+### Verification Results
+
+| Score Range | Result            | Description                                  |
+| ----------- | ----------------- | -------------------------------------------- |
+| 80-100      | Verified          | High confidence - proceed with payment       |
+| 60-79       | Likely Verified   | Good confidence - acceptable risk            |
+| 40-59       | Inconclusive      | Moderate risk - review recommended           |
+| 20-39       | Mismatch          | Low confidence - manual review required      |
+| 0-19        | Rejected          | Failed validation - do not process           |
+
+### BAV (Bank Account Verification)
+
+Name matching is available for 20 EU countries: AT, BE, CY, DE, EE, ES, FI, FR, GR, HR, IE, IT, LT, LU, LV, MT, NL, PT, SI, SK.
+
+**Name Match Results:**
+- `yes` - Full name match (100% of 15 points)
+- `partial` - Partial name match (70% of 15 points)
+- `unavailable` - Bank doesn't support name matching (50% of 15 points)
+- `no` - Name mismatch (20% of 15 points)
 
 ## License
 
