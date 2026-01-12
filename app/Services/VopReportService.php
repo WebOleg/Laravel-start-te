@@ -783,8 +783,33 @@ EOT;
         $csvContent = stream_get_contents($output);
         fclose($output);
 
-        // Save to S3
-        Storage::disk('s3')->put($path, $csvContent);
+        // Save to S3 with error handling
+        try {
+            $result = Storage::disk('s3')->put($path, $csvContent);
+
+            if (!$result) {
+                Log::channel('bav')->error('Failed to save BAV CSV to S3', [
+                    'upload_id' => $uploadId,
+                    'path' => $path,
+                    'content_length' => strlen($csvContent)
+                ]);
+                throw new \Exception("Failed to save BAV CSV report to S3: {$path}");
+            }
+
+            Log::channel('bav')->info('BAV CSV saved to S3 successfully', [
+                'upload_id' => $uploadId,
+                'path' => $path,
+                'size' => strlen($csvContent)
+            ]);
+        } catch (\Exception $e) {
+            Log::channel('bav')->error('Exception saving BAV CSV to S3', [
+                'upload_id' => $uploadId,
+                'path' => $path,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            throw $e;
+        }
 
         return $path;
     }
