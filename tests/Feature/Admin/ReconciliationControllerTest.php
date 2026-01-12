@@ -136,10 +136,15 @@ class ReconciliationControllerTest extends TestCase
     public function test_reconcile_upload_prevents_duplicate(): void
     {
         Bus::fake();
-        Cache::put("reconciliation_upload_{$this->upload->id}", true, now()->addMinutes(30));
+
+        $upload = Upload::factory()->create([
+            'reconciliation_status' => Upload::JOB_PROCESSING,
+            'reconciliation_batch_id' => 'test-batch-id',
+            'reconciliation_started_at' => now(),
+        ]);
 
         $response = $this->actingAs($this->user)
-            ->postJson("/api/admin/uploads/{$this->upload->id}/reconcile");
+            ->postJson("/api/admin/uploads/{$upload->id}/reconcile");
 
         $response->assertStatus(409)
             ->assertJsonPath('data.duplicate', true);
@@ -173,6 +178,8 @@ class ReconciliationControllerTest extends TestCase
             ->assertJsonStructure([
                 'data' => [
                     'upload_id',
+                    'is_processing',
+                    'reconciliation_status',
                     'total',
                     'pending',
                     'eligible',
@@ -191,7 +198,7 @@ class ReconciliationControllerTest extends TestCase
             'upload_id' => $this->upload->id,
             'status' => 'pending',
             'unique_id' => 'emp_123456',
-            'created_at' => now()->subHours(3), // 3 hours ago - within 24h max_age
+            'created_at' => now()->subHours(3),
         ]);
 
         $response = $this->actingAs($this->user)

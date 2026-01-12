@@ -1,9 +1,5 @@
 <?php
 
-/**
- * Tests for chargeback statistics functionality.
- */
-
 namespace Tests\Feature;
 
 use App\Models\BillingAttempt;
@@ -105,7 +101,8 @@ class ChargebackStatsTest extends TestCase
         $this->assertEquals(8, $country['approved']);
         $this->assertEquals(2, $country['chargebacks']);
         $this->assertEquals(20, $country['cb_rate_total']);
-        $this->assertEquals(25, $country['cb_rate_approved']);
+        // cb_rate_approved = chargebacks / (approved + chargebacks) = 2 / 10 = 20%
+        $this->assertEquals(20, $country['cb_rate_approved']);
     }
 
     public function test_chargeback_rates_triggers_alert_above_threshold(): void
@@ -195,7 +192,6 @@ class ChargebackStatsTest extends TestCase
 
     public function test_chargeback_banks_returns_default_period(): void
     {
-        // Create test data within the 7d window
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create();
         
@@ -257,7 +253,6 @@ class ChargebackStatsTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create();
 
-        // Create data within 24h
         VopLog::factory()->create([
             'debtor_id' => $debtor->id,
             'bank_name' => 'Commerzbank',
@@ -272,7 +267,6 @@ class ChargebackStatsTest extends TestCase
             'created_at' => now()->subHours(5),
         ]);
 
-        // Create data outside 24h window
         $oldDebtor = Debtor::factory()->create();
         VopLog::factory()->create([
             'debtor_id' => $oldDebtor->id,
@@ -295,7 +289,6 @@ class ChargebackStatsTest extends TestCase
         $data = $response->json('data');
         
         $this->assertEquals('24h', $data['period']);
-        // Should only include recent data
         $bankNames = array_column($data['banks'], 'bank_name');
         $this->assertContains('Commerzbank', $bankNames);
         $this->assertNotContains('Sparkasse', $bankNames);
@@ -368,7 +361,6 @@ class ChargebackStatsTest extends TestCase
             'created_at' => now()->subDays(3),
         ]);
 
-        // Create 10 approved transactions
         for ($i = 0; $i < 10; $i++) {
             BillingAttempt::factory()->create([
                 'debtor_id' => $debtor->id,
@@ -379,7 +371,6 @@ class ChargebackStatsTest extends TestCase
             ]);
         }
 
-        // Create 2 chargebacks
         for ($i = 0; $i < 2; $i++) {
             BillingAttempt::factory()->create([
                 'debtor_id' => $debtor->id,
@@ -396,9 +387,9 @@ class ChargebackStatsTest extends TestCase
         $response->assertStatus(200);
         $data = $response->json('data');
 
-        // CB rate = chargebacks / approved = 2/10 = 20%
-        $this->assertEqualsWithDelta(20.0, $data['banks'][0]['cb_rate'], 0.01);
-        $this->assertEqualsWithDelta(20.0, $data['totals']['cb_rate'], 0.01);
+        // CB rate = chargebacks / (approved + chargebacks) = 2 / (10 + 2) = 16.67%
+        $this->assertEqualsWithDelta(16.67, $data['banks'][0]['cb_rate'], 0.01);
+        $this->assertEqualsWithDelta(16.67, $data['totals']['cb_rate'], 0.01);
     }
 
     public function test_chargeback_banks_multiple_aggregated_correctly(): void
@@ -461,22 +452,21 @@ class ChargebackStatsTest extends TestCase
         
         $this->assertCount(2, $data['banks']);
         
-        // Find banks in result
         $deutscheBank = collect($data['banks'])->firstWhere('bank_name', 'Deutsche Bank');
         $commerzbank = collect($data['banks'])->firstWhere('bank_name', 'Commerzbank');
         
         $this->assertNotNull($deutscheBank);
         $this->assertNotNull($commerzbank);
         
-        $this->assertEquals(400.0, $deutscheBank['total_amount']); // 4 * 100
+        $this->assertEquals(400.0, $deutscheBank['total_amount']);
         $this->assertEquals(1, $deutscheBank['chargebacks']);
-        // CB rate = chargebacks / approved = 1/3 = 33.33%
-        $this->assertEqualsWithDelta(33.33, $deutscheBank['cb_rate'], 0.01);
+        // CB rate = chargebacks / (approved + chargebacks) = 1 / (3 + 1) = 25%
+        $this->assertEqualsWithDelta(25.0, $deutscheBank['cb_rate'], 0.01);
         
-        $this->assertEquals(400.0, $commerzbank['total_amount']); // 4 * 100
+        $this->assertEquals(400.0, $commerzbank['total_amount']);
         $this->assertEquals(2, $commerzbank['chargebacks']);
-        // CB rate = chargebacks / approved = 2/2 = 100%
-        $this->assertEqualsWithDelta(100.0, $commerzbank['cb_rate'], 0.01);
+        // CB rate = chargebacks / (approved + chargebacks) = 2 / (2 + 2) = 50%
+        $this->assertEqualsWithDelta(50.0, $commerzbank['cb_rate'], 0.01);
     }
 
     public function test_chargeback_banks_response_is_cached(): void
@@ -497,26 +487,22 @@ class ChargebackStatsTest extends TestCase
             'status' => BillingAttempt::STATUS_APPROVED,
         ]);
 
-        // First request should hit the database and cache
         $response1 = $this->actingAs($this->user)
             ->getJson('/api/admin/stats/chargeback-banks?period=7d');
 
         $response1->assertStatus(200);
         $data1 = $response1->json('data');
 
-        // Delete database records
         BillingAttempt::truncate();
         VopLog::truncate();
         Debtor::truncate();
 
-        // Second request should return cached data
         $response2 = $this->actingAs($this->user)
             ->getJson('/api/admin/stats/chargeback-banks?period=7d');
 
         $response2->assertStatus(200);
         $data2 = $response2->json('data');
 
-        // Data should be identical (from cache)
         $this->assertEquals($data1, $data2);
     }
 
@@ -539,21 +525,18 @@ class ChargebackStatsTest extends TestCase
             'created_at' => now()->subHours(12),
         ]);
 
-        // Get 24h period
         $response24h = $this->actingAs($this->user)
             ->getJson('/api/admin/stats/chargeback-banks?period=24h');
 
         $response24h->assertStatus(200);
         $this->assertEquals('24h', $response24h->json('data.period'));
 
-        // Get 7d period
         $response7d = $this->actingAs($this->user)
             ->getJson('/api/admin/stats/chargeback-banks?period=7d');
 
         $response7d->assertStatus(200);
         $this->assertEquals('7d', $response7d->json('data.period'));
 
-        // Both should be cached separately
         $this->assertNotEquals($response24h->json('data'), $response7d->json('data'));
     }
 
@@ -581,7 +564,6 @@ class ChargebackStatsTest extends TestCase
             'bank_name' => 'Deutsche Bank',
         ]);
 
-        // Create various status transactions
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
@@ -616,7 +598,6 @@ class ChargebackStatsTest extends TestCase
         $response->assertStatus(200);
         $data = $response->json('data');
 
-        // Should count all transaction statuses in total, but only chargebacked in chargeback count
         $this->assertEquals(4, $data['totals']['total']);
         $this->assertEquals(1, $data['totals']['chargebacks']);
     }
@@ -631,7 +612,6 @@ class ChargebackStatsTest extends TestCase
             'bank_name' => 'Deutsche Bank',
         ]);
 
-        // Same debtor/bank with multiple attempts
         for ($i = 0; $i < 5; $i++) {
             BillingAttempt::factory()->create([
                 'debtor_id' => $debtor->id,
@@ -656,9 +636,8 @@ class ChargebackStatsTest extends TestCase
         $response->assertStatus(200);
         $data = $response->json('data');
         
-        // All should be aggregated into single bank entry
         $this->assertCount(1, $data['banks']);
-        $this->assertEquals(700.0, $data['banks'][0]['total_amount']); // 7 * 100
+        $this->assertEquals(700.0, $data['banks'][0]['total_amount']);
         $this->assertEquals(2, $data['banks'][0]['chargebacks']);
     }
 
@@ -692,7 +671,6 @@ class ChargebackStatsTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create();
 
-        // Create data within 24h
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
@@ -701,7 +679,6 @@ class ChargebackStatsTest extends TestCase
             'created_at' => now()->subHours(2),
         ]);
 
-        // Create data within 7d but outside 24h
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
@@ -711,12 +688,11 @@ class ChargebackStatsTest extends TestCase
         ]);
 
         $response = $this->actingAs($this->user)
-        ->getJson('/api/admin/stats/chargeback-codes?period=24h');
+            ->getJson('/api/admin/stats/chargeback-codes?period=24h');
 
         $response->assertStatus(200);
         $this->assertEquals('24h', $response->json('data.period'));
         
-        // Verify only recent data is included
         $codes = array_column($response->json('data.codes'), 'chargeback_code');
         $this->assertCount(1, $codes);
         $this->assertContains('CB001', $codes);
@@ -728,7 +704,6 @@ class ChargebackStatsTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create();
         
-        // Create data within 24h
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
@@ -737,7 +712,6 @@ class ChargebackStatsTest extends TestCase
             'created_at' => now()->subHours(2),
         ]);
 
-        // Create data within 7d but outside 24h
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
@@ -746,7 +720,6 @@ class ChargebackStatsTest extends TestCase
             'created_at' => now()->subDays(5),
         ]);
 
-        // Create data within 30d but outside 7d
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
@@ -756,12 +729,11 @@ class ChargebackStatsTest extends TestCase
         ]);
 
         $response = $this->actingAs($this->user)
-        ->getJson('/api/admin/stats/chargeback-codes?period=7d');
+            ->getJson('/api/admin/stats/chargeback-codes?period=7d');
 
         $response->assertStatus(200);
         $this->assertEquals('7d', $response->json('data.period'));
         
-        // Verify only recent data is included
         $codes = array_column($response->json('data.codes'), 'chargeback_code');
         $this->assertCount(2, $codes);
         $this->assertContains('CB001', $codes);
@@ -774,7 +746,6 @@ class ChargebackStatsTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create();
         
-        // Create data within 24h
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
@@ -783,7 +754,6 @@ class ChargebackStatsTest extends TestCase
             'created_at' => now()->subHours(2),
         ]);
 
-        // Create data within 7d but outside 24h
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
@@ -792,7 +762,6 @@ class ChargebackStatsTest extends TestCase
             'created_at' => now()->subDays(5),
         ]);
 
-        // Create data within 30d but outside 7d
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
@@ -801,7 +770,6 @@ class ChargebackStatsTest extends TestCase
             'created_at' => now()->subDays(15),
         ]);
 
-        // Create data within 90d but outside 30d
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
@@ -811,12 +779,11 @@ class ChargebackStatsTest extends TestCase
         ]);
 
         $response = $this->actingAs($this->user)
-        ->getJson('/api/admin/stats/chargeback-codes?period=30d');
+            ->getJson('/api/admin/stats/chargeback-codes?period=30d');
 
         $response->assertStatus(200);
         $this->assertEquals('30d', $response->json('data.period'));
         
-        // Verify only recent data is included
         $codes = array_column($response->json('data.codes'), 'chargeback_code');
         $this->assertCount(3, $codes);
         $this->assertContains('CB001', $codes);
@@ -830,7 +797,6 @@ class ChargebackStatsTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create();
         
-        // Create data within 24h
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
@@ -839,7 +805,6 @@ class ChargebackStatsTest extends TestCase
             'created_at' => now()->subHours(2),
         ]);
 
-        // Create data within 7d but outside 24h
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
@@ -848,7 +813,6 @@ class ChargebackStatsTest extends TestCase
             'created_at' => now()->subDays(5),
         ]);
 
-        // Create data within 30d but outside 7d
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
@@ -857,7 +821,6 @@ class ChargebackStatsTest extends TestCase
             'created_at' => now()->subDays(15),
         ]);
 
-        // Create data within 90d but outside 30d
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
@@ -866,7 +829,6 @@ class ChargebackStatsTest extends TestCase
             'created_at' => now()->subDays(45),
         ]);
 
-        // Create data outside 90d
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
@@ -876,12 +838,11 @@ class ChargebackStatsTest extends TestCase
         ]);
 
         $response = $this->actingAs($this->user)
-        ->getJson('/api/admin/stats/chargeback-codes?period=90d');
+            ->getJson('/api/admin/stats/chargeback-codes?period=90d');
 
         $response->assertStatus(200);
         $this->assertEquals('90d', $response->json('data.period'));
         
-        // Verify only recent data is included
         $codes = array_column($response->json('data.codes'), 'chargeback_code');
         $this->assertCount(4, $codes);
         $this->assertContains('CB001', $codes);
@@ -916,21 +877,18 @@ class ChargebackStatsTest extends TestCase
             'created_at' => now()->subHours(12),
         ]);
 
-        // Get 24h period
         $response24h = $this->actingAs($this->user)
             ->getJson('/api/admin/stats/chargeback-codes?period=24h');
 
         $response24h->assertStatus(200);
         $this->assertEquals('24h', $response24h->json('data.period'));
 
-        // Get 7d period
         $response7d = $this->actingAs($this->user)
             ->getJson('/api/admin/stats/chargeback-codes?period=7d');
 
         $response7d->assertStatus(200);
         $this->assertEquals('7d', $response7d->json('data.period'));
 
-        // Both should be cached separately
         $this->assertNotEquals($response24h->json('data'), $response7d->json('data'));
     }
 
@@ -964,7 +922,6 @@ class ChargebackStatsTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create();
 
-        // Create 3 attempts with same chargeback code
         for ($i = 0; $i < 3; $i++) {
             BillingAttempt::factory()->create([
                 'debtor_id' => $debtor->id,
@@ -982,7 +939,6 @@ class ChargebackStatsTest extends TestCase
 
         $codes = $response->json('data.codes');
 
-        // Should have 1 code, not 3
         $this->assertCount(1, $codes);
         $this->assertEquals('CB001', $codes[0]['chargeback_code']);
         $this->assertEquals(3, $codes[0]['occurrences']);

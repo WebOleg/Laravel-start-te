@@ -1,8 +1,5 @@
 <?php
-/**
- * Dispatches billing jobs for upload debtors.
- * Excludes debtors with BAV name mismatch to prevent chargebacks.
- */
+
 namespace App\Jobs;
 
 use App\Models\Upload;
@@ -40,18 +37,17 @@ class ProcessBillingJob implements ShouldQueue, ShouldBeUnique
 
     public function handle(): void
     {
-        Log::info('ProcessBillingJob started', ['upload_id' => $this->upload->id]);
+        $uploadId = $this->upload->id;
 
-        // Get debtors ready for billing (excluding BAV mismatches)
-        $query = Debtor::where('upload_id', $this->upload->id)
+        Log::info('ProcessBillingJob started', ['upload_id' => $uploadId]);
+
+        $query = Debtor::where('upload_id', $uploadId)
             ->where('validation_status', Debtor::VALIDATION_VALID)
             ->where('status', Debtor::STATUS_PENDING)
             ->whereDoesntHave('billingAttempts', function ($query) {
                 $query->whereIn('status', ['pending', 'approved']);
             });
 
-        // Exclude debtors with BAV name mismatch (name_match = 'no')
-        // Debtors without BAV check (90%) or with yes/partial are OK to bill
         $query->where(function ($q) {
             $q->whereDoesntHave('vopLogs', function ($vopQuery) {
                 $vopQuery->where('name_match', 'no');
@@ -60,8 +56,7 @@ class ProcessBillingJob implements ShouldQueue, ShouldBeUnique
 
         $debtorIds = $query->pluck('id')->toArray();
 
-        // Count excluded for logging
-        $excludedCount = Debtor::where('upload_id', $this->upload->id)
+        $excludedCount = Debtor::where('upload_id', $uploadId)
             ->where('validation_status', Debtor::VALIDATION_VALID)
             ->where('status', Debtor::STATUS_PENDING)
             ->whereHas('vopLogs', function ($q) {
@@ -71,9 +66,10 @@ class ProcessBillingJob implements ShouldQueue, ShouldBeUnique
 
         if (empty($debtorIds)) {
             Log::info('ProcessBillingJob: no debtors to bill', [
-                'upload_id' => $this->upload->id,
+                'upload_id' => $uploadId,
                 'excluded_bav_mismatch' => $excludedCount,
             ]);
+            $this->upload->markBillingCompleted();
             return;
         }
 
@@ -83,28 +79,41 @@ class ProcessBillingJob implements ShouldQueue, ShouldBeUnique
         foreach ($chunks as $index => $chunk) {
             $jobs[] = new ProcessBillingChunkJob(
                 debtorIds: $chunk,
-                uploadId: $this->upload->id,
+                uploadId: $uploadId,
                 chunkIndex: $index,
                 notificationUrl: $this->notificationUrl
             );
         }
 
-        $uploadId = $this->upload->id;
+        $upload = $this->upload;
 
-        Bus::batch($jobs)
+        $batch = Bus::batch($jobs)
             ->name("Billing Upload #{$uploadId}")
             ->allowFailures()
             ->onQueue('billing')
-            ->finally(function () use ($uploadId) {
-                Log::info('ProcessBillingJob batch completed', ['upload_id' => $uploadId]);
+            ->finally(function () use ($upload) {
+                $upload->markBillingCompleted();
+                Log::info('ProcessBillingJob batch completed', ['upload_id' => $upload->id]);
             })
             ->dispatch();
 
+        $this->upload->startBilling($batch->id);
+
         Log::info('ProcessBillingJob dispatched', [
-            'upload_id' => $this->upload->id,
+            'upload_id' => $uploadId,
+            'batch_id' => $batch->id,
             'debtors' => count($debtorIds),
             'excluded_bav_mismatch' => $excludedCount,
             'chunks' => count($chunks),
+        ]);
+    }
+
+    public function failed(\Throwable $exception): void
+    {
+        $this->upload->markBillingFailed();
+        Log::error('ProcessBillingJob failed', [
+            'upload_id' => $this->upload->id,
+            'error' => $exception->getMessage(),
         ]);
     }
 }
