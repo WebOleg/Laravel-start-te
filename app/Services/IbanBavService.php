@@ -55,7 +55,7 @@ class IbanBavService
         $normalizedIban = $this->ibanValidator->normalize($iban);
         $countryCode = substr($normalizedIban, 0, 2);
 
-        Log::info('IbanBavService: verify() called', [
+        Log::channel('bav')->info('IbanBavService: verify() called', [
             'iban' => $this->ibanValidator->mask($iban),
             'name' => $name,
             'country' => $countryCode,
@@ -63,7 +63,7 @@ class IbanBavService
         ]);
 
         if (!$this->isCountrySupported($countryCode)) {
-            Log::warning('IbanBavService: Country not supported for BAV', [
+            Log::channel('bav')->warning('IbanBavService: Country not supported for BAV', [
                 'country' => $countryCode,
                 'iban' => $this->ibanValidator->mask($iban),
                 'supported_countries' => self::SUPPORTED_COUNTRIES,
@@ -76,7 +76,7 @@ class IbanBavService
         }
 
         if ($this->mockMode) {
-            Log::info('IbanBavService: Using MOCK response', [
+            Log::channel('bav')->info('IbanBavService: Using MOCK response', [
                 'iban' => $this->ibanValidator->mask($iban),
             ]);
             return $this->getMockResponse($normalizedIban, $name);
@@ -98,7 +98,7 @@ class IbanBavService
     private function callApi(string $iban, string $name): array
     {
         try {
-            Log::info('IbanBavService: Making BAV API request', [
+            Log::channel('bav')->info('IbanBavService: Making BAV API request', [
                 'url' => $this->apiUrl,
                 'iban' => $this->ibanValidator->mask($iban),
                 'name' => $name,
@@ -117,7 +117,7 @@ class IbanBavService
             $errorCode = $data['error'] ?? '';
             $querySuccess = $data['query']['success'] ?? false;
 
-            Log::info('IbanBavService: BAV API response received', [
+            Log::channel('bav')->info('IbanBavService: BAV API response received', [
                 'iban_masked' => $this->ibanValidator->mask($iban),
                 'status' => $response->status(),
                 'success' => $querySuccess,
@@ -157,7 +157,7 @@ class IbanBavService
             );
 
         } catch (\Exception $e) {
-            Log::error('BAV API error', [
+            Log::channel('bav')->error('BAV API error', [
                 'iban_masked' => $this->ibanValidator->mask($iban),
                 'error' => $e->getMessage(),
             ]);
@@ -178,7 +178,7 @@ class IbanBavService
             default => $this->buildResult(success: true, valid: true, nameMatch: 'yes', bic: 'ABNANL2A'),
         };
 
-        Log::info('IbanBavService: Mock response generated', [
+        Log::channel('bav')->info('IbanBavService: Mock response generated', [
             'iban' => $this->ibanValidator->mask($iban),
             'name' => $name,
             'name_match' => $result['name_match'],

@@ -51,7 +51,7 @@ class VopScoringService
         $score = 0;
         $meta = [];
 
-        Log::info('VopScoringService: Starting score calculation', [
+        Log::channel('vop')->info('VopScoringService: Starting score calculation', [
             'debtor_id' => $debtor->id,
             'iban' => $this->ibanValidator->mask($iban),
             'bav_selected' => $debtor->bav_selected,
@@ -115,7 +115,12 @@ class VopScoringService
         $nameMatchScore = null;
         $bavVerified = false;
 
-        if ($debtor->bav_selected && $ibanValid && $this->ibanBavService->isCountrySupported($country)) {
+        // Only perform BAV if VOP base score is successful (>= 60 points without BAV)
+        // This means IBAN + Bank + SEPA + Country must be verified first
+        $vopBaseScore = $score; // Current score before BAV
+        $bavEligible = $vopBaseScore >= 60; // At least LIKELY_VERIFIED level
+
+        if ($debtor->bav_selected && $ibanValid && $bavEligible && $this->ibanBavService->isCountrySupported($country)) {
             $bavResult = $this->verifyBav($debtor, $iban);
             $bavVerified = true;
             $nameMatch = $bavResult['name_match'];
@@ -128,11 +133,17 @@ class VopScoringService
             }
 
             $meta['bav_result'] = $bavResult;
+        } elseif ($debtor->bav_selected && !$bavEligible) {
+            Log::channel('bav')->info('BAV skipped: VOP base score too low', [
+                'debtor_id' => $debtor->id,
+                'vop_base_score' => $vopBaseScore,
+                'required' => 60,
+            ]);
         }
 
         $result = $this->calculateResult($score);
 
-        Log::info('VopScoringService: Score calculation complete', [
+        Log::channel('vop')->info('VopScoringService: Score calculation complete', [
             'debtor_id' => $debtor->id,
             'iban' => $this->ibanValidator->mask($iban),
             'final_score' => $score,
@@ -170,7 +181,7 @@ class VopScoringService
 
         $this->updateDebtorStatus($debtor, $vopLog);
 
-        Log::info('VopScoringService: VopLog created', [
+        Log::channel('vop')->info('VopScoringService: VopLog created', [
             'vop_log_id' => $vopLog->id,
             'debtor_id' => $debtor->id,
         ]);
@@ -187,7 +198,7 @@ class VopScoringService
     {
         $name = $debtor->getNameForBav();
 
-        Log::info('BAV verification started', [
+        Log::channel('bav')->info('BAV verification started', [
             'debtor_id' => $debtor->id,
             'iban_masked' => $this->ibanValidator->mask($iban),
         ]);
@@ -195,7 +206,7 @@ class VopScoringService
         $result = $this->ibanBavService->verify($iban, $name);
 
         if (!$result['success']) {
-            Log::warning('BAV verification failed', [
+            Log::channel('bav')->warning('BAV verification failed', [
                 'debtor_id' => $debtor->id,
                 'error' => $result['error'],
             ]);
@@ -208,7 +219,7 @@ class VopScoringService
             ];
         }
 
-        Log::info('BAV verification completed', [
+        Log::channel('bav')->info('BAV verification completed', [
             'debtor_id' => $debtor->id,
             'name_match' => $result['name_match'],
             'vop_score' => $result['vop_score'],
