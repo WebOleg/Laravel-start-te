@@ -55,7 +55,20 @@ class IbanBavService
         $normalizedIban = $this->ibanValidator->normalize($iban);
         $countryCode = substr($normalizedIban, 0, 2);
 
+        Log::info('IbanBavService: verify() called', [
+            'iban' => $this->ibanValidator->mask($iban),
+            'name' => $name,
+            'country' => $countryCode,
+            'mock_mode' => $this->mockMode,
+        ]);
+
         if (!$this->isCountrySupported($countryCode)) {
+            Log::warning('IbanBavService: Country not supported for BAV', [
+                'country' => $countryCode,
+                'iban' => $this->ibanValidator->mask($iban),
+                'supported_countries' => self::SUPPORTED_COUNTRIES,
+            ]);
+
             return $this->buildResult(
                 success: false,
                 error: "Country {$countryCode} is not supported by BAV API"
@@ -63,6 +76,9 @@ class IbanBavService
         }
 
         if ($this->mockMode) {
+            Log::info('IbanBavService: Using MOCK response', [
+                'iban' => $this->ibanValidator->mask($iban),
+            ]);
             return $this->getMockResponse($normalizedIban, $name);
         }
 
@@ -82,6 +98,13 @@ class IbanBavService
     private function callApi(string $iban, string $name): array
     {
         try {
+            Log::info('IbanBavService: Making BAV API request', [
+                'url' => $this->apiUrl,
+                'iban' => $this->ibanValidator->mask($iban),
+                'name' => $name,
+                'has_api_key' => !empty($this->apiKey),
+            ]);
+
             $response = Http::withHeaders([
                 'x-api-key' => $this->apiKey,
                 'Content-Type' => 'application/json',
@@ -94,12 +117,14 @@ class IbanBavService
             $errorCode = $data['error'] ?? '';
             $querySuccess = $data['query']['success'] ?? false;
 
-            Log::info('BAV API response', [
+            Log::info('IbanBavService: BAV API response received', [
                 'iban_masked' => $this->ibanValidator->mask($iban),
                 'status' => $response->status(),
                 'success' => $querySuccess,
                 'name_match' => $data['result']['name_match'] ?? null,
                 'error' => $errorCode,
+                'valid' => $data['result']['valid'] ?? null,
+                'bic' => $data['result']['bic'] ?? null,
             ]);
 
             // Check if query was successful
@@ -145,13 +170,25 @@ class IbanBavService
     {
         $lastDigit = (int) substr($iban, -1);
 
-        return match (true) {
+        $result = match (true) {
             $lastDigit === 0 => $this->buildResult(success: true, valid: true, nameMatch: 'yes', bic: 'DEUTDEFF'),
             $lastDigit === 1 => $this->buildResult(success: true, valid: true, nameMatch: 'partial', bic: 'COBADEFF'),
             $lastDigit === 2 => $this->buildResult(success: true, valid: true, nameMatch: 'no', bic: 'BNPAFRPP'),
             $lastDigit === 9 => $this->buildResult(success: true, valid: false, nameMatch: 'unavailable', bic: null),
             default => $this->buildResult(success: true, valid: true, nameMatch: 'yes', bic: 'ABNANL2A'),
         };
+
+        Log::info('IbanBavService: Mock response generated', [
+            'iban' => $this->ibanValidator->mask($iban),
+            'name' => $name,
+            'name_match' => $result['name_match'],
+            'valid' => $result['valid'],
+            'bic' => $result['bic'],
+            'vop_score' => $result['vop_score'],
+            'vop_result' => $result['vop_result'],
+        ]);
+
+        return $result;
     }
 
     private function calculateVopScore(string $nameMatch, bool $valid): int

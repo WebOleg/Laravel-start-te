@@ -2,7 +2,7 @@
 
 /**
  * IBAN.com API V4 integration service.
- * 
+ *
  * Provides bank account validation and bank information lookup via iban.com API.
  * Uses local database cache (bank_references) to reduce API calls.
  */
@@ -47,9 +47,21 @@ class IbanApiService
         $countryIso = substr($normalized, 0, 2);
         $bankCode = $this->extractBankCode($normalized, $countryIso);
 
+        Log::info('IbanApiService: verify() called', [
+            'iban' => $this->mask($iban),
+            'country' => $countryIso,
+            'bank_code' => $bankCode,
+            'skip_local_cache' => $skipLocalCache,
+            'mock_mode' => $this->mockMode,
+        ]);
+
         if (!$skipLocalCache && $bankCode) {
             $local = $this->findInLocalCache($countryIso, $bankCode);
             if ($local) {
+                Log::info('IbanApiService: Database cache HIT', [
+                    'iban' => $this->mask($iban),
+                    'bank' => $local['bank_data']['bank'] ?? null,
+                ]);
                 return $local;
             }
         }
@@ -57,19 +69,33 @@ class IbanApiService
         $cacheKey = self::CACHE_PREFIX . hash('sha256', $normalized);
         $cached = Cache::get($cacheKey);
         if ($cached !== null) {
+            Log::info('IbanApiService: Memory cache HIT', [
+                'iban' => $this->mask($iban),
+                'bank' => $cached['bank_data']['bank'] ?? null,
+            ]);
             return array_merge($cached, ['cached' => true, 'source' => 'memory']);
         }
 
-        $result = $this->mockMode 
+        Log::info('IbanApiService: Cache MISS - fetching data', [
+            'iban' => $this->mask($iban),
+            'will_use_mock' => $this->mockMode,
+        ]);
+
+        $result = $this->mockMode
             ? $this->mockResponse($normalized)
             : $this->callApi($normalized);
 
         if ($result['success']) {
             Cache::put($cacheKey, $result, self::CACHE_TTL);
             $this->saveToLocalCache($result, $countryIso);
+
+            Log::info('IbanApiService: Result cached', [
+                'iban' => $this->mask($iban),
+                'cache_ttl_seconds' => self::CACHE_TTL,
+            ]);
         }
 
-        return array_merge($result, ['cached' => false, 'source' => 'api']);
+        return array_merge($result, ['cached' => false, 'source' => $this->mockMode ? 'mock' : 'api']);
     }
 
     /**
@@ -220,6 +246,12 @@ class IbanApiService
     private function callApi(string $iban): array
     {
         try {
+            Log::info('IbanApiService: Making API request', [
+                'url' => $this->apiUrl,
+                'iban' => $this->mask($iban),
+                'mock_mode' => $this->mockMode,
+            ]);
+
             $response = Http::timeout(self::TIMEOUT)
                 ->retry(self::RETRY_TIMES, self::RETRY_DELAY)
                 ->asForm()
@@ -229,15 +261,31 @@ class IbanApiService
                     'format' => 'json',
                 ]);
 
+            Log::info('IbanApiService: API response received', [
+                'status' => $response->status(),
+                'iban' => $this->mask($iban),
+                'response_size' => strlen($response->body()),
+            ]);
+
             if (!$response->successful()) {
                 Log::warning('IbanApiService: request failed', [
                     'status' => $response->status(),
                     'iban' => $this->mask($iban),
+                    'body' => $response->body(),
                 ]);
                 return $this->errorResult('HTTP ' . $response->status());
             }
 
-            return $this->parseResponse($response->json());
+            $result = $this->parseResponse($response->json());
+
+            Log::info('IbanApiService: API result parsed', [
+                'iban' => $this->mask($iban),
+                'success' => $result['success'],
+                'bank' => $result['bank_data']['bank'] ?? null,
+                'bic' => $result['bank_data']['bic'] ?? null,
+            ]);
+
+            return $result;
 
         } catch (ConnectionException $e) {
             Log::error('IbanApiService: connection failed', ['error' => $e->getMessage()]);
@@ -292,7 +340,7 @@ class IbanApiService
         $bankInfo = $banks[$country] ?? ['bank' => 'Mock Bank', 'bic' => 'MOCKXX00'];
         $bankCode = $this->extractBankCode($iban, $country) ?? substr($iban, 4, 8);
 
-        return [
+        $result = [
             'success' => true,
             'bank_data' => [
                 'bic' => $bankInfo['bic'],
@@ -322,6 +370,16 @@ class IbanApiService
             ],
             'error' => null,
         ];
+
+        Log::info('IbanApiService: Mock response generated', [
+            'iban' => $this->mask($iban),
+            'country' => $country,
+            'bank' => $bankInfo['bank'],
+            'bic' => $bankInfo['bic'],
+            'bank_code' => $bankCode,
+        ]);
+
+        return $result;
     }
 
     /**

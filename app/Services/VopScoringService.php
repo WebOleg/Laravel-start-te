@@ -51,6 +51,13 @@ class VopScoringService
         $score = 0;
         $meta = [];
 
+        Log::info('VopScoringService: Starting score calculation', [
+            'debtor_id' => $debtor->id,
+            'iban' => $this->ibanValidator->mask($iban),
+            'bav_selected' => $debtor->bav_selected,
+            'force_refresh' => $forceRefresh,
+        ]);
+
         $ibanValid = $this->ibanValidator->isValid($iban);
         if ($ibanValid) {
             $score += self::SCORE_IBAN_VALID;
@@ -125,6 +132,25 @@ class VopScoringService
 
         $result = $this->calculateResult($score);
 
+        Log::info('VopScoringService: Score calculation complete', [
+            'debtor_id' => $debtor->id,
+            'iban' => $this->ibanValidator->mask($iban),
+            'final_score' => $score,
+            'result' => $result,
+            'bank' => $bankName,
+            'bic' => $bic,
+            'sepa_sdd' => $sepaSdd,
+            'bav_verified' => $bavVerified,
+            'name_match' => $nameMatch,
+            'score_breakdown' => [
+                'iban_valid' => $ibanValid ? self::SCORE_IBAN_VALID : 0,
+                'bank_identified' => $bankIdentified ? self::SCORE_BANK_IDENTIFIED : 0,
+                'sepa_sdd' => $sepaSdd ? self::SCORE_SEPA_SDD : 0,
+                'country_supported' => $countrySupported ? self::SCORE_COUNTRY_SUPPORTED : 0,
+                'name_match' => $meta['name_match_points'] ?? 0,
+            ],
+        ]);
+
         $vopLog = VopLog::create([
             'debtor_id' => $debtor->id,
             'upload_id' => $debtor->upload_id,
@@ -143,6 +169,11 @@ class VopScoringService
         ]);
 
         $this->updateDebtorStatus($debtor, $vopLog);
+
+        Log::info('VopScoringService: VopLog created', [
+            'vop_log_id' => $vopLog->id,
+            'debtor_id' => $debtor->id,
+        ]);
 
         return $vopLog;
     }

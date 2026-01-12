@@ -7,6 +7,7 @@ namespace App\Jobs;
 
 use App\Models\Upload;
 use App\Models\Debtor;
+use App\Services\VopReportService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -82,6 +83,9 @@ class ProcessVopJob implements ShouldQueue, ShouldBeUnique
                 Log::info('ProcessVopJob batch completed', [
                     'upload_id' => $uploadId,
                 ]);
+
+                // Dispatch job to generate VOP report
+                GenerateVopReportJob::dispatch($uploadId);
             })
             ->dispatch();
 
