@@ -28,19 +28,39 @@ jobs:
             cd "$REPO_DIR"
 
             echo "== whoami =="; whoami; id
-            echo "== repo perms =="; ls -ld .git .git/objects .git/objects/pack || true
+            echo "== repo perms =="; ls -ld . .git .git/objects .git/objects/pack || true
 
-            sudo chown -R "${USER}:${USER}" .git || true
-            sudo chmod -R u+rwX .git || true
-            sudo rm -f .git/index.lock .git/packed-refs.lock .git/objects/pack/*.lock || true
+            # Prevent parallel deploys on the server (CI concurrency isn't enough if someone deploys manually).
+            exec 9> .deploy.lock
+            flock -n 9 || { echo "Another deploy is already running on this server."; exit 1; }
 
-            # Retry fetch in case of transient repo contention/network hiccups
+            # Avoid "dubious ownership" warnings.
+            git config --global --add safe.directory "$REPO_DIR" || true
+
+            # Fail fast if repo ownership is wrong (CI cannot sudo).
+            EXPECT_OWNER="${USER}:${USER}"
+            ACT_OWNER="$(stat -c '%U:%G' .git)"
+            echo "== owner check == expected: ${EXPECT_OWNER}, actual: ${ACT_OWNER}"
+            if [ "$ACT_OWNER" != "$EXPECT_OWNER" ]; then
+              echo "ERROR: .git is owned by '${ACT_OWNER}', expected '${EXPECT_OWNER}'."
+              echo "Fix once on server (interactive SSH):"
+              echo "  sudo chown -R ${EXPECT_OWNER} ${REPO_DIR}"
+              exit 1
+            fi
+
+            # Clean possible stale git locks (safe to do as repo owner)
+            rm -f .git/index.lock .git/packed-refs.lock .git/objects/pack/*.lock || true
+
+            # Retry fetch in case of transient network hiccups
             for i in 1 2 3; do
-              git fetch --all --prune && break
+              if git fetch --all --prune; then
+                break
+              fi
               echo "git fetch failed (attempt $i). retrying..."
               sleep 2
             done
 
+            # Ensure we are exactly at origin/staging
             git checkout -B staging origin/staging
             git reset --hard origin/staging
 
@@ -52,14 +72,14 @@ jobs:
             # Do NOT touch .git here; only app writable dirs.
             $COMPOSE exec -T --user root app sh -lc '
               set -e
-              mkdir -p storage/logs storage/framework/{cache,sessions,views} bootstrap/cache
+              mkdir -p storage/logs storage/framework/cache storage/framework/sessions storage/framework/views bootstrap/cache
               touch storage/logs/laravel.log storage/logs/vop.log storage/logs/bav.log
               chown -R www-data:www-data storage bootstrap/cache
               find storage bootstrap/cache -type d -exec chmod 775 {} \;
               find storage bootstrap/cache -type f -exec chmod 664 {} \;
             '
 
-            # --- Composer
+            # --- Composer ---
             $COMPOSE exec -T --user www-data app composer install \
               --no-interaction --no-dev --prefer-dist --optimize-autoloader
 
