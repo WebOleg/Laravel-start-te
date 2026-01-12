@@ -1,9 +1,5 @@
 <?php
 
-/**
- * Service for calculating chargeback statistics by country.
- */
-
 namespace App\Services;
 
 use App\Models\BillingAttempt;
@@ -56,8 +52,10 @@ class ChargebackStatsService
             $cbRateTotal = $row->total > 0 
                 ? round(($row->chargebacks / $row->total) * 100, 2) 
                 : 0;
-            $cbRateApproved = $row->approved > 0 
-                ? round(($row->chargebacks / $row->approved) * 100, 2) 
+            
+            $everApproved = $row->approved + $row->chargebacks;
+            $cbRateApproved = $everApproved > 0 
+                ? round(($row->chargebacks / $everApproved) * 100, 2) 
                 : 0;
 
             $countries[] = [
@@ -82,7 +80,6 @@ class ChargebackStatsService
             $totals['approved_amount'] += (float) $row->approved_amount;
         }
 
-        // Sort: LEGACY last, then by chargebacks desc
         usort($countries, function ($a, $b) {
             if ($a['country'] === 'LEGACY') return 1;
             if ($b['country'] === 'LEGACY') return -1;
@@ -94,9 +91,12 @@ class ChargebackStatsService
         $totals['cb_rate_total'] = $totals['total'] > 0 
             ? round(($totals['chargebacks'] / $totals['total']) * 100, 2) 
             : 0;
-        $totals['cb_rate_approved'] = $totals['approved'] > 0 
-            ? round(($totals['chargebacks'] / $totals['approved']) * 100, 2) 
+        
+        $totalsEverApproved = $totals['approved'] + $totals['chargebacks'];
+        $totals['cb_rate_approved'] = $totalsEverApproved > 0 
+            ? round(($totals['chargebacks'] / $totalsEverApproved) * 100, 2) 
             : 0;
+        
         $totals['alert'] = $totals['cb_rate_total'] >= $threshold || $totals['cb_rate_approved'] >= $threshold;
         $totals['cb_rate_amount_approved'] = $totals['approved_amount'] > 0 
             ? round(($totals['chargeback_amount'] / $totals['approved_amount']) * 100, 2) 
@@ -158,12 +158,13 @@ class ChargebackStatsService
             ->orderBy('total_amount', 'desc')
             ->get();
 
-        $result = [];
-        $result['period'] = $period;
-        $result['start_date'] = $startDate->toIso8601String();
-        $result['codes'] = [];
-        $result['totals']['total_amount'] = 0;
-        $result['totals']['occurrences'] = 0;
+        $result = [
+            'period' => $period,
+            'start_date' => $startDate->toIso8601String(),
+            'codes' => [],
+            'totals' => ['total_amount' => 0, 'occurrences' => 0],
+        ];
+
         foreach ($codes as $row) {
             $result['codes'][] = [
                 'chargeback_code'   => $row->chargeback_code,
@@ -171,8 +172,8 @@ class ChargebackStatsService
                 'total_amount'      => (float) $row->total_amount,
                 'occurrences'       => (int) $row->occurrences,
             ];
-            $result['totals']['total_amount'] = ($result['totals']['total_amount'] ?? 0) + (float) $row->total_amount;
-            $result['totals']['occurrences'] = ($result['totals']['occurrences'] ?? 0) + (int) $row->occurrences;
+            $result['totals']['total_amount'] += (float) $row->total_amount;
+            $result['totals']['occurrences'] += (int) $row->occurrences;
         }
 
         return $result;
@@ -222,12 +223,13 @@ class ChargebackStatsService
         ];
 
         foreach ($banks as $row) {
-            $cbBankRate = $row->approved > 0
-                ? round(($row->chargebacks / $row->approved) * 100, 2) 
+            $everApproved = $row->approved + $row->chargebacks;
+            $cbBankRate = $everApproved > 0
+                ? round(($row->chargebacks / $everApproved) * 100, 2) 
                 : 0;
             $cbBankRateAmount = $row->total_amount > 0 
-                    ? round(($row->chargeback_amount / $row->total_amount) * 100, 2) 
-                    : 0;
+                ? round(($row->chargeback_amount / $row->total_amount) * 100, 2) 
+                : 0;
 
             $result['banks'][] = [
                 'bank_name' => $row->bank_name,
@@ -249,13 +251,16 @@ class ChargebackStatsService
 
         $result['totals']['total_amount'] = round($result['totals']['total_amount'], 2);
         $result['totals']['chargeback_amount'] = round($result['totals']['chargeback_amount'], 2);
-        $result['totals']['cb_rate'] = $result['totals']['approved'] > 0 
-            ? round(($result['totals']['chargebacks'] / $result['totals']['approved']) * 100, 2) 
+        
+        $totalsEverApproved = $result['totals']['approved'] + $result['totals']['chargebacks'];
+        $result['totals']['cb_rate'] = $totalsEverApproved > 0 
+            ? round(($result['totals']['chargebacks'] / $totalsEverApproved) * 100, 2) 
             : 0;
-        $totals_alert_amount = $result['totals']['total_amount'] > 0 
+        
+        $totalsAlertAmount = $result['totals']['total_amount'] > 0 
             ? round(($result['totals']['chargeback_amount'] / $result['totals']['total_amount']) * 100, 2) 
             : 0;
-        $result['totals']['alert'] = $result['totals']['cb_rate'] >= $threshold || $totals_alert_amount >= $threshold;
+        $result['totals']['alert'] = $result['totals']['cb_rate'] >= $threshold || $totalsAlertAmount >= $threshold;
 
         return $result;
     }
