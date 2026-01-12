@@ -23,7 +23,7 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
 
     public function __construct(
         private array $webhookData,
-        private string $transactionType,
+        private string $processingType,
         private string $receivedAt
     ) {
         $this->onQueue('webhooks');
@@ -35,12 +35,12 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
 
         if ($uniqueId === null) {
             Log::warning('EMP webhook missing unique_id - uniqueness cannot be enforced', [
-                'transaction_type' => $this->transactionType,
+                'processing_type' => $this->processingType,
             ]);
             return null;
         }
 
-        return "webhook_{$this->transactionType}_{$uniqueId}";
+        return "webhook_{$this->processingType}_{$uniqueId}";
     }
 
     public function uniqueFor(): int
@@ -51,19 +51,22 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
     public function handle(BlacklistService $blacklistService): void
     {
         Log::info('ProcessEmpWebhookJob started', [
-            'transaction_type' => $this->transactionType,
+            'processing_type' => $this->processingType,
             'unique_id' => $this->webhookData['unique_id'] ?? null,
+            'event' => $this->webhookData['event'] ?? null,
+            'status' => $this->webhookData['status'] ?? null,
         ]);
 
         try {
-            match ($this->transactionType) {
+            match ($this->processingType) {
                 'chargeback' => $this->handleChargeback($blacklistService),
-                'sdd_sale' => $this->handleTransaction(),
+                'retrieval_request' => $this->handleRetrievalRequest(),
+                'sdd_status_update' => $this->handleSddStatusUpdate(),
                 default => $this->handleUnknown(),
             };
         } catch (\Exception $e) {
             Log::error('ProcessEmpWebhookJob failed', [
-                'transaction_type' => $this->transactionType,
+                'processing_type' => $this->processingType,
                 'error' => $e->getMessage(),
                 'data' => $this->webhookData,
             ]);
@@ -71,12 +74,19 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
         }
     }
 
+    /**
+     * Handle chargeback event.
+     * 
+     * EMP sends: event=chargeback, unique_id=original_tx_unique_id, status=chargebacked
+     * The unique_id refers to the ORIGINAL transaction that was chargebacked.
+     */
     private function handleChargeback(BlacklistService $blacklistService): void
     {
-        $originalUniqueId = $this->webhookData['original_transaction_unique_id'] ?? null;
+        // For chargebacks, unique_id is the original transaction's unique_id
+        $originalUniqueId = $this->webhookData['unique_id'] ?? null;
 
         if (!$originalUniqueId) {
-            Log::error('Chargeback missing original_transaction_unique_id', $this->webhookData);
+            Log::error('Chargeback missing unique_id', $this->webhookData);
             return;
         }
 
@@ -92,19 +102,27 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
         if ($billingAttempt->status === BillingAttempt::STATUS_CHARGEBACKED) {
             Log::info('Chargeback already processed', [
                 'billing_attempt_id' => $billingAttempt->id,
-                'unique_id' => $this->webhookData['unique_id'] ?? null,
+                'unique_id' => $originalUniqueId,
             ]);
             return;
         }
 
-        $errorCode = $this->webhookData['reason_code'] ?? $this->webhookData['error_code'] ?? null;
+        $errorCode = $this->webhookData['reason_code'] 
+            ?? $this->webhookData['rc_code'] 
+            ?? $this->webhookData['error_code'] 
+            ?? null;
 
         $chargebackMeta = [
-            'unique_id' => $this->webhookData['unique_id'] ?? null,
+            'event' => $this->webhookData['event'] ?? 'chargeback',
+            'arn' => $this->webhookData['arn'] ?? null,
             'amount' => $this->webhookData['amount'] ?? null,
             'currency' => $this->webhookData['currency'] ?? null,
-            'reason' => $this->webhookData['reason'] ?? null,
+            'reason' => $this->webhookData['reason'] 
+                ?? $this->webhookData['rc_description'] 
+                ?? $this->webhookData['reason_description'] 
+                ?? null,
             'reason_code' => $errorCode,
+            'post_date' => $this->webhookData['post_date'] ?? null,
             'received_at' => $this->receivedAt,
         ];
 
@@ -114,7 +132,7 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
         $billingAttempt->update([
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
             'error_code' => $errorCode,
-            'error_message' => $this->webhookData['reason'] ?? null,
+            'error_message' => $chargebackMeta['reason'],
             'meta' => $currentMeta,
         ]);
 
@@ -140,51 +158,102 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
         Log::info('Chargeback processed', [
             'billing_attempt_id' => $billingAttempt->id,
             'debtor_id' => $billingAttempt->debtor_id,
-            'original_unique_id' => $originalUniqueId,
+            'unique_id' => $originalUniqueId,
             'error_code' => $errorCode,
+            'arn' => $chargebackMeta['arn'],
             'blacklisted' => $blacklisted,
         ]);
     }
 
-    private function handleTransaction(): void
+    /**
+     * Handle retrieval request event.
+     * 
+     * Retrieval requests are pre-chargeback inquiries from issuers.
+     * We log them but don't change transaction status.
+     */
+    private function handleRetrievalRequest(): void
     {
         $uniqueId = $this->webhookData['unique_id'] ?? null;
-        $status = $this->webhookData['status'] ?? null;
 
         if (!$uniqueId) {
-            Log::warning('Transaction notification missing unique_id', $this->webhookData);
+            Log::warning('Retrieval request missing unique_id', $this->webhookData);
             return;
         }
 
         $billingAttempt = BillingAttempt::where('unique_id', $uniqueId)->first();
 
         if (!$billingAttempt) {
-            Log::info('Transaction notification for unknown tx', ['unique_id' => $uniqueId]);
+            Log::info('Retrieval request for unknown transaction', ['unique_id' => $uniqueId]);
+            return;
+        }
+
+        // Store retrieval request info in meta
+        $currentMeta = $billingAttempt->meta ?? [];
+        $currentMeta['retrieval_requests'] = $currentMeta['retrieval_requests'] ?? [];
+        $currentMeta['retrieval_requests'][] = [
+            'arn' => $this->webhookData['arn'] ?? null,
+            'reason_code' => $this->webhookData['reason_code'] ?? null,
+            'reason_description' => $this->webhookData['reason_description'] ?? null,
+            'post_date' => $this->webhookData['post_date'] ?? null,
+            'received_at' => $this->receivedAt,
+        ];
+
+        $billingAttempt->update(['meta' => $currentMeta]);
+
+        Log::info('Retrieval request logged', [
+            'billing_attempt_id' => $billingAttempt->id,
+            'unique_id' => $uniqueId,
+            'arn' => $this->webhookData['arn'] ?? null,
+        ]);
+    }
+
+    /**
+     * Handle SDD transaction status update.
+     */
+    private function handleSddStatusUpdate(): void
+    {
+        $uniqueId = $this->webhookData['unique_id'] ?? null;
+        $status = $this->webhookData['status'] ?? null;
+
+        if (!$uniqueId) {
+            Log::warning('SDD status update missing unique_id', $this->webhookData);
+            return;
+        }
+
+        $billingAttempt = BillingAttempt::where('unique_id', $uniqueId)->first();
+
+        if (!$billingAttempt) {
+            Log::info('SDD status update for unknown transaction', ['unique_id' => $uniqueId]);
             return;
         }
 
         $mappedStatus = $this->mapEmpStatus($status);
 
         if ($mappedStatus && $billingAttempt->status !== $mappedStatus) {
-            $billingAttemptOldStatus = $billingAttempt->status;
+            $oldStatus = $billingAttempt->status;
             $billingAttempt->update(['status' => $mappedStatus]);
-            Log::info('Transaction status updated', [
+            
+            Log::info('SDD transaction status updated', [
                 'billing_attempt_id' => $billingAttempt->id,
-                'old_status' => $billingAttemptOldStatus,
+                'old_status' => $oldStatus,
                 'new_status' => $mappedStatus,
+                'emp_status' => $status,
             ]);
         } else {
-            Log::debug('Transaction status unchanged or no valid status', [
+            Log::debug('SDD status unchanged or no valid status', [
                 'billing_attempt_id' => $billingAttempt->id,
                 'current_status' => $billingAttempt->status,
-                'new_status' => $mappedStatus,
+                'emp_status' => $status,
             ]);
         }
     }
 
     private function handleUnknown(): void
     {
-        Log::info('EMP webhook unknown type', ['type' => $this->transactionType]);
+        Log::info('EMP webhook unknown processing type', [
+            'processing_type' => $this->processingType,
+            'data' => $this->webhookData,
+        ]);
     }
 
     private function shouldBlacklistCode(string $code): bool
@@ -203,6 +272,7 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
             'declined' => BillingAttempt::STATUS_DECLINED,
             'error' => BillingAttempt::STATUS_ERROR,
             'voided' => BillingAttempt::STATUS_VOIDED,
+            'chargebacked' => BillingAttempt::STATUS_CHARGEBACKED,
             'pending', 'pending_async' => BillingAttempt::STATUS_PENDING,
             default => null,
         };
