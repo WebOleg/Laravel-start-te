@@ -1,5 +1,3 @@
-cat > README.md << 'EOF'
-
 # Tether - Debt Recovery Platform
 
 A SaaS platform for automated debt recovery through SEPA Direct Debit payments with emerchantpay integration.
@@ -11,6 +9,7 @@ A SaaS platform for automated debt recovery through SEPA Direct Debit payments w
 -   [Tech Stack](#tech-stack)
 -   [Requirements](#requirements)
 -   [Installation](#installation)
+-   [Infrastructure](#infrastructure)
 -   [Development](#development)
 -   [Testing](#testing)
 -   [API Documentation](#api-documentation)
@@ -36,7 +35,6 @@ Tether enables merchants to recover outstanding debts through automated SEPA Dir
 | **Deduplication**         | 30-day cooldown for same IBAN, prevent duplicate processing                  |
 
 ### Payment Flow
-
 ```
 CSV Upload → Validation → VOP Verify → Billing Sync → EMP Processing
                                               ↓
@@ -56,9 +54,10 @@ CSV Upload → Validation → VOP Verify → Billing Sync → EMP Processing
 
 | Component        | Technology               |
 | ---------------- | ------------------------ |
-| Backend          | Laravel 11 (PHP 8.2+)    |
+| Backend          | Laravel 11 (PHP 8.3+)    |
 | Database         | PostgreSQL 15            |
 | Queue            | Redis + Laravel Queue    |
+| Object Storage   | MinIO (S3-compatible)    |
 | Authentication   | Laravel Sanctum          |
 | Payment Gateway  | emerchantpay Genesis API |
 | VOP Provider     | IBAN.com API             |
@@ -74,20 +73,17 @@ CSV Upload → Validation → VOP Verify → Billing Sync → EMP Processing
 ## Installation
 
 1. **Clone the repository**
-
 ```bash
 git clone git@github.com:your-org/tether-laravel.git
 cd tether-laravel
 ```
 
 2. **Copy environment file**
-
 ```bash
 cp .env.example .env
 ```
 
 3. **Configure environment**
-
 ```env
 # Database
 DB_CONNECTION=pgsql
@@ -98,7 +94,7 @@ DB_USERNAME=tether
 DB_PASSWORD=secret
 
 # emerchantpay
-EMP_GENESIS_ENDPOINT=staging.gate.emerchantpay.net  # or gate.emerchantpay.net for production
+EMP_GENESIS_ENDPOINT=staging.gate.emerchantpay.net
 EMP_GENESIS_USERNAME=your_username
 EMP_GENESIS_PASSWORD=your_password
 EMP_GENESIS_TERMINAL_TOKEN=your_terminal_token
@@ -106,32 +102,79 @@ EMP_GENESIS_TERMINAL_TOKEN=your_terminal_token
 # IBAN.com VOP
 IBAN_API_KEY=your_api_key
 IBAN_API_URL=https://api.iban.com/clients/verify/v3/
-IBAN_API_MOCK=false  # Set to true for testing
+IBAN_API_MOCK=false
+
+# MinIO (S3-compatible storage)
+MINIO_ENDPOINT=http://minio:9000
+MINIO_ACCESS_KEY=minioadmin
+MINIO_SECRET_KEY=minioadmin
+MINIO_BUCKET=tether
 ```
 
 4. **Start containers**
-
 ```bash
+./start.sh
+# or
 docker compose up -d
 ```
 
 5. **Install dependencies & migrate**
-
 ```bash
 docker compose exec app composer install
 docker compose exec app php artisan migrate --seed
 ```
 
-6. **Start queue worker** (for async processing)
+## Infrastructure
 
+Production infrastructure is managed separately in the `infrastructure/` directory.
+
+### Components
+
+| Service    | Directory                | Port  | Description                    |
+| ---------- | ------------------------ | ----- | ------------------------------ |
+| API Node   | `infrastructure/api-node`| 8000  | Laravel application servers    |
+| Worker     | `infrastructure/worker-node`| -   | Queue workers for async jobs   |
+| PostgreSQL | `infrastructure/postgres`| 5432  | Primary database               |
+| Redis      | `infrastructure/redis`   | 6379  | Queue & cache                  |
+| MinIO      | `infrastructure/minio`   | 9000/9001 | S3-compatible object storage |
+| Nginx      | `infrastructure/nginx`   | 80/443| Load balancer & reverse proxy  |
+| Network    | `infrastructure/network` | -     | Docker network configuration   |
+
+### MinIO Setup
+
+MinIO provides S3-compatible object storage for file uploads.
 ```bash
-docker compose exec app php artisan queue:work
+cd infrastructure/minio
+docker compose up -d
+```
+
+**Ports:**
+- `9000` - S3 API
+- `9001` - Web Console
+
+**Environment variables:**
+```env
+MINIO_ROOT_USER=minioadmin
+MINIO_ROOT_PASSWORD=minioadmin
+```
+
+### Starting Infrastructure
+
+Each component can be started independently:
+```bash
+# Start all infrastructure
+cd infrastructure
+for dir in network postgres redis minio nginx api-node worker-node; do
+  cd $dir && docker compose up -d && cd ..
+done
+
+# Or individual components
+cd infrastructure/minio && docker compose up -d
 ```
 
 ## Development
 
 ### Make Commands
-
 ```bash
 make up              # Start containers
 make down            # Stop containers
@@ -143,7 +186,6 @@ make logs            # View logs
 ```
 
 ### Without Make
-
 ```bash
 docker compose up -d
 docker compose exec app php artisan migrate
@@ -151,7 +193,6 @@ docker compose exec app php artisan test
 ```
 
 ## Testing
-
 ```bash
 # All tests
 make test
@@ -169,7 +210,7 @@ docker compose exec app php artisan test --filter=ReconciliationControllerTest
 | DebtorValidationServiceTest  | 15    | ✅     |
 | VopLogControllerTest         | 5     | ✅     |
 | BillingAttemptControllerTest | 6     | ✅     |
-| BillingControllerTest        | 8     | ✅     |
+| BillingControllerTest        | 11    | ✅     |
 | ReconciliationControllerTest | 10    | ✅     |
 | BlacklistServiceTest         | 12    | ✅     |
 | DeduplicationServiceTest     | 8     | ✅     |
@@ -248,112 +289,27 @@ All endpoints require Bearer token authentication.
 | POST   | `/webhooks/emp` | emerchantpay webhook handler |
 
 ## Project Structure
-
 ```
 app/
-├── Http/
-│   ├── Controllers/
-│   │   ├── Admin/
-│   │   │   ├── UploadController.php
-│   │   │   ├── DebtorController.php
-│   │   │   ├── BillingController.php
-│   │   │   ├── BillingAttemptController.php
-│   │   │   ├── ReconciliationController.php
-│   │   │   ├── VopLogController.php
-│   │   │   └── StatsController.php
-│   │   └── Webhook/
-│   │       └── EmpWebhookController.php
-│   └── Resources/
+├── Http/Controllers/Admin/
 ├── Models/
-│   ├── Upload.php
-│   ├── Debtor.php
-│   ├── BillingAttempt.php
-│   ├── VopLog.php
-│   └── Blacklist.php
 ├── Services/
-│   ├── Emp/
-│   │   ├── EmpClient.php
-│   │   └── EmpBillingService.php
-│   ├── IbanValidator.php
-│   ├── DebtorValidationService.php
-│   ├── BlacklistService.php
-│   ├── DeduplicationService.php
-│   ├── ReconciliationService.php
-│   └── FileUploadService.php
 ├── Jobs/
-│   ├── ProcessUploadJob.php
-│   ├── ProcessUploadChunkJob.php
-│   ├── ProcessBillingJob.php
-│   ├── ProcessBillingChunkJob.php
-│   ├── ProcessReconciliationJob.php
-│   └── ProcessReconciliationChunkJob.php
 database/
 ├── migrations/
-└── seeders/
+├── seeders/
+infrastructure/          # Production infrastructure configs
+├── api-node/           # Laravel app servers
+├── worker-node/        # Queue workers
+├── postgres/           # PostgreSQL
+├── redis/              # Redis
+├── minio/              # S3-compatible storage
+├── nginx/              # Load balancer
+└── network/            # Docker networks
 tests/
-└── Feature/
-    └── Admin/
+└── Feature/Admin/
 ```
-
-## Environment Variables
-
-### Required
-
-| Variable                    | Description                                           |
-| --------------------------- | ----------------------------------------------------- |
-| `EMP_GENESIS_ENDPOINT`      | emerchantpay API endpoint (staging or production)     |
-| `EMP_GENESIS_USERNAME`      | emerchantpay API username                             |
-| `EMP_GENESIS_PASSWORD`      | emerchantpay API password                             |
-| `EMP_GENESIS_TERMINAL_TOKEN`| emerchantpay terminal token                           |
-| `IBAN_API_KEY`              | IBAN.com API key for VOP verification                 |
-| `IBAN_API_URL`              | IBAN.com BAV API endpoint (default: v3)               |
-
-### Optional
-
-| Variable                       | Default | Description                         |
-| ------------------------------ | ------- | ----------------------------------- |
-| `IBAN_API_MOCK`                | false   | Enable mock mode for testing        |
-| `BILLING_CHUNK_SIZE`           | 100     | Records per billing chunk           |
-| `RECONCILIATION_MIN_AGE_HOURS` | 2       | Min age before reconciliation       |
-| `RECONCILIATION_MAX_ATTEMPTS`  | 10      | Max reconciliation attempts         |
-
-## VOP Verification Details
-
-The platform uses **IBAN.com API** for VOP (Verification of Payee) with a scoring system (0-100 points):
-
-### Scoring Breakdown
-
-| Check                  | Points | Description                                    |
-| ---------------------- | ------ | ---------------------------------------------- |
-| IBAN Valid             | 20     | IBAN format validation                         |
-| Bank Identified        | 25     | Bank details retrieved successfully            |
-| SEPA SDD Support       | 25     | Bank supports SEPA Direct Debit                |
-| Country Supported      | 15     | Country in SEPA zone                           |
-| Name Match (BAV)       | 15     | Account holder name matches (20 countries)     |
-| **Total**              | **100**| Maximum possible score                         |
-
-### Verification Results
-
-| Score Range | Result            | Description                                  |
-| ----------- | ----------------- | -------------------------------------------- |
-| 80-100      | Verified          | High confidence - proceed with payment       |
-| 60-79       | Likely Verified   | Good confidence - acceptable risk            |
-| 40-59       | Inconclusive      | Moderate risk - review recommended           |
-| 20-39       | Mismatch          | Low confidence - manual review required      |
-| 0-19        | Rejected          | Failed validation - do not process           |
-
-### BAV (Bank Account Verification)
-
-Name matching is available for 20 EU countries: AT, BE, CY, DE, EE, ES, FI, FR, GR, HR, IE, IT, LT, LU, LV, MT, NL, PT, SI, SK.
-
-**Name Match Results:**
-- `yes` - Full name match (100% of 15 points)
-- `partial` - Partial name match (70% of 15 points)
-- `unavailable` - Bank doesn't support name matching (50% of 15 points)
-- `no` - Name mismatch (20% of 15 points)
 
 ## License
 
 Proprietary - All rights reserved.
-EOF
-# CI/CD test
