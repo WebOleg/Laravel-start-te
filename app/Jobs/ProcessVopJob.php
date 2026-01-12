@@ -78,6 +78,10 @@ class ProcessVopJob implements ShouldQueue, ShouldBeUnique
             ->finally(function () use ($upload) {
                 $upload->markVopCompleted();
                 Log::info('ProcessVopJob batch completed', ['upload_id' => $upload->id]);
+
+                // Automatically generate BAV CSV report after VOP completes
+                GenerateVopReportJob::dispatch($upload->id);
+                Log::info('GenerateVopReportJob dispatched', ['upload_id' => $upload->id]);
             })
             ->dispatch();
 
