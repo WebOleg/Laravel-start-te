@@ -1,16 +1,10 @@
 <?php
 
-/**
- * VOP verification service orchestrating scoring and VopLog management.
- * 
- * Uses IbanApiService (IBAN SUITE - unlimited) for bank identification.
- */
-
 namespace App\Services;
 
 use App\Models\Debtor;
+use App\Models\Upload;
 use App\Models\VopLog;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 class VopVerificationService
@@ -20,13 +14,6 @@ class VopVerificationService
         private IbanValidator $ibanValidator
     ) {}
 
-    /**
-     * Verify single debtor. Returns existing VopLog if cached.
-     *
-     * @param Debtor $debtor
-     * @param bool $forceRefresh
-     * @return ?VopLog
-     */
     public function verify(Debtor $debtor, bool $forceRefresh = false): ?VopLog
     {
         if (!$this->canVerify($debtor)) {
@@ -35,7 +22,6 @@ class VopVerificationService
 
         $ibanHash = $debtor->iban_hash ?? $this->ibanValidator->hash($debtor->iban);
 
-        // Check cache (existing VopLog for same IBAN)
         if (!$forceRefresh) {
             $existing = $this->findExistingVopLog($ibanHash);
             if ($existing) {
@@ -47,16 +33,9 @@ class VopVerificationService
             }
         }
 
-        // Use VopScoringService (IbanApiService - unlimited)
         return $this->scoringService->score($debtor, $forceRefresh);
     }
 
-    /**
-     * Check if debtor can be verified.
-     *
-     * @param Debtor $debtor
-     * @return bool
-     */
     public function canVerify(Debtor $debtor): bool
     {
         if ($debtor->validation_status !== Debtor::VALIDATION_VALID) {
@@ -70,23 +49,11 @@ class VopVerificationService
         return true;
     }
 
-    /**
-     * Check if debtor already has VopLog.
-     *
-     * @param Debtor $debtor
-     * @return bool
-     */
     public function hasVopLog(Debtor $debtor): bool
     {
         return VopLog::where('debtor_id', $debtor->id)->exists();
     }
 
-    /**
-     * Find existing VopLog by IBAN hash (cache lookup).
-     *
-     * @param string $ibanHash
-     * @return ?VopLog
-     */
     private function findExistingVopLog(string $ibanHash): ?VopLog
     {
         return VopLog::whereHas('debtor', function ($q) use ($ibanHash) {
@@ -94,13 +61,6 @@ class VopVerificationService
         })->first();
     }
 
-    /**
-     * Link existing VopLog data to new debtor.
-     *
-     * @param VopLog $existing
-     * @param Debtor $debtor
-     * @return VopLog
-     */
     private function linkVopLogToDebtor(VopLog $existing, Debtor $debtor): VopLog
     {
         return VopLog::create([
@@ -118,14 +78,10 @@ class VopVerificationService
         ]);
     }
 
-    /**
-     * Get verification stats for upload.
-     *
-     * @param int $uploadId
-     * @return array
-     */
     public function getUploadStats(int $uploadId): array
     {
+        $upload = Upload::find($uploadId);
+
         $total = Debtor::where('upload_id', $uploadId)
             ->where('validation_status', Debtor::VALIDATION_VALID)
             ->count();
@@ -146,7 +102,10 @@ class VopVerificationService
             'pending' => $total - $verified,
             'by_result' => $byResult,
             'avg_score' => round($avgScore ?? 0),
-            'is_processing' => Cache::has("vop_verify_{$uploadId}"),
+            'is_processing' => $upload?->isVopProcessing() ?? false,
+            'vop_status' => $upload?->vop_status ?? 'idle',
+            'vop_started_at' => $upload?->vop_started_at?->toIso8601String(),
+            'vop_completed_at' => $upload?->vop_completed_at?->toIso8601String(),
         ];
     }
 }

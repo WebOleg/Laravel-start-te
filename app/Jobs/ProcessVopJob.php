@@ -1,8 +1,5 @@
 <?php
-/**
- * Dispatches VOP verification jobs for upload debtors.
- * Handles BAV sampling selection based on configured percentage.
- */
+
 namespace App\Jobs;
 
 use App\Models\Upload;
@@ -14,7 +11,6 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Bus;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 class ProcessVopJob implements ShouldQueue, ShouldBeUnique
@@ -43,10 +39,9 @@ class ProcessVopJob implements ShouldQueue, ShouldBeUnique
 
     public function handle(): void
     {
-        Log::info('ProcessVopJob started', ['upload_id' => $this->upload->id]);
-
         $uploadId = $this->upload->id;
-        $lockKey = "vop_verify_{$uploadId}";
+
+        Log::info('ProcessVopJob started', ['upload_id' => $uploadId]);
 
         $debtorIds = Debtor::where('upload_id', $uploadId)
             ->readyForVop()
@@ -54,7 +49,7 @@ class ProcessVopJob implements ShouldQueue, ShouldBeUnique
             ->toArray();
 
         if (empty($debtorIds)) {
-            Cache::forget($lockKey);
+            $this->upload->markVopCompleted();
             Log::info('ProcessVopJob: no debtors to verify', ['upload_id' => $uploadId]);
             return;
         }
@@ -73,34 +68,38 @@ class ProcessVopJob implements ShouldQueue, ShouldBeUnique
             );
         }
 
-        Bus::batch($jobs)
+        $upload = $this->upload;
+
+        $batch = Bus::batch($jobs)
             ->name("VOP Upload #{$uploadId}")
             ->allowFailures()
             ->onQueue('vop')
-            ->finally(function () use ($lockKey, $uploadId) {
-                Cache::forget($lockKey);
-                Log::info('ProcessVopJob batch completed', [
-                    'upload_id' => $uploadId,
-                ]);
+            ->finally(function () use ($upload) {
+                $upload->markVopCompleted();
+                Log::info('ProcessVopJob batch completed', ['upload_id' => $upload->id]);
             })
             ->dispatch();
 
+        $this->upload->startVop($batch->id);
+
         Log::info('ProcessVopJob dispatched', [
             'upload_id' => $uploadId,
+            'batch_id' => $batch->id,
             'debtors' => count($debtorIds),
             'bav_selected' => $bavSelectedCount,
             'chunks' => count($chunks),
         ]);
     }
 
-    /**
-     * Select debtors for BAV verification.
-     * - For uploads <= 1000 records: use percentage sampling (default 10%)
-     * - For uploads > 1000 records: max 100 BAV verifications
-     *
-     * @param array<int> $debtorIds
-     * @return int
-     */
+    public function failed(\Throwable $exception): void
+    {
+        $this->upload->markVopFailed();
+        Log::error('ProcessVopJob failed', [
+            'upload_id' => $this->upload->id,
+            'error' => $exception->getMessage(),
+        ]);
+    }
+
     private function selectDebtorsForBav(array $debtorIds): int
     {
         if (!config('services.iban.bav_enabled', false)) {
@@ -111,7 +110,6 @@ class ProcessVopJob implements ShouldQueue, ShouldBeUnique
         $percentage = config('services.iban.bav_sampling_percentage', 10);
         $dailyLimit = config('services.iban.bav_daily_limit', 100);
 
-        // Check daily limit
         $todayCount = Debtor::where('bav_selected', true)
             ->whereDate('updated_at', today())
             ->count();
@@ -125,16 +123,12 @@ class ProcessVopJob implements ShouldQueue, ShouldBeUnique
             return 0;
         }
 
-        // Calculate how many to select
         if ($totalDebtors > self::LARGE_UPLOAD_THRESHOLD) {
-            // Large upload: max 100 BAV verifications
             $selectCount = self::LARGE_UPLOAD_BAV_LIMIT;
         } else {
-            // Normal upload: use percentage
             $selectCount = (int) ceil($totalDebtors * ($percentage / 100));
         }
 
-        // Apply daily limit
         $selectCount = min($selectCount, $remaining);
 
         if ($selectCount === 0) {
