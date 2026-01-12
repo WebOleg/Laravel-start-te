@@ -58,7 +58,7 @@ class ProcessReconciliationJob implements ShouldQueue
 
         if (empty($attemptIds)) {
             Log::info('No eligible attempts for reconciliation');
-            $this->clearCacheLock();
+            $this->markCompleted();
             return;
         }
 
@@ -68,16 +68,16 @@ class ProcessReconciliationJob implements ShouldQueue
             $chunks
         );
 
-        // Extract values for closure (avoid $this serialization)
         $type = $this->type;
         $uploadId = $this->uploadId;
 
-        Bus::batch($jobs)
+        $batch = Bus::batch($jobs)
             ->name("Reconciliation: {$this->type}")
             ->onQueue('reconciliation')
             ->finally(function () use ($type, $uploadId) {
                 if ($type === 'upload' && $uploadId) {
-                    Cache::forget("reconciliation_upload_{$uploadId}");
+                    $upload = Upload::find($uploadId);
+                    $upload?->markReconciliationCompleted();
                 } else {
                     Cache::forget('reconciliation_bulk');
                 }
@@ -88,16 +88,23 @@ class ProcessReconciliationJob implements ShouldQueue
             })
             ->dispatch();
 
+        if ($this->type === 'upload' && $this->uploadId) {
+            $upload = Upload::find($this->uploadId);
+            $upload?->startReconciliation($batch->id);
+        }
+
         Log::info('ProcessReconciliationJob dispatched chunks', [
             'total_attempts' => count($attemptIds),
             'chunks' => count($chunks),
+            'batch_id' => $batch->id,
         ]);
     }
 
-    private function clearCacheLock(): void
+    private function markCompleted(): void
     {
         if ($this->type === 'upload' && $this->uploadId) {
-            Cache::forget("reconciliation_upload_{$this->uploadId}");
+            $upload = Upload::find($this->uploadId);
+            $upload?->markReconciliationCompleted();
         } else {
             Cache::forget('reconciliation_bulk');
         }
@@ -111,6 +118,11 @@ class ProcessReconciliationJob implements ShouldQueue
             'error' => $exception->getMessage(),
         ]);
 
-        $this->clearCacheLock();
+        if ($this->type === 'upload' && $this->uploadId) {
+            $upload = Upload::find($this->uploadId);
+            $upload?->markReconciliationFailed();
+        } else {
+            Cache::forget('reconciliation_bulk');
+        }
     }
 }

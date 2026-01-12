@@ -47,6 +47,10 @@ class Upload extends Model
         'vop_batch_id',
         'vop_started_at',
         'vop_completed_at',
+        'reconciliation_status',
+        'reconciliation_batch_id',
+        'reconciliation_started_at',
+        'reconciliation_completed_at',
     ];
 
     protected $casts = [
@@ -63,6 +67,8 @@ class Upload extends Model
         'billing_completed_at' => 'datetime',
         'vop_started_at' => 'datetime',
         'vop_completed_at' => 'datetime',
+        'reconciliation_started_at' => 'datetime',
+        'reconciliation_completed_at' => 'datetime',
     ];
 
     public function uploader(): BelongsTo
@@ -189,6 +195,50 @@ class Upload extends Model
         $this->update([
             'vop_status' => self::JOB_FAILED,
             'vop_completed_at' => now(),
+        ]);
+    }
+
+    // Reconciliation job tracking
+    public function isReconciliationProcessing(): bool
+    {
+        if ($this->reconciliation_status !== self::JOB_PROCESSING) {
+            return false;
+        }
+
+        if ($this->reconciliation_batch_id) {
+            $batch = Bus::findBatch($this->reconciliation_batch_id);
+            if ($batch && $batch->finished()) {
+                $this->markReconciliationCompleted();
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    public function startReconciliation(string $batchId): void
+    {
+        $this->update([
+            'reconciliation_status' => self::JOB_PROCESSING,
+            'reconciliation_batch_id' => $batchId,
+            'reconciliation_started_at' => now(),
+            'reconciliation_completed_at' => null,
+        ]);
+    }
+
+    public function markReconciliationCompleted(): void
+    {
+        $this->update([
+            'reconciliation_status' => self::JOB_COMPLETED,
+            'reconciliation_completed_at' => now(),
+        ]);
+    }
+
+    public function markReconciliationFailed(): void
+    {
+        $this->update([
+            'reconciliation_status' => self::JOB_FAILED,
+            'reconciliation_completed_at' => now(),
         ]);
     }
 }
