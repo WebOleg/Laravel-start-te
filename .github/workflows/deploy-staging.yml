@@ -53,7 +53,7 @@ jobs:
             $COMPOSE exec -T --user root app sh -lc '
               set -e
               mkdir -p storage/logs storage/framework/{cache,sessions,views} bootstrap/cache
-              touch storage/logs/laravel.log
+              touch storage/logs/laravel.log storage/logs/vop.log storage/logs/bav.log
               chown -R www-data:www-data storage bootstrap/cache
               find storage bootstrap/cache -type d -exec chmod 775 {} \;
               find storage bootstrap/cache -type f -exec chmod 664 {} \;
