@@ -25,7 +25,7 @@ class ChargebackService
             $chargebacks->where('error_code', $request->input('code'));
         }
         $perPage = min((int) $request->input('per_page', 50), 100);
-        $chargebacks = $chargebacks->paginate($perPage);            
+        $chargebacks = $chargebacks->latest()->paginate($perPage);            
         return $chargebacks;
     }
 
