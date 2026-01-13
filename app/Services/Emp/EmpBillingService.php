@@ -49,6 +49,9 @@ class EmpBillingService
             'request_payload' => $this->buildRequestPayload($debtor, $transactionId, $notificationUrl),
         ]);
 
+        // Set debtor to pending when billing starts
+        $debtor->update(['status' => Debtor::STATUS_PENDING]);
+
         $response = $this->client->sddSale($billingAttempt->request_payload);
 
         $this->updateBillingAttempt($billingAttempt, $response);
@@ -111,7 +114,7 @@ class EmpBillingService
     {
         $debtors = Debtor::where('upload_id', $upload->id)
             ->where('validation_status', 'valid')
-            ->where('status', Debtor::STATUS_PENDING)
+            ->where('status', Debtor::STATUS_UPLOADED)
             ->whereNotIn('id', function ($query) {
                 $query->select('debtor_id')
                     ->from('billing_attempts')
@@ -157,7 +160,7 @@ class EmpBillingService
             return false;
         }
 
-        if (!in_array($debtor->status, [Debtor::STATUS_PENDING, 'ready_for_sync'])) {
+        if ($debtor->status !== Debtor::STATUS_UPLOADED) {
             return false;
         }
 
@@ -209,9 +212,6 @@ class EmpBillingService
 
     private function buildRequestPayload(Debtor $debtor, string $transactionId, ?string $notificationUrl): array
     {
-        // BIC removed from payload - EMP derives it from IBAN automatically
-        // This avoids "BIC should include valid country code for Europe" errors
-        // for French overseas territories (GP, RE, YT, MQ, GF, PM, NC, PF, WF)
         return [
             'transaction_id' => $transactionId,
             'amount' => $debtor->amount,

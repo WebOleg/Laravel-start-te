@@ -152,11 +152,6 @@ class FileUploadService
         ];
     }
 
-    /**
-     * Store uploaded file in S3 storage.
-     *
-     * @throws \RuntimeException If file storage fails
-     */
     private function storeFile(UploadedFile $file): string
     {
         $filename = Str::uuid() . '.' . $file->getClientOriginalExtension();
@@ -223,11 +218,6 @@ class FileUploadService
         return trim($name, '_');
     }
 
-    /**
-     * Process rows with deduplication (IBAN + name + email).
-     * 
-     * @return array{created: int, failed: int, skipped: array, skipped_rows: array, errors: array}
-     */
     private function processRows(Upload $upload, array $rows, array $columnMapping): array
     {
         $upload->update([
@@ -250,7 +240,6 @@ class FileUploadService
         ];
         $skippedRows = [];
 
-        // Prepare debtor data for batch check
         $debtorDataList = [];
         foreach ($rows as $index => $row) {
             $debtorData = $this->mapRowToDebtor($row, $columnMapping);
@@ -258,7 +247,6 @@ class FileUploadService
             $debtorDataList[$index] = $debtorData;
         }
 
-        // Batch check IBAN + name + email
         $dedupeResults = $this->deduplicationService->checkDebtorBatch($debtorDataList, $upload->id);
 
         foreach ($rows as $index => $row) {
@@ -316,7 +304,7 @@ class FileUploadService
     private function mapRowToDebtor(array $row, array $columnMapping): array
     {
         $data = [
-            'status' => Debtor::STATUS_PENDING,
+            'status' => Debtor::STATUS_UPLOADED,
             'currency' => 'EUR',
             'amount' => 0,
         ];
@@ -355,9 +343,6 @@ class FileUploadService
         }
     }
 
-    /**
-     * Finalize upload with skipped counts in meta.
-     */
     private function finalizeUpload(Upload $upload, array $result): void
     {
         $status = $result['failed'] === 0

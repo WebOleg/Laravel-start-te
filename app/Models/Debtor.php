@@ -17,6 +17,7 @@ class Debtor extends Model
 {
     use HasFactory, SoftDeletes;
 
+    public const STATUS_UPLOADED = 'uploaded';
     public const STATUS_PENDING = 'pending';
     public const STATUS_PROCESSING = 'processing';
     public const STATUS_RECOVERED = 'recovered';
@@ -87,9 +88,9 @@ class Debtor extends Model
 
     protected $attributes = [
         'currency' => 'EUR',
-        'status' => self::STATUS_PENDING,
-        'validation_status' => self::VALIDATION_PENDING,
-        'vop_status' => self::VOP_PENDING,
+        'status' => 'uploaded',
+        'validation_status' => 'pending',
+        'vop_status' => 'pending',
         'bav_selected' => false,
     ];
 
@@ -153,7 +154,7 @@ class Debtor extends Model
     public function scopeReadyForSync($query)
     {
         return $query->where('validation_status', self::VALIDATION_VALID)
-            ->where('status', self::STATUS_PENDING);
+            ->where('status', self::STATUS_UPLOADED);
     }
 
     public function scopeReadyForVop($query)
@@ -188,7 +189,7 @@ class Debtor extends Model
     public function isReadyForSync(): bool
     {
         return $this->validation_status === self::VALIDATION_VALID
-            && $this->status === self::STATUS_PENDING;
+            && $this->status === self::STATUS_UPLOADED;
     }
 
     public function isVopVerified(): bool

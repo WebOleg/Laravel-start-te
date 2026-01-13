@@ -85,11 +85,6 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
         }
     }
 
-    /**
-     * Download file from S3 to temporary location.
-     *
-     * @throws \RuntimeException If file not found or download fails
-     */
     private function downloadFromS3(): string
     {
         $s3Path = $this->upload->file_path;
@@ -125,9 +120,6 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
         return $tempFilePath;
     }
 
-    /**
-     * Clean up temporary file.
-     */
     private function cleanupTempFile(?string $tempFilePath): void
     {
         if ($tempFilePath && file_exists($tempFilePath)) {
@@ -221,7 +213,6 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
         ];
         $skippedRows = [];
 
-        // Prepare debtor data for batch check
         $debtorDataList = [];
         foreach ($rows as $index => $row) {
             $debtorData = $this->mapRowToDebtor($row);
@@ -229,14 +220,12 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
             $debtorDataList[$index] = $debtorData;
         }
 
-        // Batch check IBAN + name + email
         $dedupeResults = $deduplicationService->checkDebtorBatch($debtorDataList, $this->upload->id);
 
         foreach ($rows as $index => $row) {
             try {
                 $debtorData = $debtorDataList[$index];
 
-                // Check deduplication result
                 if (isset($dedupeResults[$index])) {
                     $skipInfo = $dedupeResults[$index];
                     $skipped['total']++;
@@ -301,7 +290,7 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
     private function mapRowToDebtor(array $row): array
     {
         $data = [
-            'status' => Debtor::STATUS_PENDING,
+            'status' => Debtor::STATUS_UPLOADED,
             'currency' => 'EUR',
         ];
 

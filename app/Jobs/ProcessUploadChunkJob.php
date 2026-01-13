@@ -53,7 +53,6 @@ class ProcessUploadChunkJob implements ShouldQueue
         $skippedCount = 0;
         $errors = [];
 
-        // Prepare debtor data for batch check
         $debtorDataList = [];
         foreach ($this->rows as $index => $row) {
             $debtorData = $this->mapRowToDebtor($row);
@@ -61,14 +60,12 @@ class ProcessUploadChunkJob implements ShouldQueue
             $debtorDataList[$index] = $debtorData;
         }
 
-        // Batch check IBAN + name + email
         $dedupeResults = $deduplicationService->checkDebtorBatch($debtorDataList, $this->upload->id);
 
         foreach ($this->rows as $index => $row) {
             try {
                 $debtorData = $debtorDataList[$index];
 
-                // Check deduplication result
                 if (isset($dedupeResults[$index])) {
                     $skippedCount++;
                     Log::debug("Row skipped due to deduplication", [
@@ -117,7 +114,6 @@ class ProcessUploadChunkJob implements ShouldQueue
 
         $existingMeta = $this->upload->meta ?? [];
         
-        // Update skipped count
         $existingSkipped = $existingMeta['skipped'] ?? ['total' => 0];
         $existingSkipped['total'] = ($existingSkipped['total'] ?? 0) + $skipped;
 
@@ -137,7 +133,7 @@ class ProcessUploadChunkJob implements ShouldQueue
     private function mapRowToDebtor(array $row): array
     {
         $data = [
-            'status' => Debtor::STATUS_PENDING,
+            'status' => Debtor::STATUS_UPLOADED,
             'currency' => 'EUR',
         ];
 
@@ -148,7 +144,6 @@ class ProcessUploadChunkJob implements ShouldQueue
             }
         }
 
-        // Split full name if present
         if (isset($data['name']) && !isset($data['first_name'])) {
             $parts = preg_split('/\s+/', trim($data['name']), 2);
             $data['first_name'] = $parts[0] ?? '';
