@@ -9,6 +9,7 @@ use App\Http\Controllers\Admin\DebtorController as AdminDebtorController;
 use App\Http\Controllers\Admin\VopLogController as AdminVopLogController;
 use App\Http\Controllers\Admin\BillingAttemptController as AdminBillingAttemptController;
 use App\Http\Controllers\Admin\BillingController as AdminBillingController;
+use App\Http\Controllers\Admin\ChargebackController;
 use App\Http\Controllers\Admin\ReconciliationController as AdminReconciliationController;
 use App\Http\Controllers\Admin\UploadController as AdminUploadController;
 use App\Http\Controllers\Admin\StatsController as AdminStatsController;
@@ -58,6 +59,12 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/refresh', [AdminEmpRefreshController::class, 'refresh']);
             Route::get('/refresh/status', [AdminEmpRefreshController::class, 'currentStatus']);
             Route::get('/refresh/{jobId}', [AdminEmpRefreshController::class, 'status']);
+        });
+
+        // Chargeback Routes
+        Route::prefix('chargebacks')->group(function () {
+            Route::get('', [ChargebackController::class, 'index']);
+            Route::get('/codes', [ChargebackController::class, 'codes']);
         });
 
         Route::post('debtors/{debtor}/validate', [AdminDebtorController::class, 'validate']);
