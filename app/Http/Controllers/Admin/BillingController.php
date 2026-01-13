@@ -42,7 +42,7 @@ class BillingController extends Controller
 
         $eligibleCount = Debtor::where('upload_id', $upload->id)
             ->where('validation_status', Debtor::VALIDATION_VALID)
-            ->where('status', Debtor::STATUS_PENDING)
+            ->where('status', Debtor::STATUS_UPLOADED)
             ->whereDoesntHave('billingAttempts', function ($query) {
                 $query->whereIn('status', [
                     BillingAttempt::STATUS_PENDING,

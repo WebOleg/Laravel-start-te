@@ -65,7 +65,7 @@ class BillingControllerTest extends TestCase
             'upload_id' => $upload->id,
             'validation_status' => Debtor::VALIDATION_VALID,
             'iban_valid' => true,
-            'status' => Debtor::STATUS_PENDING,
+            'status' => Debtor::STATUS_UPLOADED,
         ]);
 
         foreach ($debtors as $debtor) {
@@ -97,7 +97,7 @@ class BillingControllerTest extends TestCase
             'upload_id' => $upload->id,
             'validation_status' => Debtor::VALIDATION_VALID,
             'iban_valid' => true,
-            'status' => Debtor::STATUS_PENDING,
+            'status' => Debtor::STATUS_UPLOADED,
         ]);
         
         VopLog::factory()->create([
@@ -109,7 +109,7 @@ class BillingControllerTest extends TestCase
             'upload_id' => $upload->id,
             'validation_status' => Debtor::VALIDATION_INVALID,
             'iban_valid' => false,
-            'status' => Debtor::STATUS_PENDING,
+            'status' => Debtor::STATUS_UPLOADED,
         ]);
 
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
@@ -128,7 +128,7 @@ class BillingControllerTest extends TestCase
             'upload_id' => $upload->id,
             'validation_status' => Debtor::VALIDATION_VALID,
             'iban_valid' => true,
-            'status' => Debtor::STATUS_PENDING,
+            'status' => Debtor::STATUS_UPLOADED,
         ]);
 
         VopLog::factory()->create([
@@ -159,7 +159,7 @@ class BillingControllerTest extends TestCase
             'upload_id' => $upload->id,
             'validation_status' => Debtor::VALIDATION_VALID,
             'iban_valid' => true,
-            'status' => Debtor::STATUS_PENDING,
+            'status' => Debtor::STATUS_UPLOADED,
         ]);
 
         VopLog::factory()->create([
@@ -194,7 +194,7 @@ class BillingControllerTest extends TestCase
             'upload_id' => $upload->id,
             'validation_status' => Debtor::VALIDATION_VALID,
             'iban_valid' => true,
-            'status' => Debtor::STATUS_PENDING,
+            'status' => Debtor::STATUS_UPLOADED,
         ]);
 
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
@@ -216,7 +216,7 @@ class BillingControllerTest extends TestCase
             'upload_id' => $upload->id,
             'validation_status' => Debtor::VALIDATION_VALID,
             'iban_valid' => true,
-            'status' => Debtor::STATUS_PENDING,
+            'status' => Debtor::STATUS_UPLOADED,
         ]);
 
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
@@ -239,7 +239,7 @@ class BillingControllerTest extends TestCase
             'upload_id' => $upload->id,
             'validation_status' => Debtor::VALIDATION_VALID,
             'iban_valid' => true,
-            'status' => Debtor::STATUS_PENDING,
+            'status' => Debtor::STATUS_UPLOADED,
         ]);
 
         VopLog::factory()->create([

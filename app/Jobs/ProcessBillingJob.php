@@ -43,7 +43,7 @@ class ProcessBillingJob implements ShouldQueue, ShouldBeUnique
 
         $query = Debtor::where('upload_id', $uploadId)
             ->where('validation_status', Debtor::VALIDATION_VALID)
-            ->where('status', Debtor::STATUS_PENDING)
+            ->where('status', Debtor::STATUS_UPLOADED)
             ->whereDoesntHave('billingAttempts', function ($query) {
                 $query->whereIn('status', ['pending', 'approved']);
             });
@@ -58,7 +58,7 @@ class ProcessBillingJob implements ShouldQueue, ShouldBeUnique
 
         $excludedCount = Debtor::where('upload_id', $uploadId)
             ->where('validation_status', Debtor::VALIDATION_VALID)
-            ->where('status', Debtor::STATUS_PENDING)
+            ->where('status', Debtor::STATUS_UPLOADED)
             ->whereHas('vopLogs', function ($q) {
                 $q->where('name_match', 'no');
             })
