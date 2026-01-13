@@ -85,7 +85,7 @@ class BicAnalyticsControllerTest extends TestCase
         $response->assertStatus(200)
             ->assertJsonCount(1, 'data.bics')
             ->assertJsonPath('data.bics.0.bic', 'RABONL2UXXX')
-            ->assertJsonPath('data.bics.0.country', 'NL')
+            ->assertJsonPath('data.bics.0.bank_country', 'NL')
             ->assertJsonPath('data.bics.0.total_transactions', 7)
             ->assertJsonPath('data.bics.0.approved_count', 5)
             ->assertJsonPath('data.bics.0.declined_count', 2)
@@ -258,7 +258,7 @@ class BicAnalyticsControllerTest extends TestCase
             ->assertJsonStructure([
                 'data' => [
                     'bic',
-                    'country',
+                    'bank_country',
                     'total_transactions',
                     'approved_count',
                     'declined_count',
@@ -366,7 +366,7 @@ class BicAnalyticsControllerTest extends TestCase
             ->getJson('/api/admin/analytics/bic');
 
         $response->assertStatus(200)
-            ->assertJsonPath('data.bics.0.country', 'ES');
+            ->assertJsonPath('data.bics.0.bank_country', 'ES');
     }
 
     public function test_bic_analytics_calculates_volume_correctly(): void
