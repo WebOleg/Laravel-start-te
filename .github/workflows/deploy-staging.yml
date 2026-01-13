@@ -80,8 +80,11 @@ jobs:
             '
             $COMPOSE exec -T --user root app sh -lc 'git config --system --add safe.directory /var/www || true'
             # --- Composer ---
-            $COMPOSE exec -T --user www-data app composer install \
-              --no-interaction --no-dev --prefer-dist --optimize-autoloader
+            $COMPOSE exec -T --user root app sh -lc '
+              set -e
+              export COMPOSER_ALLOW_SUPERUSER=1
+              composer install --no-interaction --no-dev --prefer-dist --optimize-autoloader
+            '
 
             # --- Laravel ---
             $COMPOSE exec -T --user www-data app php artisan package:discover --ansi
