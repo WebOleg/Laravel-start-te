@@ -21,11 +21,6 @@ class BicAnalyticsService
 
     /**
      * Get BIC analytics with caching.
-     *
-     * @param string $period
-     * @param string|null $startDate
-     * @param string|null $endDate
-     * @return array
      */
     public function getAnalytics(string $period = self::DEFAULT_PERIOD, ?string $startDate = null, ?string $endDate = null): array
     {
@@ -38,11 +33,6 @@ class BicAnalyticsService
 
     /**
      * Calculate BIC analytics.
-     *
-     * @param string $period
-     * @param string|null $startDate
-     * @param string|null $endDate
-     * @return array
      */
     public function calculateAnalytics(string $period, ?string $startDate = null, ?string $endDate = null): array
     {
@@ -82,6 +72,13 @@ class BicAnalyticsService
 
         usort($bics, fn ($a, $b) => $b['chargeback_count'] <=> $a['chargeback_count']);
 
+        // Add summary fields for frontend
+        $highRiskCount = count(array_filter($bics, fn ($b) => $b['is_high_risk']));
+        $totals['total_bics'] = count($bics);
+        $totals['high_risk_bics'] = $highRiskCount;
+        $totals['total_chargebacks'] = $totals['chargeback_count'];
+        $totals['overall_cb_rate'] = $totals['cb_rate_count'];
+
         return [
             'period' => $period,
             'start_date' => $start->toIso8601String(),
@@ -89,16 +86,12 @@ class BicAnalyticsService
             'threshold' => $threshold,
             'bics' => $bics,
             'totals' => $totals,
-            'high_risk_count' => count(array_filter($bics, fn ($b) => $b['is_high_risk'])),
+            'high_risk_count' => $highRiskCount,
         ];
     }
 
     /**
      * Get summary for a specific BIC.
-     *
-     * @param string $bic
-     * @param string $period
-     * @return array|null
      */
     public function getBicSummary(string $bic, string $period = self::DEFAULT_PERIOD): ?array
     {
@@ -128,8 +121,6 @@ class BicAnalyticsService
 
     /**
      * Clear analytics cache.
-     *
-     * @return void
      */
     public function clearCache(): void
     {
@@ -140,11 +131,6 @@ class BicAnalyticsService
 
     /**
      * Resolve date range from period or explicit dates.
-     *
-     * @param string $period
-     * @param string|null $startDate
-     * @param string|null $endDate
-     * @return array{Carbon, Carbon}
      */
     private function resolveDateRange(string $period, ?string $startDate, ?string $endDate): array
     {
@@ -166,10 +152,6 @@ class BicAnalyticsService
 
     /**
      * Process a single BIC row into analytics data.
-     *
-     * @param object $row
-     * @param float $threshold
-     * @return array
      */
     private function processBicRow(object $row, float $threshold): array
     {
@@ -187,7 +169,7 @@ class BicAnalyticsService
 
         return [
             'bic' => $row->bic,
-            'country' => $country,
+            'bank_country' => $country,
             'total_transactions' => (int) $row->total_transactions,
             'approved_count' => (int) $row->approved_count,
             'declined_count' => (int) $row->declined_count,
@@ -205,9 +187,6 @@ class BicAnalyticsService
 
     /**
      * Extract country code from BIC (positions 5-6).
-     *
-     * @param string $bic
-     * @return string
      */
     private function extractCountryFromBic(string $bic): string
     {
@@ -219,8 +198,6 @@ class BicAnalyticsService
 
     /**
      * Initialize totals array.
-     *
-     * @return array
      */
     private function initTotals(): array
     {
@@ -242,10 +219,6 @@ class BicAnalyticsService
 
     /**
      * Add BIC data to running totals.
-     *
-     * @param array &$totals
-     * @param array $bicData
-     * @return void
      */
     private function addToTotals(array &$totals, array $bicData): void
     {
@@ -262,10 +235,6 @@ class BicAnalyticsService
 
     /**
      * Calculate final rates for totals.
-     *
-     * @param array &$totals
-     * @param float $threshold
-     * @return void
      */
     private function finalizeTotals(array &$totals, float $threshold): void
     {
@@ -288,11 +257,6 @@ class BicAnalyticsService
 
     /**
      * Build cache key for analytics.
-     *
-     * @param string $period
-     * @param string|null $startDate
-     * @param string|null $endDate
-     * @return string
      */
     private function buildCacheKey(string $period, ?string $startDate, ?string $endDate): string
     {
