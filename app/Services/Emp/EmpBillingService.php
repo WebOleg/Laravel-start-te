@@ -209,12 +209,14 @@ class EmpBillingService
 
     private function buildRequestPayload(Debtor $debtor, string $transactionId, ?string $notificationUrl): array
     {
+        // BIC removed from payload - EMP derives it from IBAN automatically
+        // This avoids "BIC should include valid country code for Europe" errors
+        // for French overseas territories (GP, RE, YT, MQ, GF, PM, NC, PF, WF)
         return [
             'transaction_id' => $transactionId,
             'amount' => $debtor->amount,
             'currency' => 'EUR',
             'iban' => $debtor->iban,
-            'bic' => $debtor->bic ?? null,
             'first_name' => $debtor->first_name,
             'last_name' => $debtor->last_name,
             'email' => $debtor->email ?? null,
@@ -230,6 +232,7 @@ class EmpBillingService
         $billingAttempt->update([
             'unique_id' => $response['unique_id'] ?? null,
             'status' => $status,
+            'bic' => $response['bank_identifier_code'] ?? $billingAttempt->bic,
             'error_code' => $response['code'] ?? $response['error_code'] ?? null,
             'error_message' => $response['message'] ?? null,
             'technical_message' => $response['technical_message'] ?? null,
@@ -247,6 +250,7 @@ class EmpBillingService
             'debtor_id' => $billingAttempt->debtor_id,
             'status' => $status,
             'unique_id' => $billingAttempt->unique_id,
+            'bic' => $billingAttempt->bic,
         ]);
     }
 
