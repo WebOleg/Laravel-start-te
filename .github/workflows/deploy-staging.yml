@@ -78,7 +78,7 @@ jobs:
               find storage bootstrap/cache -type d -exec chmod 775 {} \;
               find storage bootstrap/cache -type f -exec chmod 664 {} \;
             '
-
+            $COMPOSE exec -T --user root app sh -lc 'git config --system --add safe.directory /var/www || true'
             # --- Composer ---
             $COMPOSE exec -T --user www-data app composer install \
               --no-interaction --no-dev --prefer-dist --optimize-autoloader
