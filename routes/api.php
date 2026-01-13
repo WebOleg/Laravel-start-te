@@ -14,6 +14,7 @@ use App\Http\Controllers\Admin\UploadController as AdminUploadController;
 use App\Http\Controllers\Admin\StatsController as AdminStatsController;
 use App\Http\Controllers\Admin\VopController as AdminVopController;
 use App\Http\Controllers\Admin\EmpRefreshController as AdminEmpRefreshController;
+use App\Http\Controllers\Admin\BicAnalyticsController as AdminBicAnalyticsController;
 
 Route::post('/login', [AuthController::class, 'login']);
 
@@ -27,6 +28,14 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('stats/chargeback-rates', [AdminStatsController::class, 'chargebackRates']);
         Route::get('stats/chargeback-codes', [AdminStatsController::class, 'chargebackCodes']);
         Route::get('stats/chargeback-banks', [AdminStatsController::class, 'chargebackBanks']);
+
+        // BIC Analytics routes
+        Route::prefix('analytics/bic')->group(function () {
+            Route::get('/', [AdminBicAnalyticsController::class, 'index']);
+            Route::get('/export', [AdminBicAnalyticsController::class, 'export']);
+            Route::post('/clear-cache', [AdminBicAnalyticsController::class, 'clearCache']);
+            Route::get('/{bic}', [AdminBicAnalyticsController::class, 'show']);
+        });
 
         Route::get('uploads/{upload}/status', [AdminUploadController::class, 'status']);
         Route::get('uploads/{upload}/debtors', [AdminUploadController::class, 'debtors']);

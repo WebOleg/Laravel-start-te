@@ -29,24 +29,14 @@ class EmpBillingService
         $this->retryDelayMs = config('services.emp.rate_limit.retry_delay_ms', 1000);
     }
 
-    /**
-     * Bill a single debtor.
-     *
-     * @param Debtor $debtor
-     * @param string|null $notificationUrl
-     * @return BillingAttempt
-     */
     public function billDebtor(Debtor $debtor, ?string $notificationUrl = null): BillingAttempt
     {
-        // Check if debtor can be billed
         if (!$this->canBill($debtor)) {
             throw new \InvalidArgumentException("Debtor {$debtor->id} cannot be billed");
         }
 
-        // Generate unique transaction ID
         $transactionId = $this->generateTransactionId($debtor);
 
-        // Create billing attempt record
         $billingAttempt = BillingAttempt::create([
             'debtor_id' => $debtor->id,
             'upload_id' => $debtor->upload_id,
@@ -55,28 +45,19 @@ class EmpBillingService
             'currency' => 'EUR',
             'status' => BillingAttempt::STATUS_PENDING,
             'attempt_number' => $this->getNextAttemptNumber($debtor),
+            'bic' => $debtor->bic,
             'request_payload' => $this->buildRequestPayload($debtor, $transactionId, $notificationUrl),
         ]);
 
-        // Send to EMP
         $response = $this->client->sddSale($billingAttempt->request_payload);
 
-        // Update billing attempt with response
         $this->updateBillingAttempt($billingAttempt, $response);
 
-        // Update debtor status
         $this->updateDebtorStatus($debtor, $billingAttempt);
 
         return $billingAttempt;
     }
 
-    /**
-     * Bill multiple debtors in batch.
-     *
-     * @param iterable $debtors
-     * @param string|null $notificationUrl
-     * @return array{success: int, failed: int, skipped: int, attempts: array}
-     */
     public function billBatch(iterable $debtors, ?string $notificationUrl = null): array
     {
         $results = [
@@ -90,7 +71,6 @@ class EmpBillingService
         $startTime = microtime(true);
 
         foreach ($debtors as $debtor) {
-            // Rate limiting
             $requestCount++;
             if ($requestCount >= $this->requestsPerSecond) {
                 $elapsed = microtime(true) - $startTime;
@@ -101,7 +81,6 @@ class EmpBillingService
                 $startTime = microtime(true);
             }
 
-            // Skip if cannot bill
             if (!$this->canBill($debtor)) {
                 $results['skipped']++;
                 continue;
@@ -128,13 +107,6 @@ class EmpBillingService
         return $results;
     }
 
-    /**
-     * Bill all ready debtors from an upload.
-     *
-     * @param Upload $upload
-     * @param string|null $notificationUrl
-     * @return array
-     */
     public function billUpload(Upload $upload, ?string $notificationUrl = null): array
     {
         $debtors = Debtor::where('upload_id', $upload->id)
@@ -153,12 +125,6 @@ class EmpBillingService
         return $this->billBatch($debtors, $notificationUrl);
     }
 
-    /**
-     * Retry failed billing attempt.
-     *
-     * @param BillingAttempt $billingAttempt
-     * @return BillingAttempt
-     */
     public function retry(BillingAttempt $billingAttempt): BillingAttempt
     {
         if (!$billingAttempt->canRetry()) {
@@ -170,12 +136,6 @@ class EmpBillingService
         return $this->billDebtor($debtor, $billingAttempt->request_payload['notification_url'] ?? null);
     }
 
-    /**
-     * Reconcile a billing attempt with EMP.
-     *
-     * @param BillingAttempt $billingAttempt
-     * @return array
-     */
     public function reconcile(BillingAttempt $billingAttempt): array
     {
         if (!$billingAttempt->unique_id) {
@@ -191,32 +151,24 @@ class EmpBillingService
         return $response;
     }
 
-    /**
-     * Check if debtor can be billed.
-     */
     public function canBill(Debtor $debtor): bool
     {
-        // Must be valid
         if ($debtor->validation_status !== 'valid') {
             return false;
         }
 
-        // Must be pending or ready
         if (!in_array($debtor->status, [Debtor::STATUS_PENDING, 'ready_for_sync'])) {
             return false;
         }
 
-        // Must have IBAN
         if (empty($debtor->iban)) {
             return false;
         }
 
-        // Must have amount
         if ($debtor->amount < 1) {
             return false;
         }
 
-        // Check for pending billing attempt
         $hasPending = BillingAttempt::where('debtor_id', $debtor->id)
             ->where('status', BillingAttempt::STATUS_PENDING)
             ->exists();
@@ -225,7 +177,6 @@ class EmpBillingService
             return false;
         }
 
-        // Check for already approved
         $hasApproved = BillingAttempt::where('debtor_id', $debtor->id)
             ->where('status', BillingAttempt::STATUS_APPROVED)
             ->exists();
@@ -237,9 +188,6 @@ class EmpBillingService
         return true;
     }
 
-    /**
-     * Generate unique transaction ID.
-     */
     private function generateTransactionId(Debtor $debtor): string
     {
         return sprintf(
@@ -250,9 +198,6 @@ class EmpBillingService
         );
     }
 
-    /**
-     * Get next attempt number for debtor.
-     */
     private function getNextAttemptNumber(Debtor $debtor): int
     {
         $lastAttempt = BillingAttempt::where('debtor_id', $debtor->id)
@@ -262,9 +207,6 @@ class EmpBillingService
         return $lastAttempt ? $lastAttempt->attempt_number + 1 : 1;
     }
 
-    /**
-     * Build request payload for EMP.
-     */
     private function buildRequestPayload(Debtor $debtor, string $transactionId, ?string $notificationUrl): array
     {
         return [
@@ -281,9 +223,6 @@ class EmpBillingService
         ];
     }
 
-    /**
-     * Update billing attempt with EMP response.
-     */
     private function updateBillingAttempt(BillingAttempt $billingAttempt, array $response): void
     {
         $status = $this->mapEmpStatus($response['status'] ?? 'error');
@@ -311,16 +250,13 @@ class EmpBillingService
         ]);
     }
 
-    /**
-     * Update debtor status based on billing result.
-     */
     private function updateDebtorStatus(Debtor $debtor, BillingAttempt $billingAttempt): void
     {
         $newStatus = match ($billingAttempt->status) {
             BillingAttempt::STATUS_APPROVED => Debtor::STATUS_RECOVERED,
             BillingAttempt::STATUS_PENDING => Debtor::STATUS_PENDING,
             BillingAttempt::STATUS_DECLINED,
-            BillingAttempt::STATUS_ERROR => Debtor::STATUS_PENDING, // Can retry
+            BillingAttempt::STATUS_ERROR => Debtor::STATUS_PENDING,
             default => $debtor->status,
         };
 
@@ -329,9 +265,6 @@ class EmpBillingService
         }
     }
 
-    /**
-     * Map EMP status to BillingAttempt status.
-     */
     private function mapEmpStatus(?string $empStatus): string
     {
         return match ($empStatus) {

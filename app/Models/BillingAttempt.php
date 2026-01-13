@@ -1,5 +1,9 @@
 <?php
 
+/**
+ * BillingAttempt model for SEPA Direct Debit transaction attempts.
+ */
+
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -35,7 +39,6 @@ class BillingAttempt extends Model
         self::STATUS_ERROR,
     ];
 
-    // Reconciliation settings
     public const RECONCILIATION_MIN_AGE_HOURS = 2;
     public const RECONCILIATION_MAX_ATTEMPTS = 10;
 
@@ -49,6 +52,7 @@ class BillingAttempt extends Model
         'status',
         'attempt_number',
         'mid_reference',
+        'bic',
         'error_code',
         'error_message',
         'technical_message',
@@ -88,7 +92,6 @@ class BillingAttempt extends Model
         return $this->belongsTo(Upload::class);
     }
 
-    // Status checks
     public function isPending(): bool
     {
         return $this->status === self::STATUS_PENDING;
@@ -129,7 +132,6 @@ class BillingAttempt extends Model
         return in_array($this->status, self::RETRIABLE_STATUSES);
     }
 
-    // Reconciliation methods
     public function canReconcile(): bool
     {
         if (!$this->isPending()) {
@@ -169,7 +171,6 @@ class BillingAttempt extends Model
         ]);
     }
 
-    // Scopes
     public function scopePending($query)
     {
         return $query->where('status', self::STATUS_PENDING);
