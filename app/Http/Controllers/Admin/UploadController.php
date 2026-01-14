@@ -1,5 +1,9 @@
 <?php
 
+/**
+ * Controller for managing file uploads and debtor validation.
+ */
+
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
@@ -182,7 +186,6 @@ class UploadController extends Controller
 
     /**
      * Start async validation for all debtors in upload.
-     * Returns 202 Accepted immediately, validation runs in background.
      */
     public function validate(Upload $upload): JsonResponse
     {
@@ -190,6 +193,13 @@ class UploadController extends Controller
             return response()->json([
                 'message' => 'Upload is still processing. Please wait.',
             ], 422);
+        }
+
+        if ($upload->isValidationProcessing()) {
+            return response()->json([
+                'message' => 'Validation already in progress.',
+                'status' => 'processing',
+            ], 200);
         }
 
         ProcessValidationJob::dispatch($upload);
@@ -244,6 +254,7 @@ class UploadController extends Controller
                 'chargebacked' => $chargebacked,
                 'ready_for_sync' => $upload->debtors()->readyForSync()->count(),
                 'skipped' => $skipped,
+                'is_processing' => $upload->isValidationProcessing(),
             ],
         ]);
     }

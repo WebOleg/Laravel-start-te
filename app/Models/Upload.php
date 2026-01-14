@@ -39,6 +39,10 @@ class Upload extends Model
         'processing_completed_at',
         'uploaded_by',
         'meta',
+        'validation_status',
+        'validation_batch_id',
+        'validation_started_at',
+        'validation_completed_at',
         'billing_status',
         'billing_batch_id',
         'billing_started_at',
@@ -63,6 +67,8 @@ class Upload extends Model
         'meta' => 'array',
         'processing_started_at' => 'datetime',
         'processing_completed_at' => 'datetime',
+        'validation_started_at' => 'datetime',
+        'validation_completed_at' => 'datetime',
         'billing_started_at' => 'datetime',
         'billing_completed_at' => 'datetime',
         'vop_started_at' => 'datetime',
@@ -108,6 +114,50 @@ class Upload extends Model
     public function isDeletable(): bool
     {
         return $this->canBeSoftDeleted() || $this->canBeHardDeleted();
+    }
+
+    // Validation job tracking
+    public function isValidationProcessing(): bool
+    {
+        if ($this->validation_status !== self::JOB_PROCESSING) {
+            return false;
+        }
+
+        if ($this->validation_batch_id) {
+            $batch = Bus::findBatch($this->validation_batch_id);
+            if ($batch && $batch->finished()) {
+                $this->markValidationCompleted();
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    public function startValidation(string $batchId): void
+    {
+        $this->update([
+            'validation_status' => self::JOB_PROCESSING,
+            'validation_batch_id' => $batchId,
+            'validation_started_at' => now(),
+            'validation_completed_at' => null,
+        ]);
+    }
+
+    public function markValidationCompleted(): void
+    {
+        $this->update([
+            'validation_status' => self::JOB_COMPLETED,
+            'validation_completed_at' => now(),
+        ]);
+    }
+
+    public function markValidationFailed(): void
+    {
+        $this->update([
+            'validation_status' => self::JOB_FAILED,
+            'validation_completed_at' => now(),
+        ]);
     }
 
     // Billing job tracking

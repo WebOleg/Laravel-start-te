@@ -1,5 +1,9 @@
 <?php
 
+/**
+ * Job for async validation of upload debtors.
+ */
+
 namespace App\Jobs;
 
 use App\Models\Upload;
@@ -36,15 +40,18 @@ class ProcessValidationJob implements ShouldQueue, ShouldBeUnique
 
     public function handle(): void
     {
-        Log::info('ProcessValidationJob started', ['upload_id' => $this->upload->id]);
+        $uploadId = $this->upload->id;
 
-        $debtorIds = Debtor::where('upload_id', $this->upload->id)
+        Log::info('ProcessValidationJob started', ['upload_id' => $uploadId]);
+
+        $debtorIds = Debtor::where('upload_id', $uploadId)
             ->whereNull('validated_at')
             ->pluck('id')
             ->toArray();
 
         if (empty($debtorIds)) {
-            Log::info('ProcessValidationJob: no debtors to validate', ['upload_id' => $this->upload->id]);
+            Log::info('ProcessValidationJob: no debtors to validate', ['upload_id' => $uploadId]);
+            $this->upload->markValidationCompleted();
             return;
         }
 
@@ -54,23 +61,39 @@ class ProcessValidationJob implements ShouldQueue, ShouldBeUnique
         foreach ($chunks as $index => $chunk) {
             $jobs[] = new ProcessValidationChunkJob(
                 debtorIds: $chunk,
-                uploadId: $this->upload->id,
+                uploadId: $uploadId,
                 chunkIndex: $index
             );
         }
 
-        $uploadId = $this->upload->id;
+        $upload = $this->upload;
 
-        Bus::batch($jobs)
+        $batch = Bus::batch($jobs)
             ->name("Validation Upload #{$uploadId}")
             ->allowFailures()
             ->onQueue('high')
+            ->finally(function () use ($upload) {
+                $upload->markValidationCompleted();
+                Log::info('ProcessValidationJob batch completed', ['upload_id' => $upload->id]);
+            })
             ->dispatch();
 
+        $this->upload->startValidation($batch->id);
+
         Log::info('ProcessValidationJob dispatched', [
-            'upload_id' => $this->upload->id,
+            'upload_id' => $uploadId,
+            'batch_id' => $batch->id,
             'debtors' => count($debtorIds),
             'chunks' => count($chunks),
+        ]);
+    }
+
+    public function failed(\Throwable $exception): void
+    {
+        $this->upload->markValidationFailed();
+        Log::error('ProcessValidationJob failed', [
+            'upload_id' => $this->upload->id,
+            'error' => $exception->getMessage(),
         ]);
     }
 }
