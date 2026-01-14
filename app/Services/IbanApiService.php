@@ -29,9 +29,9 @@ class IbanApiService
 
     public function __construct()
     {
-        $this->apiKey = config('services.iban.api_key', '');
-        $this->apiUrl = config('services.iban.api_url', 'https://api.iban.com/clients/api/v4/iban/');
-        $this->mockMode = config('services.iban.mock', true);
+        $this->apiKey = config('services.iban.api_key') ?? '';
+        $this->apiUrl = config('services.iban.api_url') ?? 'https://api.iban.com/clients/api/v4/iban/';
+        $this->mockMode = config('services.iban.mock') ?? true;
     }
 
     /**
