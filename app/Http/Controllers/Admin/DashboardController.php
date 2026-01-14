@@ -12,20 +12,34 @@ use App\Models\Debtor;
 use App\Models\VopLog;
 use App\Models\BillingAttempt;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Carbon\Carbon;
 
 class DashboardController extends Controller
 {
-    public function index(): JsonResponse
+    public function index(Request $request): JsonResponse
     {
+        $request->validate([
+            'month' => 'nullable|integer|min:1|max:12',
+            'year' => 'nullable|integer|min:2020|max:2100',
+        ]);
+
+        $month = $request->input('month');
+        $year = $request->input('year');
+
         return response()->json([
             'data' => [
                 'uploads' => $this->getUploadStats(),
-                'debtors' => $this->getDebtorStats(),
+                'debtors' => $this->getDebtorStats($month, $year),
                 'vop' => $this->getVopStats(),
                 'billing' => $this->getBillingStats(),
                 'recent_activity' => $this->getRecentActivity(),
                 'trends' => $this->getTrends(),
+                'filters' => [
+                    'month' => $month,
+                    'year' => $year,
+                ],
             ],
         ]);
     }
@@ -43,12 +57,31 @@ class DashboardController extends Controller
         ];
     }
 
-    private function getDebtorStats(): array
+    private function getDebtorStats(?int $month = null, ?int $year = null): array
     {
+        // Build date range if month/year provided
+        $startDate = null;
+        $endDate = null;
+
+        if ($month && $year) {
+            $startDate = Carbon::create($year, $month, 1)->startOfMonth();
+            $endDate = Carbon::create($year, $month, 1)->endOfMonth();
+        }
+
         // Get real billing data from EMP (billing_attempts table)
-        $totalBilled = BillingAttempt::sum('amount');
-        $totalApproved = BillingAttempt::where('status', BillingAttempt::STATUS_APPROVED)->sum('amount');
-        $totalChargebacked = BillingAttempt::where('status', BillingAttempt::STATUS_CHARGEBACKED)->sum('amount');
+        $billedQuery = BillingAttempt::query();
+        $approvedQuery = BillingAttempt::where('status', BillingAttempt::STATUS_APPROVED);
+        $chargebackedQuery = BillingAttempt::where('status', BillingAttempt::STATUS_CHARGEBACKED);
+
+        if ($startDate && $endDate) {
+            $billedQuery->whereBetween('created_at', [$startDate, $endDate]);
+            $approvedQuery->whereBetween('created_at', [$startDate, $endDate]);
+            $chargebackedQuery->whereBetween('created_at', [$startDate, $endDate]);
+        }
+
+        $totalBilled = $billedQuery->sum('amount');
+        $totalApproved = $approvedQuery->sum('amount');
+        $totalChargebacked = $chargebackedQuery->sum('amount');
         $netRecovered = $totalApproved - $totalChargebacked;
 
         return [
