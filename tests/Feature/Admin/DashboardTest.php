@@ -83,15 +83,22 @@ class DashboardTest extends TestCase
         ]);
 
         // Create billing attempts (real EMP data)
+        // Note: debtor_id and upload_id can be null for EMP refresh imports
         BillingAttempt::factory()->count(5)->create([
+            'debtor_id' => null,
+            'upload_id' => null,
             'status' => BillingAttempt::STATUS_APPROVED,
             'amount' => 100,
         ]);
         BillingAttempt::factory()->count(2)->create([
+            'debtor_id' => null,
+            'upload_id' => null,
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
             'amount' => 50,
         ]);
         BillingAttempt::factory()->count(3)->create([
+            'debtor_id' => null,
+            'upload_id' => null,
             'status' => BillingAttempt::STATUS_DECLINED,
             'amount' => 75,
         ]);
