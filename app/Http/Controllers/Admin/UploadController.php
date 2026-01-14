@@ -77,6 +77,11 @@ class UploadController extends Controller
                     $vopQuery->where('name_match', 'no');
                 });
             },
+            'debtors as bav_passed_count' => function ($q) {
+                $q->whereHas('vopLogs', function ($vopQuery) {
+                    $vopQuery->whereIn('name_match', ['yes', 'partial']);
+                });
+            },
             'debtors as bav_verified_count' => function ($q) {
                 $q->whereHas('vopLogs', function ($vopQuery) {
                     $vopQuery->whereNotNull('name_match');
