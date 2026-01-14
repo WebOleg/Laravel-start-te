@@ -44,6 +44,12 @@ class UploadController extends Controller
             'debtors as invalid_count' => function ($q) {
                 $q->where('validation_status', Debtor::VALIDATION_INVALID);
             },
+            'billingAttempts as billed_with_emp_count' => function ($q) {
+                $q->where('status', BillingAttempt::STATUS_APPROVED);
+            },
+            'billingAttempts as chargeback_count' => function ($q) {
+                $q->where('status', BillingAttempt::STATUS_CHARGEBACKED);
+            },
         ]);
 
         if ($request->has('status')) {
@@ -75,6 +81,12 @@ class UploadController extends Controller
                 $q->whereHas('vopLogs', function ($vopQuery) {
                     $vopQuery->whereNotNull('name_match');
                 });
+            },
+            'billingAttempts as billed_with_emp_count' => function ($q) {
+                $q->where('status', BillingAttempt::STATUS_APPROVED);
+            },
+            'billingAttempts as chargeback_count' => function ($q) {
+                $q->where('status', BillingAttempt::STATUS_CHARGEBACKED);
             },
         ]);
 
