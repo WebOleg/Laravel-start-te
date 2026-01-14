@@ -33,6 +33,7 @@ class UploadResource extends JsonResource
             'valid_count' => $this->when(isset($this->valid_count), $this->valid_count),
             'invalid_count' => $this->when(isset($this->invalid_count), $this->invalid_count),
             'bav_excluded_count' => $this->when(isset($this->bav_excluded_count), $this->bav_excluded_count),
+            'bav_passed_count' => $this->when(isset($this->bav_passed_count), $this->bav_passed_count),
             'bav_verified_count' => $this->when(isset($this->bav_verified_count), $this->bav_verified_count),
             'billed_with_emp_count' => $this->when(isset($this->billed_with_emp_count), $this->billed_with_emp_count),
             'chargeback_count' => $this->when(isset($this->chargeback_count), $this->chargeback_count),
