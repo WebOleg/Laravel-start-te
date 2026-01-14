@@ -82,6 +82,26 @@ class DashboardTest extends TestCase
             'amount' => 100,
         ]);
 
+        // Create billing attempts (real EMP data)
+        BillingAttempt::factory()->count(5)->create([
+            'status' => BillingAttempt::STATUS_APPROVED,
+            'amount' => 100,
+        ]);
+        BillingAttempt::factory()->count(2)->create([
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'amount' => 50,
+        ]);
+        BillingAttempt::factory()->count(3)->create([
+            'status' => BillingAttempt::STATUS_DECLINED,
+            'amount' => 75,
+        ]);
+
+        // Total billed = 500 + 100 + 225 = 825
+        // Approved = 500
+        // Chargebacked = 100
+        // Net recovered = 500 - 100 = 400
+        // Recovery rate = 400 / 825 = 48.48%
+
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
             ->getJson('/api/admin/dashboard');
 
@@ -89,9 +109,9 @@ class DashboardTest extends TestCase
             ->assertJsonPath('data.debtors.total', 8)
             ->assertJsonPath('data.debtors.by_status.pending', 5)
             ->assertJsonPath('data.debtors.by_status.recovered', 3)
-            ->assertJsonPath('data.debtors.total_amount', 800)
-            ->assertJsonPath('data.debtors.recovered_amount', 300)
-            ->assertJsonPath('data.debtors.recovery_rate', 37.5);
+            ->assertJsonPath('data.debtors.total_amount', 825)
+            ->assertJsonPath('data.debtors.recovered_amount', 400)
+            ->assertJsonPath('data.debtors.recovery_rate', 48.48);
     }
 
     public function test_dashboard_returns_trends(): void
