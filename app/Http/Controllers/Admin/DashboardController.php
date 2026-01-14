@@ -45,8 +45,11 @@ class DashboardController extends Controller
 
     private function getDebtorStats(): array
     {
-        $totalAmount = Debtor::sum('amount');
-        $recoveredAmount = Debtor::where('status', Debtor::STATUS_RECOVERED)->sum('amount');
+        // Get real billing data from EMP (billing_attempts table)
+        $totalBilled = BillingAttempt::sum('amount');
+        $totalApproved = BillingAttempt::where('status', BillingAttempt::STATUS_APPROVED)->sum('amount');
+        $totalChargebacked = BillingAttempt::where('status', BillingAttempt::STATUS_CHARGEBACKED)->sum('amount');
+        $netRecovered = $totalApproved - $totalChargebacked;
 
         return [
             'total' => Debtor::count(),
@@ -56,10 +59,10 @@ class DashboardController extends Controller
                 'recovered' => Debtor::where('status', Debtor::STATUS_RECOVERED)->count(),
                 'failed' => Debtor::where('status', Debtor::STATUS_FAILED)->count(),
             ],
-            'total_amount' => round($totalAmount, 2),
-            'recovered_amount' => round($recoveredAmount, 2),
-            'recovery_rate' => $totalAmount > 0 
-                ? round(($recoveredAmount / $totalAmount) * 100, 2) 
+            'total_amount' => round($totalBilled, 2),
+            'recovered_amount' => round($netRecovered, 2),
+            'recovery_rate' => $totalBilled > 0
+                ? round(($netRecovered / $totalBilled) * 100, 2)
                 : 0,
             'by_country' => Debtor::select('country', DB::raw('count(*) as count'))
                 ->whereNotNull('country')
