@@ -1,5 +1,10 @@
 <?php
 
+/**
+ * Service for VOP (Verification of Payer) verification.
+ * Handles IBAN verification with caching support.
+ */
+
 namespace App\Services;
 
 use App\Models\Debtor;
@@ -63,7 +68,7 @@ class VopVerificationService
 
     private function linkVopLogToDebtor(VopLog $existing, Debtor $debtor): VopLog
     {
-        return VopLog::create([
+        $vopLog = VopLog::create([
             'debtor_id' => $debtor->id,
             'upload_id' => $debtor->upload_id,
             'iban_masked' => $this->ibanValidator->mask($debtor->iban),
@@ -76,6 +81,10 @@ class VopVerificationService
             'result' => $existing->result,
             'meta' => array_merge($existing->meta ?? [], ['cached_from' => $existing->id]),
         ]);
+
+        $debtor->markVopVerified();
+
+        return $vopLog;
     }
 
     public function getUploadStats(int $uploadId): array
