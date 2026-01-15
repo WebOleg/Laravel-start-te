@@ -14,10 +14,10 @@ use RuntimeException;
 
 class EmpClient
 {
-    private string $endpoint;
-    private string $username;
-    private string $password;
-    private string $terminalToken;
+    private ?string $endpoint;
+    private ?string $username;
+    private ?string $password;
+    private ?string $terminalToken;
     private int $timeout;
     private int $connectTimeout;
 
