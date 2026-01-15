@@ -14,15 +14,23 @@ use RuntimeException;
 
 class EmpClient
 {
-    private string $endpoint;
-    private string $username;
-    private string $password;
-    private string $terminalToken;
-    private int $timeout;
-    private int $connectTimeout;
+    private ?string $endpoint = null;
+    private ?string $username = null;
+    private ?string $password = null;
+    private ?string $terminalToken = null;
+    private int $timeout = 30;
+    private int $connectTimeout = 10;
+    private bool $initialized = false;
 
-    public function __construct()
+    /**
+     * Lazy load configuration on first use.
+     */
+    private function initialize(): void
     {
+        if ($this->initialized) {
+            return;
+        }
+
         $this->endpoint = config('services.emp.endpoint');
         $this->username = config('services.emp.username');
         $this->password = config('services.emp.password');
@@ -33,6 +41,8 @@ class EmpClient
         if (!$this->username || !$this->password || !$this->terminalToken) {
             throw new RuntimeException('EMP credentials not configured');
         }
+
+        $this->initialized = true;
     }
 
     /**
@@ -40,6 +50,7 @@ class EmpClient
      */
     public function sddSale(array $data): array
     {
+        $this->initialize();
         $xml = $this->buildSddSaleXml($data);
         
         return $this->sendRequest('/process/' . $this->terminalToken, $xml);
@@ -50,6 +61,7 @@ class EmpClient
      */
     public function reconcile(string $uniqueId): array
     {
+        $this->initialize();
         $xml = $this->buildReconcileXml($uniqueId);
         
         return $this->sendRequest('/reconcile/' . $this->terminalToken, $xml);
@@ -60,6 +72,7 @@ class EmpClient
      */
     public function getTransactionsByDate(string $startDate, string $endDate, int $page = 1): array
     {
+        $this->initialize();
         $xml = $this->buildGetByDateXml($startDate, $endDate, $page);
         
         return $this->sendRequest('/reconcile/by_date/' . $this->terminalToken, $xml);
@@ -160,6 +173,7 @@ class EmpClient
      */
     public function sendRequest(string $path, string $xml): array
     {
+        $this->initialize();
         $url = 'https://' . $this->endpoint . $path;
 
         Log::debug('EMP request', [
@@ -286,6 +300,7 @@ class EmpClient
      */
     public function verifySignature(string $uniqueId, string $signature): bool
     {
+        $this->initialize();
         $expected = hash('sha1', $uniqueId . $this->password);
         
         return hash_equals($expected, $signature);
@@ -296,6 +311,7 @@ class EmpClient
      */
     public function getTerminalToken(): string
     {
+        $this->initialize();
         return $this->terminalToken;
     }
 }
