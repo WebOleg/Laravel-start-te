@@ -29,17 +29,13 @@ class IbanApiService
 
     public function __construct()
     {
-        $this->apiKey = config('services.iban.api_key', '');
-        $this->apiUrl = config('services.iban.api_url', 'https://api.iban.com/clients/api/v4/iban/');
-        $this->mockMode = config('services.iban.mock', true);
+        $this->apiKey = config('services.iban.api_key') ?? '';
+        $this->apiUrl = config('services.iban.api_url') ?? 'https://api.iban.com/clients/api/v4/iban/';
+        $this->mockMode = config('services.iban.mock') ?? true;
     }
 
     /**
      * Verify IBAN and retrieve bank information.
-     *
-     * @param string $iban
-     * @param bool $skipLocalCache Skip local DB lookup (force API call)
-     * @return array{success: bool, bank_data: ?array, sepa_data: ?array, validations: ?array, error: ?string, cached: bool, source: string}
      */
     public function verify(string $iban, bool $skipLocalCache = false): array
     {
@@ -98,28 +94,16 @@ class IbanApiService
         return array_merge($result, ['cached' => false, 'source' => $this->mockMode ? 'mock' : 'api']);
     }
 
-    /**
-     * @param string $iban
-     * @return ?string
-     */
     public function getBankName(string $iban): ?string
     {
         return $this->verify($iban)['bank_data']['bank'] ?? null;
     }
 
-    /**
-     * @param string $iban
-     * @return ?string
-     */
     public function getBic(string $iban): ?string
     {
         return $this->verify($iban)['bank_data']['bic'] ?? null;
     }
 
-    /**
-     * @param string $iban
-     * @return bool
-     */
     public function isValid(string $iban): bool
     {
         $result = $this->verify($iban);
@@ -130,21 +114,12 @@ class IbanApiService
         return $code === 1 || $code === '001';
     }
 
-    /**
-     * @param string $iban
-     * @return bool
-     */
     public function supportsSepaSdd(string $iban): bool
     {
         $sepa = $this->verify($iban)['sepa_data'] ?? [];
         return strtoupper($sepa['SDD'] ?? '') === 'YES';
     }
 
-    /**
-     * @param string $countryIso
-     * @param string $bankCode
-     * @return ?array
-     */
     private function findInLocalCache(string $countryIso, string $bankCode): ?array
     {
         $ref = BankReference::findByBankCode($countryIso, $bankCode);
@@ -178,11 +153,6 @@ class IbanApiService
         ];
     }
 
-    /**
-     * @param array $result
-     * @param string $countryIso
-     * @return void
-     */
     private function saveToLocalCache(array $result, string $countryIso): void
     {
         $bankData = $result['bank_data'] ?? [];
@@ -219,11 +189,6 @@ class IbanApiService
         }
     }
 
-    /**
-     * @param string $iban
-     * @param string $countryIso
-     * @return ?string
-     */
     private function extractBankCode(string $iban, string $countryIso): ?string
     {
         $lengths = [
@@ -239,10 +204,6 @@ class IbanApiService
         return substr($iban, 4, $length);
     }
 
-    /**
-     * @param string $iban
-     * @return array{success: bool, bank_data: ?array, sepa_data: ?array, validations: ?array, error: ?string}
-     */
     private function callApi(string $iban): array
     {
         try {
@@ -296,10 +257,6 @@ class IbanApiService
         }
     }
 
-    /**
-     * @param array $data
-     * @return array{success: bool, bank_data: ?array, sepa_data: ?array, validations: ?array, error: ?string}
-     */
     private function parseResponse(array $data): array
     {
         $errors = $data['errors'] ?? [];
@@ -317,10 +274,6 @@ class IbanApiService
         ];
     }
 
-    /**
-     * @param string $iban
-     * @return array{success: bool, bank_data: ?array, sepa_data: ?array, validations: ?array, error: ?string}
-     */
     private function mockResponse(string $iban): array
     {
         $country = substr($iban, 0, 2);
@@ -382,10 +335,6 @@ class IbanApiService
         return $result;
     }
 
-    /**
-     * @param string $message
-     * @return array{success: bool, bank_data: null, sepa_data: null, validations: null, error: string}
-     */
     private function errorResult(string $message): array
     {
         return [
@@ -397,19 +346,11 @@ class IbanApiService
         ];
     }
 
-    /**
-     * @param string $iban
-     * @return string
-     */
     private function normalize(string $iban): string
     {
         return strtoupper(preg_replace('/[^A-Za-z0-9]/', '', $iban));
     }
 
-    /**
-     * @param string $iban
-     * @return string
-     */
     private function mask(string $iban): string
     {
         $n = $this->normalize($iban);

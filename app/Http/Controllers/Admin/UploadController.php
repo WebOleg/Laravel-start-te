@@ -1,5 +1,9 @@
 <?php
 
+/**
+ * Controller for managing file uploads and debtor validation.
+ */
+
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
@@ -40,6 +44,12 @@ class UploadController extends Controller
             'debtors as invalid_count' => function ($q) {
                 $q->where('validation_status', Debtor::VALIDATION_INVALID);
             },
+            'billingAttempts as billed_with_emp_count' => function ($q) {
+                $q->where('status', BillingAttempt::STATUS_APPROVED);
+            },
+            'billingAttempts as chargeback_count' => function ($q) {
+                $q->where('status', BillingAttempt::STATUS_CHARGEBACKED);
+            },
         ]);
 
         if ($request->has('status')) {
@@ -67,10 +77,21 @@ class UploadController extends Controller
                     $vopQuery->where('name_match', 'no');
                 });
             },
+            'debtors as bav_passed_count' => function ($q) {
+                $q->whereHas('vopLogs', function ($vopQuery) {
+                    $vopQuery->whereIn('name_match', ['yes', 'partial']);
+                });
+            },
             'debtors as bav_verified_count' => function ($q) {
                 $q->whereHas('vopLogs', function ($vopQuery) {
                     $vopQuery->whereNotNull('name_match');
                 });
+            },
+            'billingAttempts as billed_with_emp_count' => function ($q) {
+                $q->where('status', BillingAttempt::STATUS_APPROVED);
+            },
+            'billingAttempts as chargeback_count' => function ($q) {
+                $q->where('status', BillingAttempt::STATUS_CHARGEBACKED);
             },
         ]);
 
@@ -182,7 +203,6 @@ class UploadController extends Controller
 
     /**
      * Start async validation for all debtors in upload.
-     * Returns 202 Accepted immediately, validation runs in background.
      */
     public function validate(Upload $upload): JsonResponse
     {
@@ -190,6 +210,13 @@ class UploadController extends Controller
             return response()->json([
                 'message' => 'Upload is still processing. Please wait.',
             ], 422);
+        }
+
+        if ($upload->isValidationProcessing()) {
+            return response()->json([
+                'message' => 'Validation already in progress.',
+                'status' => 'processing',
+            ], 200);
         }
 
         ProcessValidationJob::dispatch($upload);
@@ -244,6 +271,7 @@ class UploadController extends Controller
                 'chargebacked' => $chargebacked,
                 'ready_for_sync' => $upload->debtors()->readyForSync()->count(),
                 'skipped' => $skipped,
+                'is_processing' => $upload->isValidationProcessing(),
             ],
         ]);
     }
