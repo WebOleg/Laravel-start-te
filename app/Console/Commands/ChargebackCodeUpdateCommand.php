@@ -14,7 +14,7 @@ class ChargebackCodeUpdateCommand extends Command
      */
     protected $signature = 'emp:fetch-chargeback-codes
                             {unique-id? : Specific unique_id(s) to process}
-                            {--all : Process all chargebacks with fille dor empty reason codes}
+                            {--all : Process all chargebacks with filled or empty reason codes}
                             {--empty : Process all chargebacks missing reason codes}';
 
     /**
@@ -34,12 +34,12 @@ class ChargebackCodeUpdateCommand extends Command
      */
     public function handle(): int
     {
-        $uniqueId = $this->argument('unique-id') ?? null;
+        $uniqueId = $this->argument('unique-id');
         $processAll = $this->option('all');
         $processEmptyReason = $this->option('empty');
 
-        // Enure at least one option is provided
-        if(!$uniqueId && !$processAll && !$processEmptyReason){
+        // Ensure at least one option is provided
+        if (!$uniqueId && !$processAll && !$processEmptyReason) {
             $this->error("Please provide at least one of the following options: {unique-id}, --all, --empty");
             $this->info("Usage examples:");
             $this->info("  php artisan emp:fetch-chargeback-codes {unique-id}");
@@ -48,29 +48,139 @@ class ChargebackCodeUpdateCommand extends Command
             return Command::FAILURE;
         }
 
+        // Ensure options are mutually exclusive
+        if ($uniqueId && ($processAll || $processEmptyReason)) {
+            $this->error("Cannot combine unique-id with --all or --empty options");
+            return Command::FAILURE;
+        }
+
+        if ($processAll && $processEmptyReason) {
+            $this->error("Cannot use both --all and --empty options together");
+            return Command::FAILURE;
+        }
+
         $this->info("Starting chargeback code update process...");
-        if($uniqueId != null){ 
-            $this->processChargebackByUniqueId($uniqueId);
+        
+        // Process single unique ID
+        if ($uniqueId) {
+            return $this->processChargebackByUniqueId($uniqueId);
         }
 
-        if($processAll == true){
-            $response = $this->chargebackService->processBulkChargebackDetail(true);
-            
+        // Process bulk - all chargebacks
+        if ($processAll) {
+            return $this->processBulkChargebacks(true);
         }
 
-        if($processEmptyReason == true){
-            $response = $this->chargebackService->processBulkChargebackDetail(false);
-            
+        // Process bulk - empty reason codes only
+        if ($processEmptyReason) {
+            return $this->processBulkChargebacks(false);
         }
 
         return Command::SUCCESS;
     }
 
-    private function processChargebackByUniqueId(string $uniqueId): void
+    private function processChargebackByUniqueId(string $uniqueId): int
     {
-        $this->info("Prcessing Unique ID: {$uniqueId}");
+        $this->info("Processing Unique ID: {$uniqueId}");
+        $this->newLine();
+        
+        // Print table header
+        $this->line(sprintf(
+            "%-40s | %-15s | %s",
+            'Unique ID',
+            'Code',
+            'Message/Details'
+        ));
+        $this->line(str_repeat('-', 120));
+        
         $response = $this->chargebackService->processChargebackDetail($uniqueId);
         
-        $this->info("Resopnse: " . print_r($response, true));
+        if (!$response['success']) {
+            $errorCode = $response['code'] ?? 'N/A';
+            $errorMessage = $response['error'] ?? 'Unknown error';
+            
+            // Truncate message if too long
+            if (strlen($errorMessage) > 50) {
+                $errorMessage = substr($errorMessage, 0, 47) . '...';
+            }
+            
+            $this->line(sprintf(
+                "%s | %s | %s",
+                str_pad($uniqueId, 40),
+                str_pad($errorCode, 15),
+                $errorMessage
+            ));
+            
+            return Command::FAILURE;
+        }
+        
+        $reasonCode = $response['data']['reason_code'] ?? 'N/A';
+        $reasonDescription = $response['data']['reason_description'] ?? 'N/A';
+        
+        // Truncate message if too long
+        if (strlen($reasonDescription) > 50) {
+            $reasonDescription = substr($reasonDescription, 0, 47) . '...';
+        }
+        
+        $this->line(sprintf(
+            "%s | %s | %s",
+            str_pad($uniqueId, 40),
+            str_pad($reasonCode, 15),
+            $reasonDescription
+        ));
+        
+        return Command::SUCCESS;
+    }
+
+    private function processBulkChargebacks(bool $processAll): int
+    {
+        $type = $processAll ? 'all chargebacks' : 'chargebacks with empty reason codes';
+        $this->info("Processing {$type}...");
+        $this->newLine();
+        
+        // Print table header
+        $this->line(sprintf(
+            "%-40s | %-15s | %s",
+            'Unique ID',
+            'Code',
+            'Message/Details'
+        ));
+        $this->line(str_repeat('-', 120));
+        
+        // Process with real-time callback
+        $results = $this->chargebackService->processBulkChargebackDetail($processAll, function ($detail) {
+            $status = $detail['success'] ? '<info>✓</info>' : '<error>✗</error>';
+            $uniqueId = str_pad($detail['unique_id'], 40);
+            $code = str_pad($detail['code'] ?? 'N/A', 15);
+            $message = $detail['message'] ?? 'N/A';
+            
+            // Truncate message if too long
+            if (strlen($message) > 50) {
+                $message = substr($message, 0, 47) . '...';
+            }
+            
+            $this->line(sprintf(
+                "%s | %s | %s",
+                $uniqueId,
+                $code,
+                $message
+            ));
+        });
+        
+        // Display summary
+        $this->newLine();
+        $this->line(str_repeat('=', 120));
+        $this->info("Processing Summary:");
+        $this->table(
+            ['Metric', 'Count'],
+            [
+                ['Total', $results['total']],
+                ['Processed', $results['processed']],
+                ['Successful', $results['successful']],
+                ['Failed', $results['failed']],
+            ]
+        );
+        
+        return $results['failed'] > 0 ? Command::FAILURE : Command::SUCCESS;
     }
 }

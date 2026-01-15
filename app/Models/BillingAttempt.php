@@ -65,7 +65,6 @@ class BillingAttempt extends Model
         'reconciliation_attempts',
         'chargeback_reason_code',
         'chargeback_reason_description',
-        'chargeback_reason_technical_message',
         'chargebacked_at',
     ];
 

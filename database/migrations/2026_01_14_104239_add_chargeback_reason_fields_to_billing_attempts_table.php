@@ -14,7 +14,6 @@ return new class extends Migration
         Schema::table('billing_attempts', function (Blueprint $table) {
             $table->string('chargeback_reason_code')->nullable()->after('status');
             $table->text('chargeback_reason_description')->nullable()->after('chargeback_reason_code');
-            $table->text('chargeback_reason_technical_message')->nullable()->after('chargeback_reason_description');
             $table->timestamp('chargebacked_at')->nullable()->after('chargeback_reason_description');
         });
     }
@@ -27,7 +26,6 @@ return new class extends Migration
         Schema::table('billing_attempts', function (Blueprint $table) {
             $table->dropColumn('chargeback_reason_code');
             $table->dropColumn('chargeback_reason_description');
-            $table->dropColumn('chargeback_reason_technical_message');
             $table->dropColumn('chargebacked_at');
         });
     }

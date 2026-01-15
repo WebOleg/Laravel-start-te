@@ -141,7 +141,6 @@ class ChargebackSeeder extends Seeder
                 ],
                 'processed_at' => now()->subDays(rand(30, 90)),
                 'emp_created_at' => now()->subDays(rand(30, 90)),
-                'chargebacked_at' => now()->subDays(rand(1, 10)),
                 'chargeback_reason_code' => null, // Will be populated by the command
                 'chargeback_reason_description' => null,
                 'chargeback_reason_technical_message' => null,
