@@ -7,6 +7,8 @@ use Illuminate\Console\Command;
 
 class ChargebackCodeUpdateCommand extends Command
 {
+    private EmpChargebackService $chargebackService;
+
     /**
      * The name and signature of the console command.
      *
@@ -26,7 +28,7 @@ class ChargebackCodeUpdateCommand extends Command
      */
     protected $description = 'Command to fetch and update chargeback codes from emerchantpay';
 
-    public function __construct(private EmpChargebackService $chargebackService)
+    public function __construct()
     {
         parent::__construct();
     }
@@ -36,6 +38,8 @@ class ChargebackCodeUpdateCommand extends Command
      */
     public function handle(): int
     {
+        $this->chargebackService = app(EmpChargebackService::class);
+
         $uniqueId = $this->argument('unique-id');
         $processAll = $this->option('all');
         $processEmptyReason = $this->option('empty');
