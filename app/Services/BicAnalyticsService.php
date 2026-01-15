@@ -17,7 +17,7 @@ class BicAnalyticsService
     public const PERIODS = ['7d', '30d', '60d', '90d'];
     public const DEFAULT_PERIOD = '30d';
     public const CACHE_TTL = 900;
-    public const HIGH_RISK_THRESHOLD = 1.0;
+    public const HIGH_RISK_THRESHOLD = 25.0;
 
     /**
      * Get BIC analytics with caching.
@@ -72,7 +72,6 @@ class BicAnalyticsService
 
         usort($bics, fn ($a, $b) => $b['chargeback_count'] <=> $a['chargeback_count']);
 
-        // Add summary fields for frontend
         $highRiskCount = count(array_filter($bics, fn ($b) => $b['is_high_risk']));
         $totals['total_bics'] = count($bics);
         $totals['high_risk_bics'] = $highRiskCount;
@@ -106,6 +105,7 @@ class BicAnalyticsService
                 DB::raw("SUM(CASE WHEN status = '" . BillingAttempt::STATUS_DECLINED . "' THEN 1 ELSE 0 END) as declined_count"),
                 DB::raw("SUM(CASE WHEN status = '" . BillingAttempt::STATUS_CHARGEBACKED . "' THEN 1 ELSE 0 END) as chargeback_count"),
                 DB::raw('SUM(amount) as total_volume'),
+                DB::raw("SUM(CASE WHEN status = '" . BillingAttempt::STATUS_APPROVED . "' THEN amount ELSE 0 END) as approved_volume"),
                 DB::raw("SUM(CASE WHEN status = '" . BillingAttempt::STATUS_CHARGEBACKED . "' THEN amount ELSE 0 END) as chargeback_volume"),
             ])
             ->first();
@@ -152,17 +152,24 @@ class BicAnalyticsService
 
     /**
      * Process a single BIC row into analytics data.
+     * 
+     * KPIs (bank standard):
+     * - cb_rate_count: chargebacks / approved_count × 100
+     * - cb_rate_volume: chargeback_volume / approved_volume × 100
      */
     private function processBicRow(object $row, float $threshold): array
     {
-        $everApproved = (int) $row->approved_count + (int) $row->chargeback_count;
-        
-        $cbRateCount = $everApproved > 0
-            ? round(((int) $row->chargeback_count / $everApproved) * 100, 2)
+        $approvedCount = (int) $row->approved_count;
+        $chargebackCount = (int) $row->chargeback_count;
+        $approvedVolume = (float) ($row->approved_volume ?? 0);
+        $chargebackVolume = (float) $row->chargeback_volume;
+
+        $cbRateCount = $approvedCount > 0
+            ? round(($chargebackCount / $approvedCount) * 100, 2)
             : 0;
 
-        $cbRateVolume = (float) $row->total_volume > 0
-            ? round(((float) $row->chargeback_volume / (float) $row->total_volume) * 100, 2)
+        $cbRateVolume = $approvedVolume > 0
+            ? round(($chargebackVolume / $approvedVolume) * 100, 2)
             : 0;
 
         $country = $this->extractCountryFromBic($row->bic);
@@ -171,14 +178,14 @@ class BicAnalyticsService
             'bic' => $row->bic,
             'bank_country' => $country,
             'total_transactions' => (int) $row->total_transactions,
-            'approved_count' => (int) $row->approved_count,
+            'approved_count' => $approvedCount,
             'declined_count' => (int) $row->declined_count,
-            'chargeback_count' => (int) $row->chargeback_count,
+            'chargeback_count' => $chargebackCount,
             'error_count' => (int) ($row->error_count ?? 0),
             'pending_count' => (int) ($row->pending_count ?? 0),
             'total_volume' => round((float) $row->total_volume, 2),
-            'approved_volume' => round((float) ($row->approved_volume ?? 0), 2),
-            'chargeback_volume' => round((float) $row->chargeback_volume, 2),
+            'approved_volume' => round($approvedVolume, 2),
+            'chargeback_volume' => round($chargebackVolume, 2),
             'cb_rate_count' => $cbRateCount,
             'cb_rate_volume' => $cbRateVolume,
             'is_high_risk' => $cbRateCount >= $threshold || $cbRateVolume >= $threshold,
@@ -235,6 +242,10 @@ class BicAnalyticsService
 
     /**
      * Calculate final rates for totals.
+     * 
+     * KPIs (bank standard):
+     * - cb_rate_count: chargebacks / approved_count × 100
+     * - cb_rate_volume: chargeback_volume / approved_volume × 100
      */
     private function finalizeTotals(array &$totals, float $threshold): void
     {
@@ -242,14 +253,12 @@ class BicAnalyticsService
         $totals['approved_volume'] = round($totals['approved_volume'], 2);
         $totals['chargeback_volume'] = round($totals['chargeback_volume'], 2);
 
-        $everApproved = $totals['approved_count'] + $totals['chargeback_count'];
-        
-        $totals['cb_rate_count'] = $everApproved > 0
-            ? round(($totals['chargeback_count'] / $everApproved) * 100, 2)
+        $totals['cb_rate_count'] = $totals['approved_count'] > 0
+            ? round(($totals['chargeback_count'] / $totals['approved_count']) * 100, 2)
             : 0;
 
-        $totals['cb_rate_volume'] = $totals['total_volume'] > 0
-            ? round(($totals['chargeback_volume'] / $totals['total_volume']) * 100, 2)
+        $totals['cb_rate_volume'] = $totals['approved_volume'] > 0
+            ? round(($totals['chargeback_volume'] / $totals['approved_volume']) * 100, 2)
             : 0;
 
         $totals['is_high_risk'] = $totals['cb_rate_count'] >= $threshold || $totals['cb_rate_volume'] >= $threshold;
