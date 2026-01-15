@@ -8,9 +8,13 @@ use App\Models\BillingAttempt;
 use App\Models\Debtor;
 use App\Models\Upload;
 use App\Models\User;
+use Illuminate\Support\Str;
 
 class ChargebackSeeder extends Seeder
 {
+
+    private $chargeback_reason_codes = ['MS02', 'MD06', 'SL01', 'AM04'];
+
     /**
      * Run the database seeds.
      */
@@ -37,8 +41,8 @@ class ChargebackSeeder extends Seeder
                 'file_size' => 1024,
                 'mime_type' => 'text/csv',
                 'status' => Upload::STATUS_COMPLETED,
-                'total_records' => 6,
-                'processed_records' => 6,
+                'total_records' => 16,
+                'processed_records' => 16,
                 'failed_records' => 0,
                 'uploaded_by' => $user->id,
             ]
@@ -95,7 +99,15 @@ class ChargebackSeeder extends Seeder
             ],
         ];
 
+        $createdCount = 0;
+        
         foreach ($chargebacks as $index => $chargebackData) {
+            // Skip if billing attempt with this unique_id already exists
+            if (BillingAttempt::where('unique_id', $chargebackData['unique_id'])->exists()) {
+                $this->command->warn("Skipping existing chargeback: {$chargebackData['unique_id']}");
+                continue;
+            }
+
             // Create debtor
             $debtor = Debtor::create([
                 'upload_id' => $upload->id,
@@ -141,12 +153,32 @@ class ChargebackSeeder extends Seeder
                 ],
                 'processed_at' => now()->subDays(rand(30, 90)),
                 'emp_created_at' => now()->subDays(rand(30, 90)),
-                'chargeback_reason_code' => null, // Will be populated by the command
-                'chargeback_reason_description' => null,
-                'chargeback_reason_technical_message' => null,
+                'chargeback_reason_code' => null,
+                'chargeback_reason_description' => null
             ]);
+            
+            $createdCount++;
         }
 
-        $this->command->info('Created 6 billing attempts with chargebacks for testing.');
+        // Create 10 more chargeback billing attempts using factory
+        for ($i = 0; $i < 10; $i++) {
+            $debtor = Debtor::factory()->recovered()->create([
+                'upload_id' => $upload->id,
+            ]);
+
+            BillingAttempt::factory()->chargebacked()->create([
+                'debtor_id' => $debtor->id,
+                'upload_id' => $upload->id,
+                'chargeback_reason_code' => fake()->randomElement($this->chargeback_reason_codes),
+                'chargeback_reason_description' => fake()->sentence(),
+                'chargebacked_at' => now()->subDays(rand(1, 5)),
+                'processed_at' => now()->subDays(rand(30, 90)),
+                'emp_created_at' => now()->subDays(rand(30, 90)),
+            ]);
+            
+            $createdCount++;
+        }
+
+        $this->command->info("Created {$createdCount} billing attempts with chargebacks for testing.");
     }
 }

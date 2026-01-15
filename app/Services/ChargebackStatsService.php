@@ -147,14 +147,13 @@ class ChargebackStatsService
         $codes = DB::table('billing_attempts')
             ->where('created_at', '>=', $startDate)
             ->where('status', BillingAttempt::STATUS_CHARGEBACKED)
-            ->whereNotNull('error_code')
+            ->whereNotNull('chargeback_reason_code')
             ->select([
-                'error_message as chargeback_reason',
-                'error_code as chargeback_code',
+                'chargeback_reason_code as chargeback_code',
                 DB::raw('SUM(amount) as total_amount'),
                 DB::raw('COUNT(*) as occurrences')
             ])
-            ->groupBy('error_code', 'error_message')
+            ->groupBy('chargeback_reason_code')
             ->orderBy('total_amount', 'desc')
             ->get();
 
@@ -168,7 +167,6 @@ class ChargebackStatsService
         foreach ($codes as $row) {
             $result['codes'][] = [
                 'chargeback_code'   => $row->chargeback_code,
-                'chargeback_reason' => $row->chargeback_reason,
                 'total_amount'      => (float) $row->total_amount,
                 'occurrences'       => (int) $row->occurrences,
             ];
