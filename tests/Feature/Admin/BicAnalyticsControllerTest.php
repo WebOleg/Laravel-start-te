@@ -92,6 +92,11 @@ class BicAnalyticsControllerTest extends TestCase
             ->assertJsonPath('data.totals.total_transactions', 7);
     }
 
+    /**
+     * Test chargeback rate calculation.
+     * Formula: chargebacks / approved_count × 100
+     * 9 approved, 1 chargeback = 1/9 × 100 = 11.11%
+     */
     public function test_bic_analytics_calculates_chargeback_rate(): void
     {
         $upload = Upload::factory()->create();
@@ -124,9 +129,15 @@ class BicAnalyticsControllerTest extends TestCase
             ->assertJsonPath('data.bics.0.chargeback_count', 1);
 
         $data = $response->json('data.bics.0');
-        $this->assertEquals(10, $data['cb_rate_count']);
+        // Formula: chargebacks / approved = 1/9 × 100 = 11.11%
+        $this->assertEquals(11.11, $data['cb_rate_count']);
     }
 
+    /**
+     * Test high risk flagging.
+     * Formula: chargebacks / approved_count × 100
+     * 5 approved, 5 chargebacks = 5/5 × 100 = 100% (high risk threshold is 25%)
+     */
     public function test_bic_analytics_flags_high_risk_bics(): void
     {
         $upload = Upload::factory()->create();
@@ -159,7 +170,8 @@ class BicAnalyticsControllerTest extends TestCase
             ->assertJsonPath('data.high_risk_count', 1);
 
         $data = $response->json('data.bics.0');
-        $this->assertEquals(50, $data['cb_rate_count']);
+        // Formula: chargebacks / approved = 5/5 × 100 = 100%
+        $this->assertEquals(100, $data['cb_rate_count']);
     }
 
     public function test_bic_analytics_supports_period_filter(): void
@@ -265,6 +277,7 @@ class BicAnalyticsControllerTest extends TestCase
                     'chargeback_count',
                     'total_volume',
                     'cb_rate_count',
+                    'cb_rate_volume',
                     'is_high_risk',
                 ],
             ])
