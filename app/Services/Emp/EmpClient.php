@@ -178,6 +178,10 @@ class EmpClient
                 ->withBody($xml, 'application/xml')
                 ->post($url);
 
+            Log::debug('EMP response XML', [
+                'body' => $response->body(),
+            ]);
+
             $parsed = $this->parseResponse($response);
 
             Log::debug('EMP response', [
