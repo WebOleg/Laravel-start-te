@@ -15,7 +15,9 @@ class ChargebackCodeUpdateCommand extends Command
     protected $signature = 'emp:fetch-chargeback-codes
                             {unique-id? : Specific unique_id(s) to process}
                             {--all : Process all chargebacks with filled or empty reason codes}
-                            {--empty : Process all chargebacks missing reason codes}';
+                            {--empty : Process all chargebacks missing reason codes}
+                            {--chunk= : Limit the number of records to process (only for --all and --empty)}
+                            {--dry-run : Show what would be processed without making actual changes}';
 
     /**
      * The console command description.
@@ -37,14 +39,13 @@ class ChargebackCodeUpdateCommand extends Command
         $uniqueId = $this->argument('unique-id');
         $processAll = $this->option('all');
         $processEmptyReason = $this->option('empty');
+        $limit = $this->option('chunk');
+        $dryRun = $this->option('dry-run');
 
         // Ensure at least one option is provided
         if (!$uniqueId && !$processAll && !$processEmptyReason) {
             $this->error("Please provide at least one of the following options: {unique-id}, --all, --empty");
-            $this->info("Usage examples:");
-            $this->info("  php artisan emp:fetch-chargeback-codes {unique-id}");
-            $this->info("  php artisan emp:fetch-chargeback-codes --all");
-            $this->info("  php artisan emp:fetch-chargeback-codes --empty");
+            $this->info("Examples: emp:fetch-chargeback-codes {unique-id} | --all | --empty [--chunk=N] [--dry-run]");
             return Command::FAILURE;
         }
 
@@ -59,29 +60,54 @@ class ChargebackCodeUpdateCommand extends Command
             return Command::FAILURE;
         }
 
+        // Validate limit option
+        if ($limit !== null) {
+            if ($uniqueId) {
+                $this->error("Cannot use --chunk with unique-id argument");
+                return Command::FAILURE;
+            }
+
+            if (!is_numeric($limit) || $limit <= 0) {
+                $this->error("Chunk must be a positive number");
+                return Command::FAILURE;
+            }
+
+            $limit = (int) $limit;
+        }
+
+        if ($dryRun) {
+            $this->warn("DRY RUN MODE - No actual changes will be made");
+        }
+
         $this->info("Starting chargeback code update process...");
         
         // Process single unique ID
         if ($uniqueId) {
-            return $this->processChargebackByUniqueId($uniqueId);
+            return $this->processChargebackByUniqueId($uniqueId, $dryRun);
         }
 
         // Process bulk - all chargebacks
         if ($processAll) {
-            return $this->processBulkChargebacks(true);
+            return $this->processBulkChargebacks(true, $limit, $dryRun);
         }
 
         // Process bulk - empty reason codes only
         if ($processEmptyReason) {
-            return $this->processBulkChargebacks(false);
+            return $this->processBulkChargebacks(false, $limit, $dryRun);
         }
 
         return Command::SUCCESS;
     }
 
-    private function processChargebackByUniqueId(string $uniqueId): int
+    private function processChargebackByUniqueId(string $uniqueId, bool $dryRun = false): int
     {
         $this->info("Processing Unique ID: {$uniqueId}");
+        
+        if ($dryRun) {
+            $this->warn("[DRY RUN] Would process unique ID: {$uniqueId}");
+            return Command::SUCCESS;
+        }
+        
         $this->newLine();
         
         // Print table header
@@ -132,10 +158,13 @@ class ChargebackCodeUpdateCommand extends Command
         return Command::SUCCESS;
     }
 
-    private function processBulkChargebacks(bool $processAll): int
+    private function processBulkChargebacks(bool $processAll, ?int $limit = null, bool $dryRun = false): int
     {
         $type = $processAll ? 'all chargebacks' : 'chargebacks with empty reason codes';
-        $this->info("Processing {$type}...");
+        $limitText = $limit ? " (chunk: {$limit})" : '';
+        $dryRunText = $dryRun ? ' [DRY RUN MODE]' : '';
+        $this->info("Processing {$type}{$limitText}{$dryRunText}...");
+        
         $this->newLine();
         
         // Print table header
@@ -165,7 +194,7 @@ class ChargebackCodeUpdateCommand extends Command
                 $code,
                 $message
             ));
-        });
+        }, $limit, $dryRun);
         
         // Display summary
         $this->newLine();
@@ -180,6 +209,11 @@ class ChargebackCodeUpdateCommand extends Command
                 ['Failed', $results['failed']],
             ]
         );
+        
+        if ($dryRun) {
+            $this->newLine();
+            $this->warn("DRY RUN completed - No actual API calls or database updates were made");
+        }
         
         return $results['failed'] > 0 ? Command::FAILURE : Command::SUCCESS;
     }

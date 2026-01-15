@@ -26,6 +26,11 @@ class EmpChargebackService
     public function processChargebackDetail(string $uniqueId): array
     {
         try {
+            $billingAttempt = BillingAttempt::where('unique_id', $uniqueId)->first();
+            if (!$billingAttempt) {
+                return ['success' => false, 'error' => 'Request not sent, Chargeback not found'];
+            }
+
             $xml = $this->client->buildChargebackDetailXml($uniqueId);
             $response = $this->client->sendRequest('/chargebacks', $xml);
             
@@ -74,13 +79,19 @@ class EmpChargebackService
         }
     }
 
-    public function processBulkChargebackDetail(bool $isAll, ?callable $progressCallback = null): array
+    public function processBulkChargebackDetail(bool $isAll, ?callable $progressCallback = null, ?int $limit = null, bool $dryRun = false): array
     {
         $query = BillingAttempt::where('status', BillingAttempt::STATUS_CHARGEBACKED);
         if ($isAll === false) {
             $query = $query->whereNull('chargeback_reason_code');
         }
-        $uniqueIds = $query->pluck('unique_id')->toArray();
+        
+        // Apply limit if specified
+        if ($limit !== null && $limit > 0) {
+            $query = $query->limit($limit);
+        }
+        
+        $uniqueIds = $query->latest()->pluck('unique_id')->toArray();
         
         $results = [
             'total' => count($uniqueIds),
@@ -94,42 +105,62 @@ class EmpChargebackService
         
         foreach ($batches as $batchIndex => $batch) {
             foreach ($batch as $uniqueId) {
-                $result = $this->processChargebackDetail($uniqueId);
-                $results['processed']++;
-                
-                // Prepare detail entry for callback
-                $detailEntry = [
-                    'unique_id' => $uniqueId,
-                    'success' => $result['success']
-                ];
-                
-                if ($result['success']) {
+                // In dry-run mode, simulate processing without API calls
+                if ($dryRun) {
+                    $results['processed']++;
                     $results['successful']++;
-                    $detailEntry['code'] = $result['data']['reason_code'] ?? 'N/A';
-                    $detailEntry['message'] = $result['data']['reason_description'] ?? 'N/A';
+                    
+                    $detailEntry = [
+                        'unique_id' => $uniqueId,
+                        'success' => true,
+                        'code' => '[DRY RUN]',
+                        'message' => 'Would fetch and update chargeback details'
+                    ];
+                    
+                    if ($progressCallback) {
+                        $progressCallback($detailEntry);
+                    }
                 } else {
-                    $results['failed']++;
-                    $results['errors'][$uniqueId] = $result['error'] ?? 'Unknown error';
-                    $detailEntry['code'] = $result['code'] ?? 'N/A';
-                    $detailEntry['message'] = $result['error'] ?? 'Unknown error';
+                    // Normal processing
+                    $result = $this->processChargebackDetail($uniqueId);
+                    $results['processed']++;
+                    
+                    // Prepare detail entry for callback
+                    $detailEntry = [
+                        'unique_id' => $uniqueId,
+                        'success' => $result['success']
+                    ];
+                    
+                    if ($result['success']) {
+                        $results['successful']++;
+                        $detailEntry['code'] = $result['data']['reason_code'] ?? 'N/A';
+                        $detailEntry['message'] = $result['data']['reason_description'] ?? 'N/A';
+                    } else {
+                        $results['failed']++;
+                        $results['errors'][$uniqueId] = $result['error'] ?? 'Unknown error';
+                        $detailEntry['code'] = $result['code'] ?? 'N/A';
+                        $detailEntry['message'] = $result['error'] ?? 'Unknown error';
+                    }
+                    
+                    // Call progress callback immediately after processing each item
+                    if ($progressCallback) {
+                        $progressCallback($detailEntry);
+                    }
+                    
+                    // Rate limiting: sleep between requests
+                    usleep(self::RATE_LIMIT_DELAY_MS * 1000);
                 }
-                
-                // Call progress callback immediately after processing each item
-                if ($progressCallback) {
-                    $progressCallback($detailEntry);
-                }
-                
-                // Rate limiting: sleep between requests
-                usleep(self::RATE_LIMIT_DELAY_MS * 1000);
             }
             
-            Log::info('EMP Chargeback: Batch processed', [
-                'batch' => $batchIndex + 1,
-                'total_batches' => count($batches),
-                'processed' => $results['processed'],
-                'successful' => $results['successful'],
-                'failed' => $results['failed']
-            ]);
+            if (!$dryRun) {
+                Log::info('EMP Chargeback: Batch processed', [
+                    'batch' => $batchIndex + 1,
+                    'total_batches' => count($batches),
+                    'processed' => $results['processed'],
+                    'successful' => $results['successful'],
+                    'failed' => $results['failed']
+                ]);
+            }
         }
         
         return $results;
