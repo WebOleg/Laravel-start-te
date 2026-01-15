@@ -68,7 +68,7 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
             $rows = $parsed['rows'];
 
             if (count($rows) > self::BATCH_THRESHOLD) {
-                $this->processWithBatching($rows);
+                $this->processWithBatching($rows, $ibanValidator);
             } else {
                 $this->processDirectly($rows, $ibanValidator, $deduplicationService);
             }
@@ -144,9 +144,81 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
         ]);
     }
 
-    private function processWithBatching(array $rows): void
+    /**
+     * Deduplicate rows by IBAN before batching.
+     * Single pass O(n) with hash map - no DB queries.
+     *
+     * @return array{rows: array, duplicates: int}
+     */
+    private function deduplicateRows(array $rows, IbanValidator $ibanValidator): array
     {
-        $chunks = array_chunk($rows, self::CHUNK_SIZE);
+        $uniqueRows = [];
+        $seenHashes = [];
+        $duplicates = 0;
+
+        foreach ($rows as $row) {
+            $iban = null;
+            
+            // Find IBAN in row using column mapping
+            foreach ($row as $header => $value) {
+                if (isset($this->columnMapping[$header]) && $this->columnMapping[$header] === 'iban') {
+                    $iban = $value;
+                    break;
+                }
+            }
+
+            // If no IBAN or empty - keep row (will fail validation later)
+            if (empty($iban)) {
+                $uniqueRows[] = $row;
+                continue;
+            }
+
+            $normalized = $ibanValidator->normalize($iban);
+            $hash = $ibanValidator->hash($normalized);
+
+            if (isset($seenHashes[$hash])) {
+                $duplicates++;
+                continue;
+            }
+
+            $seenHashes[$hash] = true;
+            $uniqueRows[] = $row;
+        }
+
+        return [
+            'rows' => $uniqueRows,
+            'duplicates' => $duplicates,
+        ];
+    }
+
+    private function processWithBatching(array $rows, IbanValidator $ibanValidator): void
+    {
+        $totalRows = count($rows);
+
+        // Deduplicate before chunking - O(n), no DB queries
+        $deduped = $this->deduplicateRows($rows, $ibanValidator);
+        $uniqueRows = $deduped['rows'];
+        $duplicateCount = $deduped['duplicates'];
+
+        Log::info("ProcessUploadJob deduplication completed", [
+            'upload_id' => $this->upload->id,
+            'total_rows' => $totalRows,
+            'unique_rows' => count($uniqueRows),
+            'duplicates_removed' => $duplicateCount,
+        ]);
+
+        // Store duplicate count in meta
+        $this->upload->update([
+            'total_records' => $totalRows,
+            'meta' => array_merge($this->upload->meta ?? [], [
+                'skipped' => [
+                    'total' => $duplicateCount,
+                    'duplicates' => $duplicateCount,
+                ],
+            ]),
+        ]);
+
+        $chunks = array_chunk($uniqueRows, self::CHUNK_SIZE);
         $jobs = [];
 
         foreach ($chunks as $index => $chunk) {
@@ -189,7 +261,8 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
         Log::info("ProcessUploadJob dispatched batch", [
             'upload_id' => $this->upload->id,
             'chunks' => count($chunks),
-            'total_rows' => count($rows),
+            'total_rows' => $totalRows,
+            'unique_rows' => count($uniqueRows),
         ]);
     }
 
@@ -204,6 +277,7 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
         
         $skipped = [
             'total' => 0,
+            'duplicates' => 0,
             DeduplicationService::SKIP_BLACKLISTED => 0,
             DeduplicationService::SKIP_BLACKLISTED_NAME => 0,
             DeduplicationService::SKIP_BLACKLISTED_EMAIL => 0,
@@ -213,18 +287,43 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
         ];
         $skippedRows = [];
 
+        // Deduplicate within file first
+        $seenHashes = [];
         $debtorDataList = [];
+        $duplicateIndices = [];
+
         foreach ($rows as $index => $row) {
             $debtorData = $this->mapRowToDebtor($row);
             $this->normalizeIban($debtorData, $ibanValidator);
+            
+            $hash = $debtorData['iban_hash'] ?? null;
+            if ($hash && isset($seenHashes[$hash])) {
+                $duplicateIndices[$index] = true;
+                $skipped['total']++;
+                $skipped['duplicates']++;
+                continue;
+            }
+            
+            if ($hash) {
+                $seenHashes[$hash] = true;
+            }
+            
             $debtorDataList[$index] = $debtorData;
         }
 
         $dedupeResults = $deduplicationService->checkDebtorBatch($debtorDataList, $this->upload->id);
 
         foreach ($rows as $index => $row) {
+            // Skip duplicates within file
+            if (isset($duplicateIndices[$index])) {
+                continue;
+            }
+
             try {
-                $debtorData = $debtorDataList[$index];
+                $debtorData = $debtorDataList[$index] ?? null;
+                if (!$debtorData) {
+                    continue;
+                }
 
                 if (isset($dedupeResults[$index])) {
                     $skipInfo = $dedupeResults[$index];
@@ -273,6 +372,7 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
             'created' => $created,
             'failed' => $failed,
             'skipped' => $skipped['total'],
+            'duplicates' => $skipped['duplicates'],
         ]);
     }
 
