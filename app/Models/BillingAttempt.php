@@ -63,6 +63,9 @@ class BillingAttempt extends Model
         'emp_created_at',
         'last_reconciled_at',
         'reconciliation_attempts',
+        'chargeback_reason_code',
+        'chargeback_reason_description',
+        'chargebacked_at',
     ];
 
     protected $casts = [
@@ -75,6 +78,7 @@ class BillingAttempt extends Model
         'processed_at' => 'datetime',
         'emp_created_at' => 'datetime',
         'last_reconciled_at' => 'datetime',
+        'chargebacked_at' => 'datetime',
     ];
 
     protected $hidden = [

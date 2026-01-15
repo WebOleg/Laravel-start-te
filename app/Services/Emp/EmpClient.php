@@ -145,9 +145,20 @@ class EmpClient
     }
 
     /**
+     * Build XML for chargeback details request.
+     */
+    public function buildChargebackDetailXml(string $uniqueId): string
+    {
+        $xml = new \SimpleXMLElement('<?xml version="1.0" encoding="UTF-8"?><chargeback_request/>');
+        $xml->addChild('original_transaction_unique_id', $uniqueId);
+
+        return $xml->asXML();
+    }
+
+    /**
      * Send HTTP request to EMP API.
      */
-    private function sendRequest(string $path, string $xml): array
+    public function sendRequest(string $path, string $xml): array
     {
         $url = 'https://' . $this->endpoint . $path;
 
