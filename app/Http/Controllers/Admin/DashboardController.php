@@ -73,15 +73,9 @@ class DashboardController extends Controller
 
         if ($startDate && $endDate) {
             // Use emp_created_at (real EMP transaction date) with fallback to created_at
-            $billedQuery->where(function ($q) use ($startDate, $endDate) {
-                $q->whereBetween(DB::raw('COALESCE(emp_created_at, created_at)'), [$startDate, $endDate]);
-            });
-            $approvedQuery->where(function ($q) use ($startDate, $endDate) {
-                $q->whereBetween(DB::raw('COALESCE(emp_created_at, created_at)'), [$startDate, $endDate]);
-            });
-            $chargebackedQuery->where(function ($q) use ($startDate, $endDate) {
-                $q->whereBetween(DB::raw('COALESCE(emp_created_at, created_at)'), [$startDate, $endDate]);
-            });
+            $billedQuery->whereRaw('COALESCE(emp_created_at, created_at) BETWEEN ? AND ?', [$startDate, $endDate]);
+            $approvedQuery->whereRaw('COALESCE(emp_created_at, created_at) BETWEEN ? AND ?', [$startDate, $endDate]);
+            $chargebackedQuery->whereRaw('COALESCE(emp_created_at, created_at) BETWEEN ? AND ?', [$startDate, $endDate]);
         }
 
         $totalBilled = $billedQuery->sum('amount');
@@ -150,9 +144,7 @@ class DashboardController extends Controller
         // Base queries with date filter using emp_created_at
         $baseQuery = BillingAttempt::query();
         if ($startDate && $endDate) {
-            $baseQuery->where(function ($q) use ($startDate, $endDate) {
-                $q->whereBetween(DB::raw('COALESCE(emp_created_at, created_at)'), [$startDate, $endDate]);
-            });
+            $baseQuery->whereRaw('COALESCE(emp_created_at, created_at) BETWEEN ? AND ?', [$startDate, $endDate]);
         }
 
         $total = (clone $baseQuery)->count();
@@ -180,7 +172,7 @@ class DashboardController extends Controller
             'chargeback_rate' => $this->calculateRate($chargebacked, $successful + $chargebacked),
             'total_approved_amount' => round($totalAmount, 2),
             'total_chargeback_amount' => round($chargebackAmount, 2),
-            'today' => BillingAttempt::whereDate(DB::raw('COALESCE(emp_created_at, created_at)'), today())->count(),
+            'today' => BillingAttempt::whereRaw('DATE(COALESCE(emp_created_at, created_at)) = ?', [today()->toDateString()])->count(),
             'average_attempts_per_debtor' => round(
                 $total / max(Debtor::count(), 1),
                 2
@@ -197,7 +189,7 @@ class DashboardController extends Controller
                 ->get(),
             'recent_billing' => BillingAttempt::select('id', 'debtor_id', 'status', 'amount', 'emp_created_at', 'created_at')
                 ->with('debtor:id,first_name,last_name')
-                ->orderByDesc(DB::raw('COALESCE(emp_created_at, created_at)'))
+                ->orderByRaw('COALESCE(emp_created_at, created_at) DESC')
                 ->limit(5)
                 ->get(),
         ];
@@ -214,11 +206,11 @@ class DashboardController extends Controller
                 'date' => $date,
                 'uploads' => Upload::whereDate('created_at', $date)->count(),
                 'debtors' => Debtor::whereDate('created_at', $date)->count(),
-                'billing_attempts' => BillingAttempt::whereDate(DB::raw('COALESCE(emp_created_at, created_at)'), $date)->count(),
-                'successful_payments' => BillingAttempt::whereDate(DB::raw('COALESCE(emp_created_at, created_at)'), $date)
+                'billing_attempts' => BillingAttempt::whereRaw('DATE(COALESCE(emp_created_at, created_at)) = ?', [$date])->count(),
+                'successful_payments' => BillingAttempt::whereRaw('DATE(COALESCE(emp_created_at, created_at)) = ?', [$date])
                     ->where('status', BillingAttempt::STATUS_APPROVED)
                     ->count(),
-                'chargebacks' => BillingAttempt::whereDate(DB::raw('COALESCE(emp_created_at, created_at)'), $date)
+                'chargebacks' => BillingAttempt::whereRaw('DATE(COALESCE(emp_created_at, created_at)) = ?', [$date])
                     ->where('status', BillingAttempt::STATUS_CHARGEBACKED)
                     ->count(),
             ];
