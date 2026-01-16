@@ -25,7 +25,7 @@ class StatsController extends Controller
             'year' => 'nullable|integer|min:2020|max:2100',
         ]);
 
-        $period = $request->input('period', '7d');
+        $period = $request->input('period');
         $month = $request->input('month');
         $year = $request->input('year');
 
@@ -42,7 +42,7 @@ class StatsController extends Controller
             'year' => 'nullable|integer|min:2020|max:2100',
         ]);
 
-        $period = $request->input('period', '7d');
+        $period = $request->input('period');
         $month = $request->input('month');
         $year = $request->input('year');
 
@@ -59,7 +59,7 @@ class StatsController extends Controller
             'year' => 'nullable|integer|min:2020|max:2100',
         ]);
 
-        $period = $request->input('period', '7d');
+        $period = $request->input('period');
         $month = $request->input('month');
         $year = $request->input('year');
 

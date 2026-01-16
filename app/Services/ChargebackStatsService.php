@@ -9,7 +9,7 @@ use Illuminate\Support\Facades\DB;
 
 class ChargebackStatsService
 {
-    public function getStats(string $period = '7d', ?int $month = null, ?int $year = null): array
+    public function getStats(?string $period = null, ?int $month = null, ?int $year = null): array
     {
         $cacheKey = $this->getCacheKey('chargeback_stats', $period, $month, $year);
         $ttl = config('tether.chargeback.cache_ttl', 900);
@@ -17,7 +17,7 @@ class ChargebackStatsService
         return Cache::remember($cacheKey, $ttl, fn () => $this->calculateStats($period, $month, $year));
     }
 
-    public function calculateStats(string $period, ?int $month = null, ?int $year = null): array
+    public function calculateStats(?string $period, ?int $month = null, ?int $year = null): array
     {
         $dateFilter = $this->buildDateFilter($period, $month, $year);
         $threshold = config('tether.chargeback.alert_threshold', 25);
@@ -108,8 +108,8 @@ class ChargebackStatsService
         $totals['cb_alert_amount_approved'] = $totals['cb_rate_amount_approved'] >= $threshold;
 
         return [
-            'period' => $month && $year ? 'monthly' : $period,
-            'start_date' => $dateFilter['start']->toIso8601String(),
+            'period' => $month && $year ? 'monthly' : ($period ?? 'all-time'),
+            'start_date' => $dateFilter['start']?->toIso8601String(),
             'end_date' => $dateFilter['end']?->toIso8601String(),
             'month' => $month,
             'year' => $year,
@@ -119,13 +119,22 @@ class ChargebackStatsService
         ];
     }
 
-    private function buildDateFilter(string $period, ?int $month, ?int $year): array
+    private function buildDateFilter(?string $period, ?int $month, ?int $year): array
     {
         if ($month && $year) {
             return [
                 'start' => Carbon::create($year, $month, 1)->startOfMonth(),
                 'end' => Carbon::create($year, $month, 1)->endOfMonth(),
                 'type' => 'monthly',
+            ];
+        }
+
+        // If period is null, return all-time (no date filter)
+        if ($period === null) {
+            return [
+                'start' => null,
+                'end' => null,
+                'type' => 'all-time',
             ];
         }
 
@@ -144,12 +153,13 @@ class ChargebackStatsService
                 'COALESCE(billing_attempts.emp_created_at, billing_attempts.created_at) BETWEEN ? AND ?',
                 [$dateFilter['start'], $dateFilter['end']]
             );
-        } else {
+        } elseif ($dateFilter['type'] === 'period') {
             $query->whereRaw(
                 'COALESCE(billing_attempts.emp_created_at, billing_attempts.created_at) >= ?',
                 [$dateFilter['start']]
             );
         }
+        // For 'all-time', don't apply any date filter
     }
 
     private function getStartDate(string $period): Carbon
@@ -163,12 +173,12 @@ class ChargebackStatsService
         };
     }
 
-    private function getCacheKey(string $prefix, string $period, ?int $month, ?int $year): string
+    private function getCacheKey(string $prefix, ?string $period, ?int $month, ?int $year): string
     {
         if ($month && $year) {
             return "{$prefix}_monthly_{$year}_{$month}";
         }
-        return "{$prefix}_{$period}";
+        return "{$prefix}_" . ($period ?? 'all_time');
     }
 
     public function clearCache(): void
@@ -180,7 +190,7 @@ class ChargebackStatsService
         }
     }
 
-    public function getChargebackCodes(string $period, ?int $month = null, ?int $year = null): array
+    public function getChargebackCodes(?string $period, ?int $month = null, ?int $year = null): array
     {
         $cacheKey = $this->getCacheKey('chargeback_codes', $period, $month, $year);
         $ttl = config('tether.chargeback.cache_ttl', 900);
@@ -188,7 +198,7 @@ class ChargebackStatsService
         return Cache::remember($cacheKey, $ttl, fn () => $this->calculateChargebackCodes($period, $month, $year));
     }
 
-    public function calculateChargebackCodes(string $period, ?int $month = null, ?int $year = null): array
+    public function calculateChargebackCodes(?string $period, ?int $month = null, ?int $year = null): array
     {
         $dateFilter = $this->buildDateFilter($period, $month, $year);
 
@@ -209,8 +219,8 @@ class ChargebackStatsService
             ->get();
 
         $result = [
-            'period' => $month && $year ? 'monthly' : $period,
-            'start_date' => $dateFilter['start']->toIso8601String(),
+            'period' => $month && $year ? 'monthly' : ($period ?? 'all-time'),
+            'start_date' => $dateFilter['start']?->toIso8601String(),
             'end_date' => $dateFilter['end']?->toIso8601String(),
             'month' => $month,
             'year' => $year,
@@ -231,7 +241,7 @@ class ChargebackStatsService
         return $result;
     }
 
-    public function getChargebackBanks(string $period, ?int $month = null, ?int $year = null): array
+    public function getChargebackBanks(?string $period, ?int $month = null, ?int $year = null): array
     {
         $cacheKey = $this->getCacheKey('chargeback_banks', $period, $month, $year);
         $ttl = config('tether.chargeback.cache_ttl', 900);
@@ -239,7 +249,7 @@ class ChargebackStatsService
         return Cache::remember($cacheKey, $ttl, fn () => $this->calculateChargebackBanks($period, $month, $year));
     }
 
-    public function calculateChargebackBanks(string $period, ?int $month = null, ?int $year = null): array
+    public function calculateChargebackBanks(?string $period, ?int $month = null, ?int $year = null): array
     {
         $dateFilter = $this->buildDateFilter($period, $month, $year);
         $threshold = config('tether.chargeback.alert_threshold', 25);
@@ -263,8 +273,8 @@ class ChargebackStatsService
             ->get();
 
         $result = [
-            'period' => $month && $year ? 'monthly' : $period,
-            'start_date' => $dateFilter['start']->toIso8601String(),
+            'period' => $month && $year ? 'monthly' : ($period ?? 'all-time'),
+            'start_date' => $dateFilter['start']?->toIso8601String(),
             'end_date' => $dateFilter['end']?->toIso8601String(),
             'month' => $month,
             'year' => $year,
