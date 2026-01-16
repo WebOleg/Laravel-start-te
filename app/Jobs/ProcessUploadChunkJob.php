@@ -16,6 +16,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 class ProcessUploadChunkJob implements ShouldQueue
@@ -50,7 +51,7 @@ class ProcessUploadChunkJob implements ShouldQueue
 
         $created = 0;
         $failed = 0;
-        $skippedCount = 0;
+        $skippedByReason = [];
         $errors = [];
 
         $debtorDataList = [];
@@ -67,11 +68,12 @@ class ProcessUploadChunkJob implements ShouldQueue
                 $debtorData = $debtorDataList[$index];
 
                 if (isset($dedupeResults[$index])) {
-                    $skippedCount++;
+                    $reason = $dedupeResults[$index]['reason'];
+                    $skippedByReason[$reason] = ($skippedByReason[$reason] ?? 0) + 1;
                     Log::debug("Row skipped due to deduplication", [
                         'upload_id' => $this->upload->id,
                         'row' => $this->startRow + $index + 1,
-                        'reason' => $dedupeResults[$index]['reason'],
+                        'reason' => $reason,
                     ]);
                     continue;
                 }
@@ -96,38 +98,66 @@ class ProcessUploadChunkJob implements ShouldQueue
             }
         }
 
-        $this->updateUploadProgress($created, $failed, $skippedCount, $errors);
+        $skippedTotal = array_sum($skippedByReason);
+        $this->updateUploadProgressAtomic($created, $failed, $skippedTotal, $skippedByReason, $errors);
 
         Log::info("ProcessUploadChunkJob completed", [
             'upload_id' => $this->upload->id,
             'chunk' => $this->chunkIndex,
             'created' => $created,
             'failed' => $failed,
-            'skipped' => $skippedCount,
+            'skipped' => $skippedTotal,
+            'skipped_by_reason' => $skippedByReason,
         ]);
     }
 
-    private function updateUploadProgress(int $created, int $failed, int $skipped, array $errors): void
+    private function updateUploadProgressAtomic(int $created, int $failed, int $skipped, array $skippedByReason, array $errors): void
     {
         $this->upload->increment('processed_records', $created);
         $this->upload->increment('failed_records', $failed);
 
-        $existingMeta = $this->upload->meta ?? [];
-        
-        $existingSkipped = $existingMeta['skipped'] ?? ['total' => 0];
-        $existingSkipped['total'] = ($existingSkipped['total'] ?? 0) + $skipped;
-
-        $updates = ['skipped' => $existingSkipped];
+        DB::statement("
+            UPDATE uploads 
+            SET meta = jsonb_set(
+                COALESCE(meta, '{}'::jsonb),
+                '{skipped}',
+                jsonb_build_object(
+                    'total', COALESCE((meta->'skipped'->>'total')::int, 0) + ?,
+                    'blacklisted', COALESCE((meta->'skipped'->>'blacklisted')::int, 0) + ?,
+                    'blacklisted_name', COALESCE((meta->'skipped'->>'blacklisted_name')::int, 0) + ?,
+                    'blacklisted_email', COALESCE((meta->'skipped'->>'blacklisted_email')::int, 0) + ?,
+                    'blacklisted_bic', COALESCE((meta->'skipped'->>'blacklisted_bic')::int, 0) + ?,
+                    'chargebacked', COALESCE((meta->'skipped'->>'chargebacked')::int, 0) + ?,
+                    'already_recovered', COALESCE((meta->'skipped'->>'already_recovered')::int, 0) + ?,
+                    'recently_attempted', COALESCE((meta->'skipped'->>'recently_attempted')::int, 0) + ?,
+                    'duplicates', COALESCE((meta->'skipped'->>'duplicates')::int, 0)
+                )
+            )
+            WHERE id = ?
+        ", [
+            $skipped,
+            $skippedByReason[DeduplicationService::SKIP_BLACKLISTED] ?? 0,
+            $skippedByReason[DeduplicationService::SKIP_BLACKLISTED_NAME] ?? 0,
+            $skippedByReason[DeduplicationService::SKIP_BLACKLISTED_EMAIL] ?? 0,
+            $skippedByReason[DeduplicationService::SKIP_BLACKLISTED_BIC] ?? 0,
+            $skippedByReason[DeduplicationService::SKIP_CHARGEBACKED] ?? 0,
+            $skippedByReason[DeduplicationService::SKIP_RECOVERED] ?? 0,
+            $skippedByReason[DeduplicationService::SKIP_RECENTLY_ATTEMPTED] ?? 0,
+            $this->upload->id,
+        ]);
 
         if (!empty($errors)) {
+            $this->upload->refresh();
+            $existingMeta = $this->upload->meta ?? [];
             $existingErrors = $existingMeta['errors'] ?? [];
-            $mergedErrors = array_merge($existingErrors, $errors);
-            $updates['errors'] = array_slice($mergedErrors, 0, 100);
+            $mergedErrors = array_slice(array_merge($existingErrors, $errors), 0, 100);
+            
+            DB::table('uploads')
+                ->where('id', $this->upload->id)
+                ->update([
+                    'meta' => DB::raw("jsonb_set(COALESCE(meta, '{}'::jsonb), '{errors}', '" . json_encode($mergedErrors) . "'::jsonb)")
+                ]);
         }
-
-        $this->upload->update([
-            'meta' => array_merge($existingMeta, $updates),
-        ]);
     }
 
     private function mapRowToDebtor(array $row): array
