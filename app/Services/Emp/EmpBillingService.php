@@ -2,7 +2,6 @@
 
 /**
  * Service for processing SEPA Direct Debit billing through emerchantpay.
- * Handles single and batch billing with rate limiting and retry logic.
  */
 
 namespace App\Services\Emp;
@@ -50,7 +49,6 @@ class EmpBillingService
             'request_payload' => $this->buildRequestPayload($debtor, $transactionId, $notificationUrl),
         ]);
 
-        // Set debtor to pending when billing starts
         $debtor->update(['status' => Debtor::STATUS_PENDING]);
 
         $response = $this->client->sddSale($billingAttempt->request_payload);
@@ -246,11 +244,8 @@ class EmpBillingService
             ]),
         ];
         
-        // Set chargebacked_at from EMP timestamp when status becomes chargebacked
         if ($status === BillingAttempt::STATUS_CHARGEBACKED && !$billingAttempt->chargebacked_at) {
-            $updateData['chargebacked_at'] = isset($response['timestamp']) 
-                ? Carbon::parse($response['timestamp']) 
-                : now();
+            $updateData['chargebacked_at'] = now();
         }
         
         $billingAttempt->update($updateData);
