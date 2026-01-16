@@ -13,6 +13,7 @@ use App\Models\Upload;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use Carbon\Carbon;
 
 class EmpBillingService
 {
@@ -228,8 +229,8 @@ class EmpBillingService
     private function updateBillingAttempt(BillingAttempt $billingAttempt, array $response): void
     {
         $status = $this->mapEmpStatus($response['status'] ?? 'error');
-
-        $billingAttempt->update([
+        
+        $updateData = [
             'unique_id' => $response['unique_id'] ?? null,
             'status' => $status,
             'bic' => $response['bank_identifier_code'] ?? $billingAttempt->bic,
@@ -238,12 +239,21 @@ class EmpBillingService
             'technical_message' => $response['technical_message'] ?? null,
             'response_payload' => $response,
             'processed_at' => now(),
-            'emp_created_at' => isset($response['timestamp']) ? \Carbon\Carbon::parse($response['timestamp']) : null,
+            'emp_created_at' => isset($response['timestamp']) ? Carbon::parse($response['timestamp']) : null,
             'meta' => array_merge($billingAttempt->meta ?? [], [
                 'redirect_url' => $response['redirect_url'] ?? null,
                 'descriptor' => $response['descriptor'] ?? null,
             ]),
-        ]);
+        ];
+        
+        // Set chargebacked_at from EMP timestamp when status becomes chargebacked
+        if ($status === BillingAttempt::STATUS_CHARGEBACKED && !$billingAttempt->chargebacked_at) {
+            $updateData['chargebacked_at'] = isset($response['timestamp']) 
+                ? Carbon::parse($response['timestamp']) 
+                : now();
+        }
+        
+        $billingAttempt->update($updateData);
 
         Log::info('Billing attempt processed', [
             'billing_attempt_id' => $billingAttempt->id,
