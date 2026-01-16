@@ -19,27 +19,51 @@ class StatsController extends Controller
 
     public function chargebackRates(Request $request): JsonResponse
     {
-        $period = $request->input('period', '7d');
+        $request->validate([
+            'period' => 'nullable|string|in:24h,7d,30d,90d',
+            'month' => 'nullable|integer|min:1|max:12',
+            'year' => 'nullable|integer|min:2020|max:2100',
+        ]);
 
-        $stats = $this->chargebackStatsService->getStats($period);
+        $period = $request->input('period', '7d');
+        $month = $request->input('month');
+        $year = $request->input('year');
+
+        $stats = $this->chargebackStatsService->getStats($period, $month, $year);
 
         return response()->json(['data' => $stats]);
     }
 
     public function chargebackCodes(Request $request): JsonResponse
     {
-        $period = $request->input('period', '7d');
+        $request->validate([
+            'period' => 'nullable|string|in:24h,7d,30d,90d',
+            'month' => 'nullable|integer|min:1|max:12',
+            'year' => 'nullable|integer|min:2020|max:2100',
+        ]);
 
-        $codes = $this->chargebackStatsService->getChargebackCodes($period);
+        $period = $request->input('period', '7d');
+        $month = $request->input('month');
+        $year = $request->input('year');
+
+        $codes = $this->chargebackStatsService->getChargebackCodes($period, $month, $year);
 
         return response()->json(['data' => $codes]);
     }
 
     public function chargebackBanks(Request $request): JsonResponse
     {
-        $period = $request->input('period', '7d');
+        $request->validate([
+            'period' => 'nullable|string|in:24h,7d,30d,90d',
+            'month' => 'nullable|integer|min:1|max:12',
+            'year' => 'nullable|integer|min:2020|max:2100',
+        ]);
 
-        $banks = $this->chargebackStatsService->getChargebackBanks($period);
+        $period = $request->input('period', '7d');
+        $month = $request->input('month');
+        $year = $request->input('year');
+
+        $banks = $this->chargebackStatsService->getChargebackBanks($period, $month, $year);
 
         return response()->json(['data' => $banks]);
     }
