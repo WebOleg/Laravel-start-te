@@ -129,8 +129,10 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
         $currentMeta = $billingAttempt->meta ?? [];
         $currentMeta['chargeback'] = $chargebackMeta;
 
+        // Webhook arrives in real-time, so now() is accurate for chargeback date
         $billingAttempt->update([
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'chargebacked_at' => now(),
             'error_code' => $errorCode,
             'error_message' => $chargebackMeta['reason'],
             'meta' => $currentMeta,
@@ -231,7 +233,15 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
 
         if ($mappedStatus && $billingAttempt->status !== $mappedStatus) {
             $oldStatus = $billingAttempt->status;
-            $billingAttempt->update(['status' => $mappedStatus]);
+            
+            $updateData = ['status' => $mappedStatus];
+            
+            // Set chargebacked_at when status becomes chargebacked
+            if ($mappedStatus === BillingAttempt::STATUS_CHARGEBACKED && !$billingAttempt->chargebacked_at) {
+                $updateData['chargebacked_at'] = now();
+            }
+            
+            $billingAttempt->update($updateData);
             
             Log::info('SDD transaction status updated', [
                 'billing_attempt_id' => $billingAttempt->id,

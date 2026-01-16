@@ -239,7 +239,7 @@ class EmpBillingService
             'technical_message' => $response['technical_message'] ?? null,
             'response_payload' => $response,
             'processed_at' => now(),
-            'emp_created_at' => isset($response['timestamp']) ? Carbon::parse($response['timestamp']) : null,
+            'emp_created_at' => $billingAttempt->emp_created_at ?? (isset($response['timestamp']) ? Carbon::parse($response['timestamp']) : null),
             'meta' => array_merge($billingAttempt->meta ?? [], [
                 'redirect_url' => $response['redirect_url'] ?? null,
                 'descriptor' => $response['descriptor'] ?? null,
