@@ -243,7 +243,7 @@ class ChargebackStatsTest extends TestCase
             ]);
 
         $data = $response->json('data');
-        $this->assertEquals('all-time', $data['period']);
+        $this->assertEquals('7d', $data['period']);
         $this->assertNotEmpty($data['banks']);
         $this->assertGreaterThan(0, $data['totals']['chargebacks']);
     }
@@ -663,7 +663,7 @@ class ChargebackStatsTest extends TestCase
             ->getJson('/api/admin/stats/chargeback-codes');
 
         $response->assertOk();
-        $this->assertEquals('all-time', $response->json('data.period'));
+        $this->assertEquals('7d', $response->json('data.period'));
     }
 
     public function test_chargeback_codes_with_24h_period(): void

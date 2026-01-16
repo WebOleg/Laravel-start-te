@@ -23,13 +23,15 @@ class StatsController extends Controller
             'period' => 'nullable|string|in:24h,7d,30d,90d',
             'month' => 'nullable|integer|min:1|max:12',
             'year' => 'nullable|integer|min:2020|max:2100',
+            'date_mode' => 'nullable|string|in:transaction,chargeback',
         ]);
 
         $period = $request->input('period');
         $month = $request->input('month');
         $year = $request->input('year');
+        $dateMode = $request->input('date_mode', ChargebackStatsService::DATE_MODE_TRANSACTION);
 
-        $stats = $this->chargebackStatsService->getStats($period, $month, $year);
+        $stats = $this->chargebackStatsService->getStats($period, $month, $year, $dateMode);
 
         return response()->json(['data' => $stats]);
     }
@@ -40,13 +42,15 @@ class StatsController extends Controller
             'period' => 'nullable|string|in:24h,7d,30d,90d',
             'month' => 'nullable|integer|min:1|max:12',
             'year' => 'nullable|integer|min:2020|max:2100',
+            'date_mode' => 'nullable|string|in:transaction,chargeback',
         ]);
 
         $period = $request->input('period');
         $month = $request->input('month');
         $year = $request->input('year');
+        $dateMode = $request->input('date_mode', ChargebackStatsService::DATE_MODE_TRANSACTION);
 
-        $codes = $this->chargebackStatsService->getChargebackCodes($period, $month, $year);
+        $codes = $this->chargebackStatsService->getChargebackCodes($period, $month, $year, $dateMode);
 
         return response()->json(['data' => $codes]);
     }
@@ -57,13 +61,15 @@ class StatsController extends Controller
             'period' => 'nullable|string|in:24h,7d,30d,90d',
             'month' => 'nullable|integer|min:1|max:12',
             'year' => 'nullable|integer|min:2020|max:2100',
+            'date_mode' => 'nullable|string|in:transaction,chargeback',
         ]);
 
         $period = $request->input('period');
         $month = $request->input('month');
         $year = $request->input('year');
+        $dateMode = $request->input('date_mode', ChargebackStatsService::DATE_MODE_TRANSACTION);
 
-        $banks = $this->chargebackStatsService->getChargebackBanks($period, $month, $year);
+        $banks = $this->chargebackStatsService->getChargebackBanks($period, $month, $year, $dateMode);
 
         return response()->json(['data' => $banks]);
     }

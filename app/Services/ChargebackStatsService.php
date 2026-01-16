@@ -9,17 +9,22 @@ use Illuminate\Support\Facades\DB;
 
 class ChargebackStatsService
 {
-    public function getStats(?string $period = null, ?int $month = null, ?int $year = null): array
+    public const DATE_MODE_TRANSACTION = 'transaction';
+    public const DATE_MODE_CHARGEBACK = 'chargeback';
+
+    public function getStats(?string $period = null, ?int $month = null, ?int $year = null, string $dateMode = self::DATE_MODE_TRANSACTION): array
     {
-        $cacheKey = $this->getCacheKey('chargeback_stats', $period, $month, $year);
+        $period = $period ?? '7d';
+        $cacheKey = $this->getCacheKey('chargeback_stats', $period, $month, $year, $dateMode);
         $ttl = config('tether.chargeback.cache_ttl', 900);
 
-        return Cache::remember($cacheKey, $ttl, fn () => $this->calculateStats($period, $month, $year));
+        return Cache::remember($cacheKey, $ttl, fn () => $this->calculateStats($period, $month, $year, $dateMode));
     }
 
-    public function calculateStats(?string $period, ?int $month = null, ?int $year = null): array
+    public function calculateStats(?string $period, ?int $month = null, ?int $year = null, string $dateMode = self::DATE_MODE_TRANSACTION): array
     {
-        $dateFilter = $this->buildDateFilter($period, $month, $year);
+        $period = $period ?? '7d';
+        $dateFilter = $this->buildDateFilter($period, $month, $year, $dateMode);
         $threshold = config('tether.chargeback.alert_threshold', 25);
 
         $query = DB::table('billing_attempts')
@@ -108,33 +113,28 @@ class ChargebackStatsService
         $totals['cb_alert_amount_approved'] = $totals['cb_rate_amount_approved'] >= $threshold;
 
         return [
-            'period' => $month && $year ? 'monthly' : ($period ?? 'all-time'),
-            'start_date' => $dateFilter['start']?->toIso8601String(),
+            'period' => $month && $year ? 'monthly' : $period,
+            'start_date' => $dateFilter['start']->toIso8601String(),
             'end_date' => $dateFilter['end']?->toIso8601String(),
             'month' => $month,
             'year' => $year,
+            'date_mode' => $dateMode,
             'threshold' => $threshold,
             'countries' => $countries,
             'totals' => $totals,
         ];
     }
 
-    private function buildDateFilter(?string $period, ?int $month, ?int $year): array
+    private function buildDateFilter(?string $period, ?int $month, ?int $year, string $dateMode = self::DATE_MODE_TRANSACTION): array
     {
+        $period = $period ?? '7d';
+        
         if ($month && $year) {
             return [
                 'start' => Carbon::create($year, $month, 1)->startOfMonth(),
                 'end' => Carbon::create($year, $month, 1)->endOfMonth(),
                 'type' => 'monthly',
-            ];
-        }
-
-        // If period is null, return all-time (no date filter)
-        if ($period === null) {
-            return [
-                'start' => null,
-                'end' => null,
-                'type' => 'all-time',
+                'date_mode' => $dateMode,
             ];
         }
 
@@ -142,24 +142,34 @@ class ChargebackStatsService
             'start' => $this->getStartDate($period),
             'end' => null,
             'type' => 'period',
+            'date_mode' => $dateMode,
         ];
     }
 
     private function applyDateFilter($query, array $dateFilter): void
     {
-        // Use emp_created_at (real EMP transaction date) with fallback to created_at
+        $dateMode = $dateFilter['date_mode'] ?? self::DATE_MODE_TRANSACTION;
+        
+        // Choose date column based on mode
+        if ($dateMode === self::DATE_MODE_CHARGEBACK) {
+            // Filter by chargeback date - only chargebacked transactions have this date
+            $dateColumn = 'billing_attempts.chargebacked_at';
+        } else {
+            // Filter by transaction date (default) - use emp_created_at with fallback
+            $dateColumn = 'COALESCE(billing_attempts.emp_created_at, billing_attempts.created_at)';
+        }
+        
         if ($dateFilter['type'] === 'monthly') {
             $query->whereRaw(
-                'COALESCE(billing_attempts.emp_created_at, billing_attempts.created_at) BETWEEN ? AND ?',
+                "{$dateColumn} BETWEEN ? AND ?",
                 [$dateFilter['start'], $dateFilter['end']]
             );
-        } elseif ($dateFilter['type'] === 'period') {
+        } else {
             $query->whereRaw(
-                'COALESCE(billing_attempts.emp_created_at, billing_attempts.created_at) >= ?',
+                "{$dateColumn} >= ?",
                 [$dateFilter['start']]
             );
         }
-        // For 'all-time', don't apply any date filter
     }
 
     private function getStartDate(string $period): Carbon
@@ -173,34 +183,39 @@ class ChargebackStatsService
         };
     }
 
-    private function getCacheKey(string $prefix, ?string $period, ?int $month, ?int $year): string
+    private function getCacheKey(string $prefix, string $period, ?int $month, ?int $year, string $dateMode = self::DATE_MODE_TRANSACTION): string
     {
+        $modeSuffix = $dateMode === self::DATE_MODE_CHARGEBACK ? '_cb' : '_tx';
         if ($month && $year) {
-            return "{$prefix}_monthly_{$year}_{$month}";
+            return "{$prefix}_monthly_{$year}_{$month}{$modeSuffix}";
         }
-        return "{$prefix}_" . ($period ?? 'all_time');
+        return "{$prefix}_{$period}{$modeSuffix}";
     }
 
     public function clearCache(): void
     {
         foreach (['24h', '7d', '30d', '90d'] as $period) {
-            Cache::forget("chargeback_stats_{$period}");
-            Cache::forget("chargeback_codes_{$period}");
-            Cache::forget("chargeback_banks_{$period}");
+            foreach (['_tx', '_cb'] as $modeSuffix) {
+                Cache::forget("chargeback_stats_{$period}{$modeSuffix}");
+                Cache::forget("chargeback_codes_{$period}{$modeSuffix}");
+                Cache::forget("chargeback_banks_{$period}{$modeSuffix}");
+            }
         }
     }
 
-    public function getChargebackCodes(?string $period, ?int $month = null, ?int $year = null): array
+    public function getChargebackCodes(?string $period = null, ?int $month = null, ?int $year = null, string $dateMode = self::DATE_MODE_TRANSACTION): array
     {
-        $cacheKey = $this->getCacheKey('chargeback_codes', $period, $month, $year);
+        $period = $period ?? '7d';
+        $cacheKey = $this->getCacheKey('chargeback_codes', $period, $month, $year, $dateMode);
         $ttl = config('tether.chargeback.cache_ttl', 900);
 
-        return Cache::remember($cacheKey, $ttl, fn () => $this->calculateChargebackCodes($period, $month, $year));
+        return Cache::remember($cacheKey, $ttl, fn () => $this->calculateChargebackCodes($period, $month, $year, $dateMode));
     }
 
-    public function calculateChargebackCodes(?string $period, ?int $month = null, ?int $year = null): array
+    public function calculateChargebackCodes(?string $period, ?int $month = null, ?int $year = null, string $dateMode = self::DATE_MODE_TRANSACTION): array
     {
-        $dateFilter = $this->buildDateFilter($period, $month, $year);
+        $period = $period ?? '7d';
+        $dateFilter = $this->buildDateFilter($period, $month, $year, $dateMode);
 
         $query = DB::table('billing_attempts')
             ->where('status', BillingAttempt::STATUS_CHARGEBACKED)
@@ -219,11 +234,12 @@ class ChargebackStatsService
             ->get();
 
         $result = [
-            'period' => $month && $year ? 'monthly' : ($period ?? 'all-time'),
-            'start_date' => $dateFilter['start']?->toIso8601String(),
+            'period' => $month && $year ? 'monthly' : $period,
+            'start_date' => $dateFilter['start']->toIso8601String(),
             'end_date' => $dateFilter['end']?->toIso8601String(),
             'month' => $month,
             'year' => $year,
+            'date_mode' => $dateMode,
             'codes' => [],
             'totals' => ['total_amount' => 0, 'occurrences' => 0],
         ];
@@ -241,17 +257,19 @@ class ChargebackStatsService
         return $result;
     }
 
-    public function getChargebackBanks(?string $period, ?int $month = null, ?int $year = null): array
+    public function getChargebackBanks(?string $period = null, ?int $month = null, ?int $year = null, string $dateMode = self::DATE_MODE_TRANSACTION): array
     {
-        $cacheKey = $this->getCacheKey('chargeback_banks', $period, $month, $year);
+        $period = $period ?? '7d';
+        $cacheKey = $this->getCacheKey('chargeback_banks', $period, $month, $year, $dateMode);
         $ttl = config('tether.chargeback.cache_ttl', 900);
 
-        return Cache::remember($cacheKey, $ttl, fn () => $this->calculateChargebackBanks($period, $month, $year));
+        return Cache::remember($cacheKey, $ttl, fn () => $this->calculateChargebackBanks($period, $month, $year, $dateMode));
     }
 
-    public function calculateChargebackBanks(?string $period, ?int $month = null, ?int $year = null): array
+    public function calculateChargebackBanks(?string $period, ?int $month = null, ?int $year = null, string $dateMode = self::DATE_MODE_TRANSACTION): array
     {
-        $dateFilter = $this->buildDateFilter($period, $month, $year);
+        $period = $period ?? '7d';
+        $dateFilter = $this->buildDateFilter($period, $month, $year, $dateMode);
         $threshold = config('tether.chargeback.alert_threshold', 25);
 
         $query = DB::table('billing_attempts')
@@ -273,11 +291,12 @@ class ChargebackStatsService
             ->get();
 
         $result = [
-            'period' => $month && $year ? 'monthly' : ($period ?? 'all-time'),
-            'start_date' => $dateFilter['start']?->toIso8601String(),
+            'period' => $month && $year ? 'monthly' : $period,
+            'start_date' => $dateFilter['start']->toIso8601String(),
             'end_date' => $dateFilter['end']?->toIso8601String(),
             'month' => $month,
             'year' => $year,
+            'date_mode' => $dateMode,
             'banks' => [],
             'totals' => [
                 'total' => 0,
