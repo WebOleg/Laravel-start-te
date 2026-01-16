@@ -93,6 +93,7 @@ class EmpClient
 
     /**
      * Build XML for SDD Sale transaction.
+     * Note: customer_email intentionally not sent to EMP for privacy reasons.
      */
     private function buildSddSaleXml(array $data): string
     {
@@ -120,10 +121,6 @@ class EmpClient
             $xml->addChild('return_success_url', $data['return_success_url']);
             $xml->addChild('return_failure_url', $data['return_failure_url'] ?? $data['return_success_url']);
             $xml->addChild('return_cancel_url', $data['return_cancel_url'] ?? $data['return_success_url']);
-        }
-        
-        if (!empty($data['email'])) {
-            $xml->addChild('customer_email', $data['email']);
         }
         
         $billing = $xml->addChild('billing_address');
