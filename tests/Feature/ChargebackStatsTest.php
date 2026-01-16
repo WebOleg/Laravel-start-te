@@ -675,7 +675,7 @@ class ChargebackStatsTest extends TestCase
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'error_code' => 'CB001',
+            'chargeback_reason_code' => 'CB001',
             'created_at' => now()->subHours(2),
         ]);
 
@@ -683,7 +683,7 @@ class ChargebackStatsTest extends TestCase
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'error_code' => 'CB002',
+            'chargeback_reason_code' => 'CB002',
             'created_at' => now()->subDays(5),
         ]);
 
@@ -708,7 +708,7 @@ class ChargebackStatsTest extends TestCase
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'error_code' => 'CB001',
+            'chargeback_reason_code' => 'CB001',
             'created_at' => now()->subHours(2),
         ]);
 
@@ -716,7 +716,7 @@ class ChargebackStatsTest extends TestCase
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'error_code' => 'CB002',
+            'chargeback_reason_code' => 'CB002',
             'created_at' => now()->subDays(5),
         ]);
 
@@ -724,7 +724,7 @@ class ChargebackStatsTest extends TestCase
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'error_code' => 'CB003',
+            'chargeback_reason_code' => 'CB003',
             'created_at' => now()->subDays(15),
         ]);
 
@@ -750,7 +750,7 @@ class ChargebackStatsTest extends TestCase
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'error_code' => 'CB001',
+            'chargeback_reason_code' => 'CB001',
             'created_at' => now()->subHours(2),
         ]);
 
@@ -758,7 +758,7 @@ class ChargebackStatsTest extends TestCase
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'error_code' => 'CB002',
+            'chargeback_reason_code' => 'CB002',
             'created_at' => now()->subDays(5),
         ]);
 
@@ -766,7 +766,7 @@ class ChargebackStatsTest extends TestCase
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'error_code' => 'CB003',
+            'chargeback_reason_code' => 'CB003',
             'created_at' => now()->subDays(15),
         ]);
 
@@ -774,7 +774,7 @@ class ChargebackStatsTest extends TestCase
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'error_code' => 'CB004',
+            'chargeback_reason_code' => 'CB004',
             'created_at' => now()->subDays(45),
         ]);
 
@@ -801,7 +801,7 @@ class ChargebackStatsTest extends TestCase
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'error_code' => 'CB001',
+            'chargeback_reason_code' => 'CB001',
             'created_at' => now()->subHours(2),
         ]);
 
@@ -809,7 +809,7 @@ class ChargebackStatsTest extends TestCase
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'error_code' => 'CB002',
+            'chargeback_reason_code' => 'CB002',
             'created_at' => now()->subDays(5),
         ]);
 
@@ -817,7 +817,7 @@ class ChargebackStatsTest extends TestCase
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'error_code' => 'CB003',
+            'chargeback_reason_code' => 'CB003',
             'created_at' => now()->subDays(15),
         ]);
 
@@ -825,7 +825,7 @@ class ChargebackStatsTest extends TestCase
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'error_code' => 'CB004',
+            'chargeback_reason_code' => 'CB004',
             'created_at' => now()->subDays(45),
         ]);
 
@@ -833,7 +833,7 @@ class ChargebackStatsTest extends TestCase
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'error_code' => 'CB005',
+            'chargeback_reason_code' => 'CB005',
             'created_at' => now()->subDays(120),
         ]);
 
@@ -871,8 +871,8 @@ class ChargebackStatsTest extends TestCase
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'error_code' => 'CB001',
-            'error_message' => 'Fraud',
+            'chargeback_reason_code' => 'CB001',
+            'chargeback_reason_description' => 'Fraud',
             'amount' => 100.00,
             'created_at' => now()->subHours(12),
         ]);
@@ -927,8 +927,8 @@ class ChargebackStatsTest extends TestCase
                 'debtor_id' => $debtor->id,
                 'upload_id' => $upload->id,
                 'status' => BillingAttempt::STATUS_CHARGEBACKED,
-                'error_code' => 'CB001',
-                'error_message' => 'Insufficient Funds',
+                'chargeback_reason_code' => 'CB001',
+                'chargeback_reason_description' => 'Insufficient Funds',
                 'amount' => 100.00,
                 'created_at' => now()->subHours($i),
             ]);
@@ -954,7 +954,7 @@ class ChargebackStatsTest extends TestCase
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'error_code' => 'CB001',
+            'chargeback_reason_code' => 'CB001',
             'amount' => 150.00,
         ]);
 
@@ -962,7 +962,7 @@ class ChargebackStatsTest extends TestCase
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'error_code' => 'CB002',
+            'chargeback_reason_code' => 'CB002',
             'amount' => 250.00,
         ]);
 

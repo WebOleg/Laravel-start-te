@@ -22,7 +22,7 @@ class ChargebackService
 
         if ($request->has('code'))
         {
-            $chargebacks->where('error_code', $request->input('code'));
+            $chargebacks->where('chargeback_reason_code', $request->input('code'));
         }
         $perPage = min((int) $request->input('per_page', 50), 100);
         $chargebacks = $chargebacks->latest()->paginate($perPage);            
@@ -36,8 +36,8 @@ class ChargebackService
         return Cache::remember($cacheKey, $ttl, function () {
             return BillingAttempt::where('status', BillingAttempt::STATUS_CHARGEBACKED)
                 ->distinct()
-                ->orderBy('error_code', 'asc')
-                ->pluck('error_code')
+                ->orderBy('chargeback_reason_code', 'asc')
+                ->pluck('chargeback_reason_code')
                 ->filter()
                 ->values()
                 ->all();

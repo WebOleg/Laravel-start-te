@@ -19,8 +19,8 @@ class ChargebackResource extends JsonResource
 
         return [
             'id' => $this->id,
-            'error_code' => $this->error_code,
-            'error_message' => $this->error_message,
+            'error_code' => $this->chargeback_reason_code,
+            'error_message' => $this->chargeback_reason_description,
             'amount' => (float) $this->amount,
             'currency' => $this->currency,
             'bank_name' => $this->debtor?->latestVopLog?->bank_name,

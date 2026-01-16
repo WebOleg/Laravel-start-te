@@ -53,8 +53,8 @@ class ChargebackControllerTest extends TestCase
         BillingAttempt::factory()->count(3)->create([
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
             'debtor_id' => $debtor->id,
-            'error_code' => 'AC01',
-            'error_message' => 'Account closed',
+            'chargeback_reason_code' => 'AC01',
+            'chargeback_reason_description' => 'Account closed',
         ]);
 
         // Create non-chargebacks (should not appear)
@@ -127,19 +127,19 @@ class ChargebackControllerTest extends TestCase
         BillingAttempt::factory()->create([
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
             'debtor_id' => $debtor->id,
-            'error_code' => 'AC01',
+            'chargeback_reason_code' => 'AC01',
         ]);
 
         BillingAttempt::factory()->create([
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
             'debtor_id' => $debtor->id,
-            'error_code' => 'MD01',
+            'chargeback_reason_code' => 'MD01',
         ]);
 
         BillingAttempt::factory()->create([
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
             'debtor_id' => $debtor->id,
-            'error_code' => 'AC01',
+            'chargeback_reason_code' => 'AC01',
         ]);
 
         $response = $this->getJson('/api/admin/chargebacks?code=AC01');
@@ -258,20 +258,20 @@ class ChargebackControllerTest extends TestCase
         BillingAttempt::factory()->create([
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
             'debtor_id' => $debtor->id,
-            'error_code' => 'AC01',
+            'chargeback_reason_code' => 'AC01',
         ]);
 
         BillingAttempt::factory()->create([
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
             'debtor_id' => $debtor->id,
-            'error_code' => 'MD01',
+            'chargeback_reason_code' => 'MD01',
         ]);
 
         // Duplicate code
         BillingAttempt::factory()->create([
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
             'debtor_id' => $debtor->id,
-            'error_code' => 'AC01',
+            'chargeback_reason_code' => 'AC01',
         ]);
 
         $response = $this->getJson('/api/admin/chargebacks/codes');
@@ -293,19 +293,19 @@ class ChargebackControllerTest extends TestCase
         BillingAttempt::factory()->create([
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
             'debtor_id' => $debtor->id,
-            'error_code' => 'MD01',
+            'chargeback_reason_code' => 'MD01',
         ]);
 
         BillingAttempt::factory()->create([
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
             'debtor_id' => $debtor->id,
-            'error_code' => 'AC01',
+            'chargeback_reason_code' => 'AC01',
         ]);
 
         BillingAttempt::factory()->create([
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
             'debtor_id' => $debtor->id,
-            'error_code' => 'AG01',
+            'chargeback_reason_code' => 'AG01',
         ]);
 
         $response = $this->getJson('/api/admin/chargebacks/codes');
@@ -324,21 +324,21 @@ class ChargebackControllerTest extends TestCase
         BillingAttempt::factory()->create([
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
             'debtor_id' => $debtor->id,
-            'error_code' => 'AC01',
+            'chargeback_reason_code' => 'AC01',
         ]);
 
         // Declined with error code should not appear
         BillingAttempt::factory()->create([
             'status' => BillingAttempt::STATUS_DECLINED,
             'debtor_id' => $debtor->id,
-            'error_code' => 'AM04',
+            'chargeback_reason_code' => 'AM04',
         ]);
 
         // Error with code should not appear
         BillingAttempt::factory()->create([
             'status' => BillingAttempt::STATUS_ERROR,
             'debtor_id' => $debtor->id,
-            'error_code' => 'SY01',
+            'chargeback_reason_code' => 'SY01',
         ]);
 
         $response = $this->getJson('/api/admin/chargebacks/codes');
@@ -355,13 +355,13 @@ class ChargebackControllerTest extends TestCase
         BillingAttempt::factory()->create([
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
             'debtor_id' => $debtor->id,
-            'error_code' => 'AC01',
+            'chargeback_reason_code' => 'AC01',
         ]);
 
         BillingAttempt::factory()->create([
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
             'debtor_id' => $debtor->id,
-            'error_code' => null,
+            'chargeback_reason_code' => null,
         ]);
 
         $response = $this->getJson('/api/admin/chargebacks/codes');
@@ -388,7 +388,7 @@ class ChargebackControllerTest extends TestCase
         BillingAttempt::factory()->create([
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
             'debtor_id' => $debtor->id,
-            'error_code' => 'AC01',
+            'chargeback_reason_code' => 'AC01',
         ]);
 
         // First request
@@ -399,7 +399,7 @@ class ChargebackControllerTest extends TestCase
         BillingAttempt::factory()->create([
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
             'debtor_id' => $debtor->id,
-            'error_code' => 'MD01',
+            'chargeback_reason_code' => 'MD01',
         ]);
 
         // Second request should return cached result
