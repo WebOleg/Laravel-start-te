@@ -10,6 +10,7 @@ namespace App\Services\Emp;
 use App\Models\BillingAttempt;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\DB;
+use Carbon\Carbon;
 
 class EmpChargebackService
 {
@@ -183,9 +184,10 @@ class EmpChargebackService
                     'chargeback_reason_description' => $responseData['reason_description'] ?? null,
                 ];
                 
-                // Only set chargebacked_at if it's not already set
+                // Set chargebacked_at from EMP post_date (actual chargeback date) or fallback to now()
                 if (!$billingAttempt->chargebacked_at) {
-                    $updateData['chargebacked_at'] = now();
+                    $postDate = $responseData['post_date'] ?? null;
+                    $updateData['chargebacked_at'] = $postDate ? Carbon::parse($postDate) : now();
                 }
                 
                 $billingAttempt->update($updateData);
