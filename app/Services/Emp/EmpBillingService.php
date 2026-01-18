@@ -9,6 +9,7 @@ namespace App\Services\Emp;
 
 use App\Models\BillingAttempt;
 use App\Models\Debtor;
+use App\Models\DebtorProfile;
 use App\Models\Upload;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -34,28 +35,50 @@ class EmpBillingService
      *
      * @param Debtor $debtor
      * @param string|null $notificationUrl
+     * @param float|null $amount
+     * @param string $billingModel
+     * @param array $context Extra context (cycle_anchor, source)
      * @return BillingAttempt
      */
-    public function billDebtor(Debtor $debtor, ?string $notificationUrl = null): BillingAttempt
-    {
-        // Check if debtor can be billed
-        if (!$this->canBill($debtor)) {
+    public function billDebtor(
+        Debtor $debtor,
+        ?string $notificationUrl = null,
+        ?float $amount = null,
+        string $billingModel = DebtorProfile::MODEL_LEGACY,
+        array $context = []
+    ): BillingAttempt {
+        $billableAmount = $amount ?? $debtor->amount;
+
+        // Check if debtor can be billed (Skip amount check if we provided a specific override)
+        if (!$this->canBill($debtor, $billableAmount)) {
             throw new \InvalidArgumentException("Debtor {$debtor->id} cannot be billed");
         }
 
         // Generate unique transaction ID
         $transactionId = $this->generateTransactionId($debtor);
 
+        // Build the request payload with the calculated amount
+        $payload = $this->buildRequestPayload($debtor, $transactionId, $notificationUrl, $billableAmount);
+
+        // Extract context with defaults
+        $source = $context['source'] ?? 'system';
+        $cycleAnchor = $context['cycle_anchor'] ?? now();
+        $extraMeta = $context['meta'] ?? [];
+
         // Create billing attempt record
         $billingAttempt = BillingAttempt::create([
             'debtor_id' => $debtor->id,
+            'debtor_profile_id' => $debtor->debtor_profile_id, // Ensure link is preserved
             'upload_id' => $debtor->upload_id,
             'transaction_id' => $transactionId,
-            'amount' => $debtor->amount,
+            'amount' => $billableAmount,
             'currency' => 'EUR',
             'status' => BillingAttempt::STATUS_PENDING,
+            'billing_model' => $billingModel,
+            'cycle_anchor' => $cycleAnchor,
+            'source' => $source,
             'attempt_number' => $this->getNextAttemptNumber($debtor),
-            'request_payload' => $this->buildRequestPayload($debtor, $transactionId, $notificationUrl),
+            'request_payload' => $payload,
         ]);
 
         // Send to EMP
@@ -71,6 +94,8 @@ class EmpBillingService
     }
 
     /**
+     * todo
+     *
      * Bill multiple debtors in batch.
      *
      * @param iterable $debtors
@@ -194,7 +219,7 @@ class EmpBillingService
     /**
      * Check if debtor can be billed.
      */
-    public function canBill(Debtor $debtor): bool
+    public function canBill(Debtor $debtor, ?float $amount = null): bool
     {
         // Must be valid
         if ($debtor->validation_status !== 'valid') {
@@ -211,27 +236,82 @@ class EmpBillingService
             return false;
         }
 
-        // Must have amount
-        if ($debtor->amount < 1) {
+        // Resolve the profile
+        $profile = $debtor->debtorProfile ?? $debtor->debtorProfile()->first();
+
+        $billingModel = $profile?->billing_model ?? DebtorProfile::MODEL_LEGACY;
+
+        if ($amount === null) {
+            if ($profile && $billingModel !== DebtorProfile::MODEL_LEGACY) {
+                // For Flywheel/Recovery, the Profile is the source of truth
+                $amount = $profile->billing_amount;
+            } else {
+                // For Legacy (or no profile), the File is the source of truth
+                $amount = $debtor->amount;
+            }
+        }
+
+        if ($amount <= 0) {
             return false;
+        }
+
+        // If profile exists and is inactive (e.g., Chargebacked), stop IMMEDIATELY.
+        // This applies to ALL models (Legacy, Flywheel, Recovery).
+        if ($profile && !$profile->is_active) {
+            return false;
+        }
+
+        if ($profile && $billingModel !== DebtorProfile::MODEL_LEGACY) {
+            $lifetime = $profile->lifetime_charged_amount ?? 0;
+
+            if ($lifetime >= DebtorProfile::MAX_AMOUNT_LIMIT) {
+                Log::info("Skipped {$debtor->id}: Lifetime cap of " . DebtorProfile::MAX_AMOUNT_LIMIT . " reached.");
+                return false;
+            }
         }
 
         // Check for pending billing attempt
         $hasPending = BillingAttempt::where('debtor_id', $debtor->id)
-            ->where('status', BillingAttempt::STATUS_PENDING)
-            ->exists();
+                                    ->where('status', BillingAttempt::STATUS_PENDING)
+                                    ->exists();
 
         if ($hasPending) {
             return false;
         }
 
-        // Check for already approved
-        $hasApproved = BillingAttempt::where('debtor_id', $debtor->id)
-            ->where('status', BillingAttempt::STATUS_APPROVED)
-            ->exists();
+        // If this is not legacy, we must respect the profile's time window
+        if ($billingModel !== DebtorProfile::MODEL_LEGACY) {
+            // Eager load profile if not already loaded
+            $profile = $debtor->debtorProfile ?? $debtor->debtorProfile()->first();
 
-        if ($hasApproved) {
-            return false;
+            if ($profile) {
+                // If next_bill_at is in the future, we cannot bill yet.
+                if ($profile->next_bill_at && now()->lessThan($profile->next_bill_at)) {
+                    Log::info("Skipped {$debtor->id}: Cycle lock until {$profile->next_bill_at}");
+                    return false;
+                }
+
+                // This prevents two different CSV uploads from billing the same IBAN at the exact same time
+                $hasProfilePending = BillingAttempt::where('debtor_profile_id', $profile->id)
+                                                   ->where('status', BillingAttempt::STATUS_PENDING)
+                                                   ->where('id', '!=', $debtor->latestBillingAttempt?->id)
+                                                   ->exists();
+
+                if ($hasProfilePending) {
+                    return false;
+                }
+            }
+        }
+
+        // Check for already approved
+        if ($billingModel === DebtorProfile::MODEL_LEGACY) {
+            $hasApproved = BillingAttempt::where('debtor_id', $debtor->id)
+                                         ->where('status', BillingAttempt::STATUS_APPROVED)
+                                         ->exists();
+
+            if ($hasApproved) {
+                return false;
+            }
         }
 
         return true;
@@ -265,11 +345,11 @@ class EmpBillingService
     /**
      * Build request payload for EMP.
      */
-    private function buildRequestPayload(Debtor $debtor, string $transactionId, ?string $notificationUrl): array
+    private function buildRequestPayload(Debtor $debtor, string $transactionId, ?string $notificationUrl, float $amount): array
     {
         return [
             'transaction_id' => $transactionId,
-            'amount' => $debtor->amount,
+            'amount' => $amount,
             'currency' => 'EUR',
             'iban' => $debtor->iban,
             'bic' => $debtor->bic ?? null,

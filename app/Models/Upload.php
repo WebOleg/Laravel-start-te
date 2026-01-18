@@ -37,6 +37,7 @@ class Upload extends Model
         'processing_completed_at',
         'uploaded_by',
         'meta',
+        'billing_model'
     ];
 
     protected $casts = [

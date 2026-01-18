@@ -10,6 +10,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 class ProcessValidationChunkJob implements ShouldQueue
@@ -22,7 +23,7 @@ class ProcessValidationChunkJob implements ShouldQueue
 
     public function __construct(
         public array $debtorIds,
-        public int $uploadId,
+        public ?int $uploadId,
         public int $chunkIndex
     ) {
         $this->onQueue('high');
@@ -35,7 +36,7 @@ class ProcessValidationChunkJob implements ShouldQueue
         }
 
         Log::info('ProcessValidationChunkJob started', [
-            'upload_id' => $this->uploadId,
+            'upload_id' => $this->uploadId ?? 'recurring',
             'chunk' => $this->chunkIndex,
             'debtors' => count($this->debtorIds),
         ]);
@@ -58,16 +59,19 @@ class ProcessValidationChunkJob implements ShouldQueue
                     $invalid++;
                 }
             } catch (\Exception $e) {
+                Cache::forget("billing:lock:validation:{$debtor->id}");
+
                 $invalid++;
                 Log::error('Validation error', [
                     'debtor_id' => $debtorId,
+                    'upload_id' => $this->uploadId ?? 'recurring',
                     'error' => $e->getMessage(),
                 ]);
             }
         }
 
         Log::info('ProcessValidationChunkJob completed', [
-            'upload_id' => $this->uploadId,
+            'upload_id' => $this->uploadId ?? 'recurring',
             'chunk' => $this->chunkIndex,
             'valid' => $valid,
             'invalid' => $invalid,

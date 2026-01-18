@@ -8,6 +8,7 @@ namespace App\Services;
 
 use App\Models\Debtor;
 use App\Models\Upload;
+use Illuminate\Support\Facades\Cache;
 
 class DebtorValidationService
 {
@@ -46,8 +47,11 @@ class DebtorValidationService
             $debtor->validation_status = Debtor::VALIDATION_INVALID;
             $debtor->validation_errors = $errors;
         }
-        
+
         $debtor->validated_at = now();
+
+        Cache::forget("billing:lock:validation:{$debtor->id}");
+
         $debtor->save();
 
         return $debtor;
@@ -65,7 +69,7 @@ class DebtorValidationService
             foreach ($debtors as $debtor) {
                 $this->validateAndUpdate($debtor);
                 $stats['total']++;
-                
+
                 if ($debtor->validation_status === Debtor::VALIDATION_VALID) {
                     $stats['valid']++;
                 } else {

@@ -20,8 +20,9 @@ class StatsController extends Controller
     public function chargebackRates(Request $request): JsonResponse
     {
         $period = $request->input('period', '7d');
+        $model = $request->input('model'); // e.g., 'flywheel', 'recovery', 'legacy', or null/'all'
 
-        $stats = $this->chargebackStatsService->getStats($period);
+        $stats = $this->chargebackStatsService->getStats($period, $model);
 
         return response()->json(['data' => $stats]);
     }
@@ -29,8 +30,10 @@ class StatsController extends Controller
     public function chargebackCodes(Request $request): JsonResponse
     {
         $period = $request->input('period', '7d');
+        $model = $request->input('model'); // Accept the model filter
 
-        $codes = $this->chargebackStatsService->getChargebackCodes($period);
+        // Pass the model to the service method we updated earlier
+        $codes = $this->chargebackStatsService->getChargebackCodes($period, $model);
 
         return response()->json(['data' => $codes]);
     }
@@ -38,8 +41,10 @@ class StatsController extends Controller
     public function chargebackBanks(Request $request): JsonResponse
     {
         $period = $request->input('period', '7d');
+        $model = $request->input('model'); // Accept the model filter
 
-        $banks = $this->chargebackStatsService->getChargebackBanks($period);
+        // Pass the model to the service method we updated earlier
+        $banks = $this->chargebackStatsService->getChargebackBanks($period, $model);
 
         return response()->json(['data' => $banks]);
     }

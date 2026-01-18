@@ -10,6 +10,7 @@ namespace App\Services;
 use App\Models\Debtor;
 use App\Models\VopLog;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Cache;
 
 class VopScoringService
 {
@@ -231,6 +232,8 @@ class VopScoringService
         } else {
             $debtor->markVopVerified($nameMatch);
         }
+
+        Cache::forget("billing:lock:vop:{$debtor->id}");
     }
 
     /**

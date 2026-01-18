@@ -59,6 +59,10 @@ class BillingAttempt extends Model
         'emp_created_at',
         'last_reconciled_at',
         'reconciliation_attempts',
+        'debtor_profile_id',
+        'billing_model',
+        'cycle_anchor',
+        'source',
     ];
 
     protected $casts = [
@@ -71,6 +75,7 @@ class BillingAttempt extends Model
         'processed_at' => 'datetime',
         'emp_created_at' => 'datetime',
         'last_reconciled_at' => 'datetime',
+        'cycle_anchor' => 'date',
     ];
 
     protected $hidden = [
@@ -191,5 +196,10 @@ class BillingAttempt extends Model
         return $query
             ->where('status', self::STATUS_PENDING)
             ->where('created_at', '<', now()->subHours($hours));
+    }
+
+    public function debtorProfile(): BelongsTo
+    {
+        return $this->belongsTo(DebtorProfile::class);
     }
 }
