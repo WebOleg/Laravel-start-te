@@ -19,32 +19,64 @@ class StatsController extends Controller
 
     public function chargebackRates(Request $request): JsonResponse
     {
-        $period = $request->input('period', '7d');
-        $model = $request->input('model'); // e.g., 'flywheel', 'recovery', 'legacy', or null/'all'
+        $request->validate([
+            'period' => 'nullable|string|in:24h,7d,30d,90d',
+            'month' => 'nullable|integer|min:1|max:12',
+            'year' => 'nullable|integer|min:2020|max:2100',
+            'date_mode' => 'nullable|string|in:transaction,chargeback',
+            'model' => 'nullable|string', // e.g., 'flywheel', 'recovery'
+        ]);
 
-        $stats = $this->chargebackStatsService->getStats($period, $model);
+        $period = $request->input('period');
+        $month = $request->input('month');
+        $year = $request->input('year');
+        $dateMode = $request->input('date_mode', ChargebackStatsService::DATE_MODE_TRANSACTION);
+        $model = $request->input('model');
+
+        // Merged arguments: Time filters from main + Model filter from HEAD
+        $stats = $this->chargebackStatsService->getStats($period, $month, $year, $dateMode, $model);
 
         return response()->json(['data' => $stats]);
     }
 
     public function chargebackCodes(Request $request): JsonResponse
     {
-        $period = $request->input('period', '7d');
-        $model = $request->input('model'); // Accept the model filter
+        $request->validate([
+            'period' => 'nullable|string|in:24h,7d,30d,90d',
+            'month' => 'nullable|integer|min:1|max:12',
+            'year' => 'nullable|integer|min:2020|max:2100',
+            'date_mode' => 'nullable|string|in:transaction,chargeback',
+            'model' => 'nullable|string',
+        ]);
 
-        // Pass the model to the service method we updated earlier
-        $codes = $this->chargebackStatsService->getChargebackCodes($period, $model);
+        $period = $request->input('period');
+        $month = $request->input('month');
+        $year = $request->input('year');
+        $dateMode = $request->input('date_mode', ChargebackStatsService::DATE_MODE_TRANSACTION);
+        $model = $request->input('model');
+
+        $codes = $this->chargebackStatsService->getChargebackCodes($period, $month, $year, $dateMode, $model);
 
         return response()->json(['data' => $codes]);
     }
 
     public function chargebackBanks(Request $request): JsonResponse
     {
-        $period = $request->input('period', '7d');
-        $model = $request->input('model'); // Accept the model filter
+        $request->validate([
+            'period' => 'nullable|string|in:24h,7d,30d,90d',
+            'month' => 'nullable|integer|min:1|max:12',
+            'year' => 'nullable|integer|min:2020|max:2100',
+            'date_mode' => 'nullable|string|in:transaction,chargeback',
+            'model' => 'nullable|string',
+        ]);
 
-        // Pass the model to the service method we updated earlier
-        $banks = $this->chargebackStatsService->getChargebackBanks($period, $model);
+        $period = $request->input('period');
+        $month = $request->input('month');
+        $year = $request->input('year');
+        $dateMode = $request->input('date_mode', ChargebackStatsService::DATE_MODE_TRANSACTION);
+        $model = $request->input('model');
+
+        $banks = $this->chargebackStatsService->getChargebackBanks($period, $month, $year, $dateMode, $model);
 
         return response()->json(['data' => $banks]);
     }

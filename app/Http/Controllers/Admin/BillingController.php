@@ -1,10 +1,5 @@
 <?php
 
-/**
- * Controller for billing operations.
- * Handles async billing dispatch for high-volume processing.
- */
-
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
@@ -52,7 +47,6 @@ class BillingController extends Controller
             ], 409);
         }
 
-        // VOP Gate: Check if VOP verification is completed
         $vopCheck = $this->checkVopCompleted($upload);
         if (!$vopCheck['passed']) {
             return response()->json([
@@ -172,7 +166,6 @@ class BillingController extends Controller
             ->get()
             ->keyBy('status');
 
-        // The rest of the logic remains the same
         $approved = $stats->get(BillingAttempt::STATUS_APPROVED);
         $pending = $stats->get(BillingAttempt::STATUS_PENDING);
         $declined = $stats->get(BillingAttempt::STATUS_DECLINED);
@@ -183,9 +176,11 @@ class BillingController extends Controller
         return response()->json([
             'data' => [
                 'upload_id' => $upload->id,
-                // useful to return the filter applied in the response for frontend validation
                 'filter_type' => $debtorType ?? DebtorProfile::ALL,
                 'is_processing' => $isProcessing,
+                'billing_status' => $upload->billing_status,
+                'billing_started_at' => $upload->billing_started_at?->toIso8601String(),
+                'billing_completed_at' => $upload->billing_completed_at?->toIso8601String(),
                 'total_attempts' => (int) $stats->sum('count'),
                 'approved' => (int) ($approved?->count ?? 0),
                 'approved_amount' => (float) ($approved?->total_amount ?? 0),
@@ -199,21 +194,13 @@ class BillingController extends Controller
         ]);
     }
 
-    /**
-     * Check if VOP verification is completed for upload.
-     * Billing is blocked until all eligible debtors have VOP logs.
-     *
-     * @return array{passed: bool, message: string, total_eligible: int, verified: int, pending: int}
-     */
     private function checkVopCompleted(Upload $upload): array
     {
-        // Count debtors eligible for VOP (valid + iban_valid)
         $totalEligible = Debtor::where('upload_id', $upload->id)
             ->where('validation_status', Debtor::VALIDATION_VALID)
             ->where('iban_valid', true)
             ->count();
 
-        // If no eligible debtors, VOP check passes (nothing to verify)
         if ($totalEligible === 0) {
             return [
                 'passed' => true,
@@ -224,11 +211,9 @@ class BillingController extends Controller
             ];
         }
 
-        // Count VOP logs for this upload
         $verified = VopLog::where('upload_id', $upload->id)->count();
         $pending = $totalEligible - $verified;
 
-        // VOP must be completed for all eligible debtors
         if ($pending > 0) {
             return [
                 'passed' => false,

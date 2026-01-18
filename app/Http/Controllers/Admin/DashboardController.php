@@ -12,20 +12,34 @@ use App\Models\Debtor;
 use App\Models\VopLog;
 use App\Models\BillingAttempt;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Carbon\Carbon;
 
 class DashboardController extends Controller
 {
-    public function index(): JsonResponse
+    public function index(Request $request): JsonResponse
     {
+        $request->validate([
+            'month' => 'nullable|integer|min:1|max:12',
+            'year' => 'nullable|integer|min:2020|max:2100',
+        ]);
+
+        $month = $request->input('month');
+        $year = $request->input('year');
+
         return response()->json([
             'data' => [
                 'uploads' => $this->getUploadStats(),
-                'debtors' => $this->getDebtorStats(),
+                'debtors' => $this->getDebtorStats($month, $year),
                 'vop' => $this->getVopStats(),
-                'billing' => $this->getBillingStats(),
+                'billing' => $this->getBillingStats($month, $year),
                 'recent_activity' => $this->getRecentActivity(),
                 'trends' => $this->getTrends(),
+                'filters' => [
+                    'month' => $month,
+                    'year' => $year,
+                ],
             ],
         ]);
     }
@@ -43,10 +57,31 @@ class DashboardController extends Controller
         ];
     }
 
-    private function getDebtorStats(): array
+    private function getDebtorStats(?int $month = null, ?int $year = null): array
     {
-        $totalAmount = Debtor::sum('amount');
-        $recoveredAmount = Debtor::where('status', Debtor::STATUS_RECOVERED)->sum('amount');
+        $startDate = null;
+        $endDate = null;
+
+        if ($month && $year) {
+            $startDate = Carbon::create($year, $month, 1)->startOfMonth();
+            $endDate = Carbon::create($year, $month, 1)->endOfMonth();
+        }
+
+        $billedQuery = BillingAttempt::query();
+        $approvedQuery = BillingAttempt::where('status', BillingAttempt::STATUS_APPROVED);
+        $chargebackedQuery = BillingAttempt::where('status', BillingAttempt::STATUS_CHARGEBACKED);
+
+        if ($startDate && $endDate) {
+            // Use emp_created_at (real EMP transaction date) with fallback to created_at
+            $billedQuery->whereRaw('COALESCE(emp_created_at, created_at) BETWEEN ? AND ?', [$startDate, $endDate]);
+            $approvedQuery->whereRaw('COALESCE(emp_created_at, created_at) BETWEEN ? AND ?', [$startDate, $endDate]);
+            $chargebackedQuery->whereRaw('COALESCE(emp_created_at, created_at) BETWEEN ? AND ?', [$startDate, $endDate]);
+        }
+
+        $totalBilled = $billedQuery->sum('amount');
+        $totalApproved = $approvedQuery->sum('amount');
+        $totalChargebacked = $chargebackedQuery->sum('amount');
+        $netRecovered = $totalApproved - $totalChargebacked;
 
         return [
             'total' => Debtor::count(),
@@ -56,10 +91,10 @@ class DashboardController extends Controller
                 'recovered' => Debtor::where('status', Debtor::STATUS_RECOVERED)->count(),
                 'failed' => Debtor::where('status', Debtor::STATUS_FAILED)->count(),
             ],
-            'total_amount' => round($totalAmount, 2),
-            'recovered_amount' => round($recoveredAmount, 2),
-            'recovery_rate' => $totalAmount > 0 
-                ? round(($recoveredAmount / $totalAmount) * 100, 2) 
+            'total_amount' => round($totalBilled, 2),
+            'recovered_amount' => round($netRecovered, 2),
+            'recovery_rate' => $totalBilled > 0
+                ? round(($netRecovered / $totalBilled) * 100, 2)
                 : 0,
             'by_country' => Debtor::select('country', DB::raw('count(*) as count'))
                 ->whereNotNull('country')
@@ -96,29 +131,48 @@ class DashboardController extends Controller
         ];
     }
 
-    private function getBillingStats(): array
+    private function getBillingStats(?int $month = null, ?int $year = null): array
     {
-        $total = BillingAttempt::count();
-        $successful = BillingAttempt::where('status', BillingAttempt::STATUS_APPROVED)->count();
-        $chargebacked = BillingAttempt::where('status', BillingAttempt::STATUS_CHARGEBACKED)->count();
-        $totalAmount = BillingAttempt::where('status', BillingAttempt::STATUS_APPROVED)->sum('amount');
-        $chargebackAmount = BillingAttempt::where('status', BillingAttempt::STATUS_CHARGEBACKED)->sum('amount');
+        $startDate = null;
+        $endDate = null;
+
+        if ($month && $year) {
+            $startDate = Carbon::create($year, $month, 1)->startOfMonth();
+            $endDate = Carbon::create($year, $month, 1)->endOfMonth();
+        }
+
+        // Base queries with date filter using emp_created_at
+        $baseQuery = BillingAttempt::query();
+        if ($startDate && $endDate) {
+            $baseQuery->whereRaw('COALESCE(emp_created_at, created_at) BETWEEN ? AND ?', [$startDate, $endDate]);
+        }
+
+        $total = (clone $baseQuery)->count();
+        $successful = (clone $baseQuery)->where('status', BillingAttempt::STATUS_APPROVED)->count();
+        $chargebacked = (clone $baseQuery)->where('status', BillingAttempt::STATUS_CHARGEBACKED)->count();
+        $totalAmount = (clone $baseQuery)->where('status', BillingAttempt::STATUS_APPROVED)->sum('amount');
+        $chargebackAmount = (clone $baseQuery)->where('status', BillingAttempt::STATUS_CHARGEBACKED)->sum('amount');
+
+        $pending = (clone $baseQuery)->where('status', BillingAttempt::STATUS_PENDING)->count();
+        $declined = (clone $baseQuery)->where('status', BillingAttempt::STATUS_DECLINED)->count();
+        $error = (clone $baseQuery)->where('status', BillingAttempt::STATUS_ERROR)->count();
+        $voided = (clone $baseQuery)->where('status', BillingAttempt::STATUS_VOIDED)->count();
 
         return [
             'total_attempts' => $total,
             'by_status' => [
-                'pending' => BillingAttempt::where('status', BillingAttempt::STATUS_PENDING)->count(),
+                'pending' => $pending,
                 'approved' => $successful,
-                'declined' => BillingAttempt::where('status', BillingAttempt::STATUS_DECLINED)->count(),
-                'error' => BillingAttempt::where('status', BillingAttempt::STATUS_ERROR)->count(),
-                'voided' => BillingAttempt::where('status', BillingAttempt::STATUS_VOIDED)->count(),
+                'declined' => $declined,
+                'error' => $error,
+                'voided' => $voided,
                 'chargebacked' => $chargebacked,
             ],
             'approval_rate' => $this->calculateRate($successful, $total),
             'chargeback_rate' => $this->calculateRate($chargebacked, $successful + $chargebacked),
             'total_approved_amount' => round($totalAmount, 2),
             'total_chargeback_amount' => round($chargebackAmount, 2),
-            'today' => BillingAttempt::whereDate('created_at', today())->count(),
+            'today' => BillingAttempt::whereRaw('DATE(COALESCE(emp_created_at, created_at)) = ?', [today()->toDateString()])->count(),
             'average_attempts_per_debtor' => round(
                 $total / max(Debtor::count(), 1),
                 2
@@ -133,9 +187,9 @@ class DashboardController extends Controller
                 ->latest()
                 ->limit(5)
                 ->get(),
-            'recent_billing' => BillingAttempt::select('id', 'debtor_id', 'status', 'amount', 'created_at')
+            'recent_billing' => BillingAttempt::select('id', 'debtor_id', 'status', 'amount', 'emp_created_at', 'created_at')
                 ->with('debtor:id,first_name,last_name')
-                ->latest()
+                ->orderByRaw('COALESCE(emp_created_at, created_at) DESC')
                 ->limit(5)
                 ->get(),
         ];
@@ -152,11 +206,11 @@ class DashboardController extends Controller
                 'date' => $date,
                 'uploads' => Upload::whereDate('created_at', $date)->count(),
                 'debtors' => Debtor::whereDate('created_at', $date)->count(),
-                'billing_attempts' => BillingAttempt::whereDate('created_at', $date)->count(),
-                'successful_payments' => BillingAttempt::whereDate('created_at', $date)
+                'billing_attempts' => BillingAttempt::whereRaw('DATE(COALESCE(emp_created_at, created_at)) = ?', [$date])->count(),
+                'successful_payments' => BillingAttempt::whereRaw('DATE(COALESCE(emp_created_at, created_at)) = ?', [$date])
                     ->where('status', BillingAttempt::STATUS_APPROVED)
                     ->count(),
-                'chargebacks' => BillingAttempt::whereDate('created_at', $date)
+                'chargebacks' => BillingAttempt::whereRaw('DATE(COALESCE(emp_created_at, created_at)) = ?', [$date])
                     ->where('status', BillingAttempt::STATUS_CHARGEBACKED)
                     ->count(),
             ];

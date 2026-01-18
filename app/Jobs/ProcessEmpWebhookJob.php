@@ -120,8 +120,8 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
             'currency' => $this->webhookData['currency'] ?? null,
             'reason' => $this->webhookData['reason']
                 ?? $this->webhookData['rc_description']
-                ?? $this->webhookData['reason_description']
-                ?? null,
+                    ?? $this->webhookData['reason_description']
+                    ?? null,
             'reason_code' => $errorCode,
             'post_date' => $this->webhookData['post_date'] ?? null,
             'received_at' => $this->receivedAt,
@@ -130,8 +130,10 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
         $currentMeta = $billingAttempt->meta ?? [];
         $currentMeta['chargeback'] = $chargebackMeta;
 
+        // Webhook arrives in real-time, so now() is accurate for chargeback date
         $billingAttempt->update([
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'chargebacked_at' => now(),
             'error_code' => $errorCode,
             'error_message' => $chargebackMeta['reason'],
             'meta' => $currentMeta,
@@ -226,8 +228,8 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
         }
 
         $billingAttempt = BillingAttempt::with('debtorProfile')
-                                        ->where('unique_id', $uniqueId)
-                                        ->first();
+            ->where('unique_id', $uniqueId)
+            ->first();
 
         if (!$billingAttempt) {
             Log::info('SDD status update for unknown transaction', ['unique_id' => $uniqueId]);
@@ -238,7 +240,15 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
 
         if ($mappedStatus && $billingAttempt->status !== $mappedStatus) {
             $oldStatus = $billingAttempt->status;
-            $billingAttempt->update(['status' => $mappedStatus]);
+
+            $updateData = ['status' => $mappedStatus];
+
+            // Set chargebacked_at when status becomes chargebacked
+            if ($mappedStatus === BillingAttempt::STATUS_CHARGEBACKED && !$billingAttempt->chargebacked_at) {
+                $updateData['chargebacked_at'] = now();
+            }
+
+            $billingAttempt->update($updateData);
 
             if ($mappedStatus === BillingAttempt::STATUS_APPROVED) {
                 $this->handleSuccess($billingAttempt);

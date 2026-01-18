@@ -173,11 +173,6 @@ class FileUploadService
         ];
     }
 
-    /**
-     * Store uploaded file in S3 storage.
-     *
-     * @throws \RuntimeException If file storage fails
-     */
     private function storeFile(UploadedFile $file): string
     {
         $filename = Str::uuid() . '.' . $file->getClientOriginalExtension();

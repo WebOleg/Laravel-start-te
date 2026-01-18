@@ -122,7 +122,6 @@ class UploadValidationTest extends TestCase
 
     public function test_validate_endpoint_validates_all_debtors(): void
     {
-        // Don't fake queue - execute jobs synchronously
         $upload = Upload::factory()->create(['status' => Upload::STATUS_COMPLETED]);
         Debtor::factory()->create([
             'upload_id' => $upload->id,
@@ -146,7 +145,6 @@ class UploadValidationTest extends TestCase
 
         $response->assertStatus(202);
 
-        // Check debtors were validated (job runs synchronously in tests)
         $this->assertDatabaseHas('debtors', [
             'upload_id' => $upload->id,
             'first_name' => 'Hans',
@@ -176,7 +174,7 @@ class UploadValidationTest extends TestCase
         Debtor::factory()->count(3)->create([
             'upload_id' => $upload->id,
             'validation_status' => Debtor::VALIDATION_VALID,
-            'status' => Debtor::STATUS_PENDING,
+            'status' => Debtor::STATUS_UPLOADED,
         ]);
         Debtor::factory()->count(2)->create([
             'upload_id' => $upload->id,

@@ -1,9 +1,8 @@
 <?php
 
 /**
- * Service for refreshing/importing transactions from EMP gateway.
- * Pulls transactions by date range and upserts into local database.
- * Optimized for high volume (3-5M transactions/month).
+ * Service for refreshing billing attempts from emerchantpay API.
+ * Handles bulk import and synchronization of transaction data.
  */
 
 namespace App\Services\Emp;
@@ -28,7 +27,12 @@ class EmpRefreshService
     }
 
     /**
-     * Fetch a single page of transactions from EMP.
+     * Fetch a page of transactions from EMP API.
+     *
+     * @param string $startDate
+     * @param string $endDate
+     * @param int $page
+     * @return array{transactions: array, has_more: bool, error: bool, pagination: array|null}
      */
     public function fetchPage(string $startDate, string $endDate, int $page): array
     {
@@ -62,7 +66,10 @@ class EmpRefreshService
     }
 
     /**
-     * Process a batch of transactions using bulk upsert.
+     * Process array of transactions and upsert to database.
+     *
+     * @param array $transactions
+     * @return array{inserted: int, updated: int, unchanged: int, errors: int}
      */
     public function processTransactions(array $transactions): array
     {
@@ -84,8 +91,10 @@ class EmpRefreshService
     }
 
     /**
-     * Process a single batch with bulk upsert.
-     * Compares status to detect real changes vs unchanged.
+     * Process a batch of transactions using upsert.
+     *
+     * @param array $transactions
+     * @return array{inserted: int, updated: int, unchanged: int, errors: int}
      */
     private function processBatch(array $transactions): array
     {
@@ -105,7 +114,6 @@ class EmpRefreshService
             $status = $this->mapStatus($tx['status'] ?? 'unknown');
             $amount = isset($tx['amount']) ? ((float) $tx['amount']) / 100 : 0;
             
-            // Store for comparison
             $newDataByUniqueId[$uniqueId] = [
                 'status' => $status,
                 'amount' => $amount,
@@ -117,6 +125,7 @@ class EmpRefreshService
                 'status' => $status,
                 'amount' => $amount,
                 'currency' => $tx['currency'] ?? 'EUR',
+                'bic' => null,
                 'error_code' => $tx['code'] ?? $tx['reason_code'] ?? null,
                 'error_message' => $tx['message'] ?? null,
                 'technical_message' => $tx['technical_message'] ?? null,
@@ -124,6 +133,7 @@ class EmpRefreshService
                 'processed_at' => $now,
                 'response_payload' => json_encode($tx),
                 'attempt_number' => 1,
+                'last_reconciled_at' => $now,
                 'created_at' => $now,
                 'updated_at' => $now,
             ];
@@ -134,7 +144,6 @@ class EmpRefreshService
         }
         
         try {
-            // Get existing records with status and amount for comparison
             $existing = BillingAttempt::whereIn('unique_id', $uniqueIds)
                 ->select('unique_id', 'status', 'amount')
                 ->get()
@@ -146,11 +155,9 @@ class EmpRefreshService
             
             foreach ($newDataByUniqueId as $uniqueId => $newData) {
                 if (!$existing->has($uniqueId)) {
-                    // New record
                     $inserted++;
                 } else {
                     $old = $existing->get($uniqueId);
-                    // Compare status (main indicator of change)
                     if ($old->status !== $newData['status']) {
                         $updated++;
                     } else {
@@ -159,11 +166,10 @@ class EmpRefreshService
                 }
             }
             
-            // Perform upsert
             BillingAttempt::upsert(
                 $rows,
                 ['unique_id'],
-                ['status', 'amount', 'currency', 'error_code', 'error_message', 'technical_message', 'emp_created_at', 'processed_at', 'response_payload', 'updated_at']
+                ['status', 'amount', 'currency', 'error_code', 'error_message', 'technical_message', 'emp_created_at', 'processed_at', 'response_payload', 'updated_at', 'last_reconciled_at']
             );
             
             Log::debug('EMP Refresh: batch upserted', [
@@ -186,7 +192,10 @@ class EmpRefreshService
     }
 
     /**
-     * Fallback: process transactions individually if batch fails.
+     * Fallback: process transactions one by one.
+     *
+     * @param array $transactions
+     * @return array{inserted: int, updated: int, unchanged: int, errors: int}
      */
     private function processIndividually(array $transactions): array
     {
@@ -209,7 +218,10 @@ class EmpRefreshService
     }
 
     /**
-     * Upsert a single transaction (fallback method).
+     * Upsert a single transaction.
+     *
+     * @param array $tx
+     * @return string Result type: inserted|updated|unchanged|errors
      */
     private function upsertTransaction(array $tx): string
     {
@@ -224,8 +236,8 @@ class EmpRefreshService
         $data = $this->mapTransactionData($tx);
 
         if ($existing) {
-            // Check if status actually changed
             if ($existing->status === $data['status']) {
+                $existing->update(['last_reconciled_at' => now()]);
                 return 'unchanged';
             }
             $existing->update($data);
@@ -241,7 +253,11 @@ class EmpRefreshService
     }
 
     /**
-     * Get total pages estimate for a date range.
+     * Estimate total pages for a date range.
+     *
+     * @param string $startDate
+     * @param string $endDate
+     * @return array{first_page_count: int, has_more: bool, error: bool, pagination: array|null}
      */
     public function estimatePages(string $startDate, string $endDate): array
     {
@@ -256,7 +272,10 @@ class EmpRefreshService
     }
 
     /**
-     * Extract pagination metadata from API response attributes.
+     * Extract pagination info from API response.
+     *
+     * @param array $response
+     * @return array|null
      */
     private function extractPagination(array $response): ?array
     {
@@ -274,6 +293,9 @@ class EmpRefreshService
 
     /**
      * Extract transactions array from API response.
+     *
+     * @param array $response
+     * @return array
      */
     private function extractTransactions(array $response): array
     {
@@ -313,7 +335,10 @@ class EmpRefreshService
     }
 
     /**
-     * Map EMP transaction to BillingAttempt fields.
+     * Map transaction data to BillingAttempt fields.
+     *
+     * @param array $tx
+     * @return array
      */
     private function mapTransactionData(array $tx): array
     {
@@ -325,17 +350,22 @@ class EmpRefreshService
             'status' => $status,
             'amount' => $amount,
             'currency' => $tx['currency'] ?? 'EUR',
+            'bic' => null,
             'error_code' => $tx['code'] ?? $tx['reason_code'] ?? null,
             'error_message' => $tx['message'] ?? null,
             'technical_message' => $tx['technical_message'] ?? null,
             'emp_created_at' => isset($tx['timestamp']) ? Carbon::parse($tx['timestamp']) : null,
             'processed_at' => now(),
+            'last_reconciled_at' => now(),
             'response_payload' => $tx,
         ];
     }
 
     /**
-     * Map EMP status to local status.
+     * Map EMP status to BillingAttempt status constant.
+     *
+     * @param string $empStatus
+     * @return string
      */
     private function mapStatus(string $empStatus): string
     {

@@ -1,19 +1,19 @@
 <?php
 
-/**
- * Service for calculating chargeback statistics by country.
- */
-
 namespace App\Services;
 
 use App\Models\BillingAttempt;
 use App\Models\DebtorProfile;
+use Carbon\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Database\Query\Builder;
 
 class ChargebackStatsService
 {
+    public const DATE_MODE_TRANSACTION = 'transaction';
+    public const DATE_MODE_CHARGEBACK = 'chargeback';
+
     /**
      * Helper to apply model filtering to the query.
      */
@@ -33,26 +33,25 @@ class ChargebackStatsService
         }
     }
 
-    public function getStats(string $period = '7d', ?string $model = null): array
+    public function getStats(?string $period = null, ?int $month = null, ?int $year = null, string $dateMode = self::DATE_MODE_TRANSACTION, ?string $model = null): array
     {
-        // Cache key must include the model to prevent data mixing
-        $modelKey = $model ?? 'all';
-        $cacheKey = "chargeback_stats_{$period}_{$modelKey}";
+        $period = $period ?? '7d';
+        $cacheKey = $this->getCacheKey('chargeback_stats', $period, $month, $year, $dateMode, $model);
         $ttl = config('tether.chargeback.cache_ttl', 900);
 
-        return Cache::remember($cacheKey, $ttl, fn () => $this->calculateStats($period, $model));
+        return Cache::remember($cacheKey, $ttl, fn () => $this->calculateStats($period, $month, $year, $dateMode, $model));
     }
 
-    public function calculateStats(string $period, ?string $model = null): array
+    public function calculateStats(?string $period, ?int $month = null, ?int $year = null, string $dateMode = self::DATE_MODE_TRANSACTION, ?string $model = null): array
     {
-        $startDate = $this->getStartDate($period);
+        $period = $period ?? '7d';
+        $dateFilter = $this->buildDateFilter($period, $month, $year, $dateMode);
         $threshold = config('tether.chargeback.alert_threshold', 25);
 
         $query = DB::table('billing_attempts')
-            ->leftJoin('debtors', 'billing_attempts.debtor_id', '=', 'debtors.id')
-            ->where('billing_attempts.created_at', '>=', $startDate);
+            ->leftJoin('debtors', 'billing_attempts.debtor_id', '=', 'debtors.id');
 
-        // Apply Model Filter
+        $this->applyDateFilter($query, $dateFilter);
         $this->applyModelFilter($query, $model);
 
         $stats = $query
@@ -84,8 +83,10 @@ class ChargebackStatsService
             $cbRateTotal = $row->total > 0
                 ? round(($row->chargebacks / $row->total) * 100, 2)
                 : 0;
-            $cbRateApproved = $row->approved > 0
-                ? round(($row->chargebacks / $row->approved) * 100, 2)
+
+            $everApproved = $row->approved + $row->chargebacks;
+            $cbRateApproved = $everApproved > 0
+                ? round(($row->chargebacks / $everApproved) * 100, 2)
                 : 0;
 
             $countries[] = [
@@ -121,9 +122,12 @@ class ChargebackStatsService
         $totals['cb_rate_total'] = $totals['total'] > 0
             ? round(($totals['chargebacks'] / $totals['total']) * 100, 2)
             : 0;
-        $totals['cb_rate_approved'] = $totals['approved'] > 0
-            ? round(($totals['chargebacks'] / $totals['approved']) * 100, 2)
+
+        $totalsEverApproved = $totals['approved'] + $totals['chargebacks'];
+        $totals['cb_rate_approved'] = $totalsEverApproved > 0
+            ? round(($totals['chargebacks'] / $totalsEverApproved) * 100, 2)
             : 0;
+
         $totals['alert'] = $totals['cb_rate_total'] >= $threshold || $totals['cb_rate_approved'] >= $threshold;
         $totals['cb_rate_amount_approved'] = $totals['approved_amount'] > 0
             ? round(($totals['chargeback_amount'] / $totals['approved_amount']) * 100, 2)
@@ -131,16 +135,67 @@ class ChargebackStatsService
         $totals['cb_alert_amount_approved'] = $totals['cb_rate_amount_approved'] >= $threshold;
 
         return [
-            'period' => $period,
+            'period' => $month && $year ? 'monthly' : $period,
             'model' => $model ?? 'all',
-            'start_date' => $startDate->toIso8601String(),
+            'start_date' => $dateFilter['start']->toIso8601String(),
+            'end_date' => $dateFilter['end']?->toIso8601String(),
+            'month' => $month,
+            'year' => $year,
+            'date_mode' => $dateMode,
             'threshold' => $threshold,
             'countries' => $countries,
             'totals' => $totals,
         ];
     }
 
-    private function getStartDate(string $period): \Carbon\Carbon
+    private function buildDateFilter(?string $period, ?int $month, ?int $year, string $dateMode = self::DATE_MODE_TRANSACTION): array
+    {
+        $period = $period ?? '7d';
+
+        if ($month && $year) {
+            return [
+                'start' => Carbon::create($year, $month, 1)->startOfMonth(),
+                'end' => Carbon::create($year, $month, 1)->endOfMonth(),
+                'type' => 'monthly',
+                'date_mode' => $dateMode,
+            ];
+        }
+
+        return [
+            'start' => $this->getStartDate($period),
+            'end' => null,
+            'type' => 'period',
+            'date_mode' => $dateMode,
+        ];
+    }
+
+    private function applyDateFilter($query, array $dateFilter): void
+    {
+        $dateMode = $dateFilter['date_mode'] ?? self::DATE_MODE_TRANSACTION;
+
+        // Choose date column based on mode
+        if ($dateMode === self::DATE_MODE_CHARGEBACK) {
+            // Filter by chargeback date - only chargebacked transactions have this date
+            $dateColumn = 'billing_attempts.chargebacked_at';
+        } else {
+            // Filter by transaction date (default) - use emp_created_at with fallback
+            $dateColumn = 'COALESCE(billing_attempts.emp_created_at, billing_attempts.created_at)';
+        }
+
+        if ($dateFilter['type'] === 'monthly') {
+            $query->whereRaw(
+                "{$dateColumn} BETWEEN ? AND ?",
+                [$dateFilter['start'], $dateFilter['end']]
+            );
+        } else {
+            $query->whereRaw(
+                "{$dateColumn} >= ?",
+                [$dateFilter['start']]
+            );
+        }
+    }
+
+    private function getStartDate(string $period): Carbon
     {
         return match ($period) {
             '24h' => now()->subDay(),
@@ -151,102 +206,119 @@ class ChargebackStatsService
         };
     }
 
+    private function getCacheKey(string $prefix, string $period, ?int $month, ?int $year, string $dateMode = self::DATE_MODE_TRANSACTION, ?string $model = null): string
+    {
+        $modeSuffix = $dateMode === self::DATE_MODE_CHARGEBACK ? '_cb' : '_tx';
+        $modelKey = $model ?? 'all';
+
+        if ($month && $year) {
+            return "{$prefix}_monthly_{$year}_{$month}{$modeSuffix}_{$modelKey}";
+        }
+        return "{$prefix}_{$period}{$modeSuffix}_{$modelKey}";
+    }
+
     public function clearCache(): void
     {
         $periods = ['24h', '7d', '30d', '90d'];
-
         // Include 'all' plus the defined models from DebtorProfile
         $models = array_merge([DebtorProfile::ALL], DebtorProfile::BILLING_MODELS);
+        $dateModes = ['_tx', '_cb'];
 
         foreach ($periods as $period) {
-            foreach ($models as $model) {
-                Cache::forget("chargeback_stats_{$period}_{$model}");
-                Cache::forget("chargeback_codes_{$period}_{$model}");
-                Cache::forget("chargeback_banks_{$period}_{$model}");
+            foreach ($dateModes as $modeSuffix) {
+                foreach ($models as $model) {
+                    $modelKey = $model;
+                    Cache::forget("chargeback_stats_{$period}{$modeSuffix}_{$modelKey}");
+                    Cache::forget("chargeback_codes_{$period}{$modeSuffix}_{$modelKey}");
+                    Cache::forget("chargeback_banks_{$period}{$modeSuffix}_{$modelKey}");
+                }
             }
         }
     }
 
-    public function getChargebackCodes(string $period, ?string $model = null): array
+    public function getChargebackCodes(?string $period = null, ?int $month = null, ?int $year = null, string $dateMode = self::DATE_MODE_TRANSACTION, ?string $model = null): array
     {
-        $modelKey = $model ?? 'all';
-        $cacheKey = "chargeback_codes_{$period}_{$modelKey}";
+        $period = $period ?? '7d';
+        $cacheKey = $this->getCacheKey('chargeback_codes', $period, $month, $year, $dateMode, $model);
         $ttl = config('tether.chargeback.cache_ttl', 900);
 
-        return Cache::remember($cacheKey, $ttl, fn () => $this->calculateChargebackCodes($period, $model));
+        return Cache::remember($cacheKey, $ttl, fn () => $this->calculateChargebackCodes($period, $month, $year, $dateMode, $model));
     }
 
-    public function calculateChargebackCodes(string $period, ?string $model = null): array
+    public function calculateChargebackCodes(?string $period, ?int $month = null, ?int $year = null, string $dateMode = self::DATE_MODE_TRANSACTION, ?string $model = null): array
     {
-        $startDate = $this->getStartDate($period);
+        $period = $period ?? '7d';
+        $dateFilter = $this->buildDateFilter($period, $month, $year, $dateMode);
 
         $query = DB::table('billing_attempts')
-            ->where('created_at', '>=', $startDate)
             ->where('status', BillingAttempt::STATUS_CHARGEBACKED)
-            ->whereNotNull('error_code');
+            ->whereNotNull('chargeback_reason_code');
 
-        // Apply Model Filter
+        $this->applyDateFilter($query, $dateFilter);
         $this->applyModelFilter($query, $model);
 
         $codes = $query
             ->select([
-                'error_message as chargeback_reason',
-                'error_code as chargeback_code',
+                'chargeback_reason_code as chargeback_code',
                 DB::raw('SUM(amount) as total_amount'),
                 DB::raw('COUNT(*) as occurrences')
             ])
-            ->groupBy('error_code', 'error_message')
+            ->groupBy('chargeback_reason_code')
             ->orderBy('total_amount', 'desc')
             ->get();
 
-        $result = [];
-        $result['period'] = $period;
-        $result['model'] = $model ?? 'all';
-        $result['start_date'] = $startDate->toIso8601String();
-        $result['codes'] = [];
-        $result['totals']['total_amount'] = 0;
-        $result['totals']['occurrences'] = 0;
+        $result = [
+            'period' => $month && $year ? 'monthly' : $period,
+            'model' => $model ?? 'all',
+            'start_date' => $dateFilter['start']->toIso8601String(),
+            'end_date' => $dateFilter['end']?->toIso8601String(),
+            'month' => $month,
+            'year' => $year,
+            'date_mode' => $dateMode,
+            'codes' => [],
+            'totals' => ['total_amount' => 0, 'occurrences' => 0],
+        ];
 
         foreach ($codes as $row) {
             $result['codes'][] = [
                 'chargeback_code'   => $row->chargeback_code,
-                'chargeback_reason' => $row->chargeback_reason,
                 'total_amount'      => (float) $row->total_amount,
                 'occurrences'       => (int) $row->occurrences,
             ];
-            $result['totals']['total_amount'] = ($result['totals']['total_amount'] ?? 0) + (float) $row->total_amount;
-            $result['totals']['occurrences'] = ($result['totals']['occurrences'] ?? 0) + (int) $row->occurrences;
+            $result['totals']['total_amount'] += (float) $row->total_amount;
+            $result['totals']['occurrences'] += (int) $row->occurrences;
         }
 
         return $result;
     }
 
-    public function getChargebackBanks(string $period, ?string $model = null): array
+    public function getChargebackBanks(?string $period = null, ?int $month = null, ?int $year = null, string $dateMode = self::DATE_MODE_TRANSACTION, ?string $model = null): array
     {
-        $modelKey = $model ?? 'all';
-        $cacheKey = "chargeback_banks_{$period}_{$modelKey}";
+        $period = $period ?? '7d';
+        $cacheKey = $this->getCacheKey('chargeback_banks', $period, $month, $year, $dateMode, $model);
         $ttl = config('tether.chargeback.cache_ttl', 900);
 
-        return Cache::remember($cacheKey, $ttl, fn () => $this->calculateChargebackBanks($period, $model));
+        return Cache::remember($cacheKey, $ttl, fn () => $this->calculateChargebackBanks($period, $month, $year, $dateMode, $model));
     }
 
-    public function calculateChargebackBanks(string $period, ?string $model = null): array
+    public function calculateChargebackBanks(?string $period, ?int $month = null, ?int $year = null, string $dateMode = self::DATE_MODE_TRANSACTION, ?string $model = null): array
     {
-        $startDate = $this->getStartDate($period);
+        $period = $period ?? '7d';
+        $dateFilter = $this->buildDateFilter($period, $month, $year, $dateMode);
+        $threshold = config('tether.chargeback.alert_threshold', 25);
 
         $query = DB::table('billing_attempts')
             ->leftJoin('debtors', 'billing_attempts.debtor_id', '=', 'debtors.id')
-            ->leftJoin('vop_logs', 'debtors.id', '=', 'vop_logs.debtor_id')
-            ->where('billing_attempts.created_at', '>=', $startDate);
+            ->leftJoin('vop_logs', 'debtors.id', '=', 'vop_logs.debtor_id');
 
-        // Apply Model Filter
+        $this->applyDateFilter($query, $dateFilter);
         $this->applyModelFilter($query, $model);
 
         $banks = $query
             ->select([
                 DB::raw("COALESCE(vop_logs.bank_name, 'Unknown') as bank_name"),
                 DB::raw('COUNT(*) as total'),
-                DB::raw("SUM(CASE WHEN billing_attempts.status = 'approved' THEN 1 ELSE 0 END) as approved"),
+                DB::raw("SUM(CASE WHEN billing_attempts.status = '".BillingAttempt::STATUS_APPROVED."' THEN 1 ELSE 0 END) as approved"),
                 DB::raw('SUM(billing_attempts.amount) as total_amount'),
                 DB::raw("SUM(CASE WHEN billing_attempts.status = '".BillingAttempt::STATUS_CHARGEBACKED."' THEN 1 ELSE 0 END) as chargebacks"),
                 DB::raw("SUM(CASE WHEN billing_attempts.status = '".BillingAttempt::STATUS_CHARGEBACKED."' THEN billing_attempts.amount ELSE 0 END) as chargeback_amount"),
@@ -255,9 +327,13 @@ class ChargebackStatsService
             ->get();
 
         $result = [
-            'period' => $period,
+            'period' => $month && $year ? 'monthly' : $period,
             'model' => $model ?? 'all',
-            'start_date' => $startDate->toIso8601String(),
+            'start_date' => $dateFilter['start']->toIso8601String(),
+            'end_date' => $dateFilter['end']?->toIso8601String(),
+            'month' => $month,
+            'year' => $year,
+            'date_mode' => $dateMode,
             'banks' => [],
             'totals' => [
                 'total' => 0,
@@ -266,12 +342,17 @@ class ChargebackStatsService
                 'chargebacks' => 0,
                 'chargeback_amount' => 0,
                 'cb_rate' => 0,
+                'alert' => false,
             ],
         ];
 
         foreach ($banks as $row) {
-            $cbBankRate = $row->approved > 0
-                ? round(($row->chargebacks / $row->approved) * 100, 2)
+            $everApproved = $row->approved + $row->chargebacks;
+            $cbBankRate = $everApproved > 0
+                ? round(($row->chargebacks / $everApproved) * 100, 2)
+                : 0;
+            $cbBankRateAmount = $row->total_amount > 0
+                ? round(($row->chargeback_amount / $row->total_amount) * 100, 2)
                 : 0;
 
             $result['banks'][] = [
@@ -282,7 +363,7 @@ class ChargebackStatsService
                 'chargebacks' => (int) $row->chargebacks,
                 'chargeback_amount' => round((float) $row->chargeback_amount, 2),
                 'cb_rate' => (float) $cbBankRate,
-                'alert' => $cbBankRate >= 25, // Hardcoded threshold for banks
+                'alert' => $cbBankRate >= $threshold || $cbBankRateAmount >= $threshold,
             ];
 
             $result['totals']['total'] += (int) $row->total;
@@ -294,11 +375,16 @@ class ChargebackStatsService
 
         $result['totals']['total_amount'] = round($result['totals']['total_amount'], 2);
         $result['totals']['chargeback_amount'] = round($result['totals']['chargeback_amount'], 2);
-        $result['totals']['cb_rate'] = $result['totals']['approved'] > 0
-            ? round(($result['totals']['chargebacks'] / $result['totals']['approved']) * 100, 2)
+
+        $totalsEverApproved = $result['totals']['approved'] + $result['totals']['chargebacks'];
+        $result['totals']['cb_rate'] = $totalsEverApproved > 0
+            ? round(($result['totals']['chargebacks'] / $totalsEverApproved) * 100, 2)
             : 0;
 
-        $result['totals']['alert'] = $result['totals']['cb_rate'] >= 25;
+        $totalsAlertAmount = $result['totals']['total_amount'] > 0
+            ? round(($result['totals']['chargeback_amount'] / $result['totals']['total_amount']) * 100, 2)
+            : 0;
+        $result['totals']['alert'] = $result['totals']['cb_rate'] >= $threshold || $totalsAlertAmount >= $threshold;
 
         return $result;
     }

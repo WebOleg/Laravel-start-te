@@ -8,7 +8,6 @@ use App\Models\DebtorProfile;
 use App\Models\Upload;
 use App\Services\DebtorImportService;
 use App\Services\DeduplicationService;
-use App\Services\IbanValidator;
 use Illuminate\Bus\Batchable;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -16,8 +15,8 @@ use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class ProcessUploadChunkJob implements ShouldQueue
 {
@@ -79,6 +78,7 @@ class ProcessUploadChunkJob implements ShouldQueue
         $chunkKey = (string) $this->chunkIndex;
 
         // Keys expected in the 'skipped' statistics breakdown
+        // Merged keys from HEAD and main to ensure full coverage
         $skippedKeys = [
             'total',
             'blacklisted',
@@ -86,7 +86,9 @@ class ProcessUploadChunkJob implements ShouldQueue
             'blacklisted_name',
             'already_recovered',
             'blacklisted_email',
-            'recently_attempted'
+            'blacklisted_bic', 
+            'recently_attempted',
+            'duplicates',
         ];
 
         DB::transaction(function () use ($uploadId, $chunkKey, $result, $skippedKeys) {
@@ -125,7 +127,7 @@ class ProcessUploadChunkJob implements ShouldQueue
             $meta['skipped_rows'] = array_merge($meta['skipped_rows'], $result['skipped_rows'] ?? []);
             $meta['skipped_rows'] = array_slice($meta['skipped_rows'], 0, 100);
 
-            // 4. Store individual chunk payload (Original logic)
+            // 4. Store individual chunk payload
             $chunks = $meta['chunks'] ?? [];
             $chunks[$chunkKey] = [
                 'created'      => (int) ($result['created'] ?? 0),

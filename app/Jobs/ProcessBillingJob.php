@@ -1,8 +1,5 @@
 <?php
-/**
- * Dispatches billing jobs for upload debtors.
- * Excludes debtors with BAV name mismatch to prevent chargebacks.
- */
+
 namespace App\Jobs;
 
 use App\Models\DebtorProfile;
@@ -42,19 +39,20 @@ class ProcessBillingJob implements ShouldQueue, ShouldBeUnique
 
     public function handle(): void
     {
+        $uploadId = $this->upload->id;
+
         Log::info('ProcessBillingJob started', [
-            'upload_id' => $this->upload->id,
+            'upload_id' => $uploadId,
             'model' => $this->billingModel
         ]);
 
-        $query = Debtor::where('upload_id', $this->upload->id)
-                        ->where('validation_status', Debtor::VALIDATION_VALID)
-                        ->where('status', Debtor::STATUS_PENDING);
+        $query = Debtor::where('upload_id', $uploadId)
+            ->where('validation_status', Debtor::VALIDATION_VALID)
+            ->where('status', Debtor::STATUS_PENDING);
 
         // 1. Filter by Target Billing Model
         // Match debtors that have the requested Profile Model OR have No Profile at all.
         $query->when($this->billingModel !== DebtorProfile::ALL, function ($q) {
-            // Match debtors that have the requested Profile Model OR have No Profile at all.
             $q->where(function ($subQuery) {
                 $subQuery->whereHas('debtorProfile', function ($profileQuery) {
                     $profileQuery->where('billing_model', $this->billingModel);
@@ -87,8 +85,8 @@ class ProcessBillingJob implements ShouldQueue, ShouldBeUnique
 
         $debtorIds = $query->pluck('id')->toArray();
 
-        // Count excluded for logging
-        $excludedCount = Debtor::where('upload_id', $this->upload->id)
+        // Calculate exclusions for logging (Logic from main, adapted to HEAD status)
+        $excludedCount = Debtor::where('upload_id', $uploadId)
             ->where('validation_status', Debtor::VALIDATION_VALID)
             ->where('status', Debtor::STATUS_PENDING)
             ->whereHas('vopLogs', function ($q) {
@@ -98,15 +96,15 @@ class ProcessBillingJob implements ShouldQueue, ShouldBeUnique
 
         if (empty($debtorIds)) {
             Log::info('ProcessBillingJob: no debtors to bill', [
-                'upload_id' => $this->upload->id,
+                'upload_id' => $uploadId,
                 'excluded_bav_mismatch' => $excludedCount,
             ]);
+            $this->upload->markBillingCompleted();
             return;
         }
 
         $chunks = array_chunk($debtorIds, self::CHUNK_SIZE);
         $jobs = [];
-
 
         Log::info('Ids=', [
             'ids' => $chunks,
@@ -116,30 +114,43 @@ class ProcessBillingJob implements ShouldQueue, ShouldBeUnique
         foreach ($chunks as $index => $chunk) {
             $jobs[] = new ProcessBillingChunkJob(
                 debtorIds: $chunk,
-                uploadId: $this->upload->id,
+                uploadId: $uploadId,
                 chunkIndex: $index,
                 billingModel: $this->billingModel,
                 notificationUrl: $this->notificationUrl
             );
         }
 
-        $uploadId = $this->upload->id;
+        $upload = $this->upload;
         $model = $this->billingModel;
 
-        Bus::batch($jobs)
+        $batch = Bus::batch($jobs)
             ->name("Billing Upload #{$uploadId} ({$model})")
             ->allowFailures()
             ->onQueue('billing')
-            ->finally(function () use ($uploadId) {
-                Log::info('ProcessBillingJob batch completed', ['upload_id' => $uploadId]);
+            ->finally(function () use ($upload) {
+                $upload->markBillingCompleted();
+                Log::info('ProcessBillingJob batch completed', ['upload_id' => $upload->id]);
             })
             ->dispatch();
 
+        $this->upload->startBilling($batch->id);
+
         Log::info('ProcessBillingJob dispatched', [
-            'upload_id' => $this->upload->id,
+            'upload_id' => $uploadId,
+            'batch_id' => $batch->id,
             'debtors' => count($debtorIds),
             'excluded_bav_mismatch' => $excludedCount,
             'chunks' => count($chunks),
+        ]);
+    }
+
+    public function failed(\Throwable $exception): void
+    {
+        $this->upload->markBillingFailed();
+        Log::error('ProcessBillingJob failed', [
+            'upload_id' => $this->upload->id,
+            'error' => $exception->getMessage(),
         ]);
     }
 }

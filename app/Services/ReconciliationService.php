@@ -1,5 +1,10 @@
 <?php
 
+/**
+ * Service for reconciling billing attempts with EMP gateway.
+ * Handles status synchronization and chargeback auto-blacklisting.
+ */
+
 namespace App\Services;
 
 use App\Models\BillingAttempt;
@@ -34,14 +39,24 @@ class ReconciliationService
         }
 
         try {
+            $previousStatus = $attempt->status;
+
+            // billingService->reconcile() updates the attempt with mapped status
             $result = $this->billingService->reconcile($attempt);
 
-            $previousStatus = $attempt->status;
-            $newStatus = $result['status'] ?? $attempt->status;
+            // Refresh to get the updated status from database (already mapped by EmpBillingService)
+            $attempt->refresh();
+            $newStatus = $attempt->status;
             $changed = $previousStatus !== $newStatus;
 
-            if ($changed) {
-                $this->updateAttemptStatus($attempt, $result);
+            // Handle chargeback auto-blacklist (status already updated by billingService)
+            if ($newStatus === BillingAttempt::STATUS_CHARGEBACKED) {
+                $this->handleChargeback($attempt, $result);
+            }
+
+            // Update debtor status if approved
+            if ($newStatus === BillingAttempt::STATUS_APPROVED && $attempt->debtor) {
+                $attempt->debtor->update(['status' => 'recovered']);
             }
 
             $attempt->markReconciled();
@@ -188,38 +203,6 @@ class ReconciliationService
     }
 
     /**
-     * Update attempt status based on EMP response
-     */
-    private function updateAttemptStatus(BillingAttempt $attempt, array $result): void
-    {
-        $status = $result['status'] ?? $attempt->status;
-
-        $updateData = [
-            'status' => $status,
-        ];
-
-        if (isset($result['error_code'])) {
-            $updateData['error_code'] = $result['error_code'];
-        }
-
-        if (isset($result['error_message'])) {
-            $updateData['error_message'] = $result['error_message'];
-        }
-
-        $attempt->update($updateData);
-
-        // Handle chargeback auto-blacklist
-        if ($status === BillingAttempt::STATUS_CHARGEBACKED) {
-            $this->handleChargeback($attempt, $result);
-        }
-
-        // Update debtor status if approved
-        if ($status === BillingAttempt::STATUS_APPROVED && $attempt->debtor) {
-            $attempt->debtor->update(['status' => 'recovered']);
-        }
-    }
-
-    /**
      * Handle chargeback - auto-blacklist
      */
     private function handleChargeback(BillingAttempt $attempt, array $result): void
@@ -228,7 +211,7 @@ class ReconciliationService
             return;
         }
 
-        $errorCode = $result['error_code'] ?? 'unknown';
+        $errorCode = $result['error_code'] ?? $result['code'] ?? $result['reason_code'] ?? 'unknown';
         $blacklistCodes = config('tether.chargeback.blacklist_codes', ['AC04', 'AC06', 'AG01', 'MD01']);
 
         if (in_array($errorCode, $blacklistCodes)) {

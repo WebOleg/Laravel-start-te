@@ -32,7 +32,7 @@ class EmpBillingServiceTest extends TestCase
         $debtor = Debtor::factory()->create([
             'upload_id' => $upload->id,
             'validation_status' => 'valid',
-            'status' => Debtor::STATUS_PENDING,
+            'status' => Debtor::STATUS_UPLOADED,
             'amount' => 99.99,
             'iban' => 'DE89370400440532013000',
         ]);
@@ -60,7 +60,7 @@ class EmpBillingServiceTest extends TestCase
         $debtor = Debtor::factory()->create([
             'upload_id' => $upload->id,
             'validation_status' => 'valid',
-            'status' => Debtor::STATUS_PENDING,
+            'status' => Debtor::STATUS_UPLOADED,
             'amount' => 50.00,
             'iban' => 'FR7630006000011234567890189',
         ]);
@@ -85,7 +85,7 @@ class EmpBillingServiceTest extends TestCase
         $debtor = Debtor::factory()->create([
             'upload_id' => $upload->id,
             'validation_status' => 'valid',
-            'status' => Debtor::STATUS_PENDING,
+            'status' => Debtor::STATUS_UPLOADED,
             'amount' => 100.00,
             'iban' => 'DE89370400440532013000',
         ]);
@@ -111,7 +111,7 @@ class EmpBillingServiceTest extends TestCase
         $debtor = Debtor::factory()->create([
             'upload_id' => $upload->id,
             'validation_status' => 'invalid',
-            'status' => Debtor::STATUS_PENDING,
+            'status' => Debtor::STATUS_UPLOADED,
         ]);
 
         $this->expectException(\InvalidArgumentException::class);
@@ -125,7 +125,7 @@ class EmpBillingServiceTest extends TestCase
         $debtor = Debtor::factory()->create([
             'upload_id' => $upload->id,
             'validation_status' => 'valid',
-            'status' => Debtor::STATUS_PENDING,
+            'status' => Debtor::STATUS_UPLOADED,
             'iban' => 'DE89370400440532013000',
             'amount' => 50.00,
         ]);
@@ -167,12 +167,11 @@ class EmpBillingServiceTest extends TestCase
         $debtors = Debtor::factory()->count(3)->create([
             'upload_id' => $upload->id,
             'validation_status' => 'valid',
-            'status' => Debtor::STATUS_PENDING,
+            'status' => Debtor::STATUS_UPLOADED,
             'amount' => 25.00,
             'iban' => 'DE89370400440532013000',
         ]);
 
-        // Each call returns a different unique_id
         $callCount = 0;
         $this->mockClient->shouldReceive('sddSale')
             ->times(3)
@@ -199,7 +198,7 @@ class EmpBillingServiceTest extends TestCase
         Debtor::factory()->create([
             'upload_id' => $upload->id,
             'validation_status' => 'valid',
-            'status' => Debtor::STATUS_PENDING,
+            'status' => Debtor::STATUS_UPLOADED,
             'amount' => 25.00,
             'iban' => 'DE89370400440532013000',
         ]);
@@ -207,7 +206,7 @@ class EmpBillingServiceTest extends TestCase
         Debtor::factory()->create([
             'upload_id' => $upload->id,
             'validation_status' => 'invalid',
-            'status' => Debtor::STATUS_PENDING,
+            'status' => Debtor::STATUS_UPLOADED,
         ]);
 
         $debtors = Debtor::where('upload_id', $upload->id)->get();
@@ -231,7 +230,7 @@ class EmpBillingServiceTest extends TestCase
         $debtor = Debtor::factory()->create([
             'upload_id' => $upload->id,
             'validation_status' => 'valid',
-            'status' => Debtor::STATUS_PENDING,
+            'status' => Debtor::STATUS_UPLOADED,
             'amount' => 75.00,
             'iban' => 'DE89370400440532013000',
         ]);
@@ -290,7 +289,7 @@ class EmpBillingServiceTest extends TestCase
         $debtor = Debtor::factory()->create([
             'upload_id' => $upload->id,
             'validation_status' => 'valid',
-            'status' => Debtor::STATUS_PENDING,
+            'status' => Debtor::STATUS_UPLOADED,
             'iban' => 'DE89370400440532013000',
             'amount' => 0.50,
         ]);
@@ -304,7 +303,7 @@ class EmpBillingServiceTest extends TestCase
         $debtor = Debtor::factory()->create([
             'upload_id' => $upload->id,
             'validation_status' => 'valid',
-            'status' => Debtor::STATUS_PENDING,
+            'status' => Debtor::STATUS_UPLOADED,
             'iban' => 'DE89370400440532013000',
             'amount' => 1.00,
         ]);

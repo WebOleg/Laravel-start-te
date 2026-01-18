@@ -2,7 +2,7 @@
 
 /**
  * IBAN.com API V4 integration service.
- * 
+ *
  * Provides bank account validation and bank information lookup via iban.com API.
  * Uses local database cache (bank_references) to reduce API calls.
  */
@@ -29,17 +29,13 @@ class IbanApiService
 
     public function __construct()
     {
-        $this->apiKey = config('services.iban.api_key', '');
-        $this->apiUrl = config('services.iban.api_url', 'https://api.iban.com/clients/api/v4/iban/');
-        $this->mockMode = config('services.iban.mock', true);
+        $this->apiKey = config('services.iban.api_key') ?? '';
+        $this->apiUrl = config('services.iban.api_url') ?? 'https://api.iban.com/clients/api/v4/iban/';
+        $this->mockMode = config('services.iban.mock') ?? true;
     }
 
     /**
      * Verify IBAN and retrieve bank information.
-     *
-     * @param string $iban
-     * @param bool $skipLocalCache Skip local DB lookup (force API call)
-     * @return array{success: bool, bank_data: ?array, sepa_data: ?array, validations: ?array, error: ?string, cached: bool, source: string}
      */
     public function verify(string $iban, bool $skipLocalCache = false): array
     {
@@ -47,9 +43,21 @@ class IbanApiService
         $countryIso = substr($normalized, 0, 2);
         $bankCode = $this->extractBankCode($normalized, $countryIso);
 
+        Log::info('IbanApiService: verify() called', [
+            'iban' => $this->mask($iban),
+            'country' => $countryIso,
+            'bank_code' => $bankCode,
+            'skip_local_cache' => $skipLocalCache,
+            'mock_mode' => $this->mockMode,
+        ]);
+
         if (!$skipLocalCache && $bankCode) {
             $local = $this->findInLocalCache($countryIso, $bankCode);
             if ($local) {
+                Log::info('IbanApiService: Database cache HIT', [
+                    'iban' => $this->mask($iban),
+                    'bank' => $local['bank_data']['bank'] ?? null,
+                ]);
                 return $local;
             }
         }
@@ -57,43 +65,45 @@ class IbanApiService
         $cacheKey = self::CACHE_PREFIX . hash('sha256', $normalized);
         $cached = Cache::get($cacheKey);
         if ($cached !== null) {
+            Log::info('IbanApiService: Memory cache HIT', [
+                'iban' => $this->mask($iban),
+                'bank' => $cached['bank_data']['bank'] ?? null,
+            ]);
             return array_merge($cached, ['cached' => true, 'source' => 'memory']);
         }
 
-        $result = $this->mockMode 
+        Log::info('IbanApiService: Cache MISS - fetching data', [
+            'iban' => $this->mask($iban),
+            'will_use_mock' => $this->mockMode,
+        ]);
+
+        $result = $this->mockMode
             ? $this->mockResponse($normalized)
             : $this->callApi($normalized);
 
         if ($result['success']) {
             Cache::put($cacheKey, $result, self::CACHE_TTL);
             $this->saveToLocalCache($result, $countryIso);
+
+            Log::info('IbanApiService: Result cached', [
+                'iban' => $this->mask($iban),
+                'cache_ttl_seconds' => self::CACHE_TTL,
+            ]);
         }
 
-        return array_merge($result, ['cached' => false, 'source' => 'api']);
+        return array_merge($result, ['cached' => false, 'source' => $this->mockMode ? 'mock' : 'api']);
     }
 
-    /**
-     * @param string $iban
-     * @return ?string
-     */
     public function getBankName(string $iban): ?string
     {
         return $this->verify($iban)['bank_data']['bank'] ?? null;
     }
 
-    /**
-     * @param string $iban
-     * @return ?string
-     */
     public function getBic(string $iban): ?string
     {
         return $this->verify($iban)['bank_data']['bic'] ?? null;
     }
 
-    /**
-     * @param string $iban
-     * @return bool
-     */
     public function isValid(string $iban): bool
     {
         $result = $this->verify($iban);
@@ -104,21 +114,12 @@ class IbanApiService
         return $code === 1 || $code === '001';
     }
 
-    /**
-     * @param string $iban
-     * @return bool
-     */
     public function supportsSepaSdd(string $iban): bool
     {
         $sepa = $this->verify($iban)['sepa_data'] ?? [];
         return strtoupper($sepa['SDD'] ?? '') === 'YES';
     }
 
-    /**
-     * @param string $countryIso
-     * @param string $bankCode
-     * @return ?array
-     */
     private function findInLocalCache(string $countryIso, string $bankCode): ?array
     {
         $ref = BankReference::findByBankCode($countryIso, $bankCode);
@@ -152,11 +153,6 @@ class IbanApiService
         ];
     }
 
-    /**
-     * @param array $result
-     * @param string $countryIso
-     * @return void
-     */
     private function saveToLocalCache(array $result, string $countryIso): void
     {
         $bankData = $result['bank_data'] ?? [];
@@ -193,11 +189,6 @@ class IbanApiService
         }
     }
 
-    /**
-     * @param string $iban
-     * @param string $countryIso
-     * @return ?string
-     */
     private function extractBankCode(string $iban, string $countryIso): ?string
     {
         $lengths = [
@@ -213,13 +204,15 @@ class IbanApiService
         return substr($iban, 4, $length);
     }
 
-    /**
-     * @param string $iban
-     * @return array{success: bool, bank_data: ?array, sepa_data: ?array, validations: ?array, error: ?string}
-     */
     private function callApi(string $iban): array
     {
         try {
+            Log::info('IbanApiService: Making API request', [
+                'url' => $this->apiUrl,
+                'iban' => $this->mask($iban),
+                'mock_mode' => $this->mockMode,
+            ]);
+
             $response = Http::timeout(self::TIMEOUT)
                 ->retry(self::RETRY_TIMES, self::RETRY_DELAY)
                 ->asForm()
@@ -229,15 +222,31 @@ class IbanApiService
                     'format' => 'json',
                 ]);
 
+            Log::info('IbanApiService: API response received', [
+                'status' => $response->status(),
+                'iban' => $this->mask($iban),
+                'response_size' => strlen($response->body()),
+            ]);
+
             if (!$response->successful()) {
                 Log::warning('IbanApiService: request failed', [
                     'status' => $response->status(),
                     'iban' => $this->mask($iban),
+                    'body' => $response->body(),
                 ]);
                 return $this->errorResult('HTTP ' . $response->status());
             }
 
-            return $this->parseResponse($response->json());
+            $result = $this->parseResponse($response->json());
+
+            Log::info('IbanApiService: API result parsed', [
+                'iban' => $this->mask($iban),
+                'success' => $result['success'],
+                'bank' => $result['bank_data']['bank'] ?? null,
+                'bic' => $result['bank_data']['bic'] ?? null,
+            ]);
+
+            return $result;
 
         } catch (ConnectionException $e) {
             Log::error('IbanApiService: connection failed', ['error' => $e->getMessage()]);
@@ -248,10 +257,6 @@ class IbanApiService
         }
     }
 
-    /**
-     * @param array $data
-     * @return array{success: bool, bank_data: ?array, sepa_data: ?array, validations: ?array, error: ?string}
-     */
     private function parseResponse(array $data): array
     {
         $errors = $data['errors'] ?? [];
@@ -269,10 +274,6 @@ class IbanApiService
         ];
     }
 
-    /**
-     * @param string $iban
-     * @return array{success: bool, bank_data: ?array, sepa_data: ?array, validations: ?array, error: ?string}
-     */
     private function mockResponse(string $iban): array
     {
         $country = substr($iban, 0, 2);
@@ -292,7 +293,7 @@ class IbanApiService
         $bankInfo = $banks[$country] ?? ['bank' => 'Mock Bank', 'bic' => 'MOCKXX00'];
         $bankCode = $this->extractBankCode($iban, $country) ?? substr($iban, 4, 8);
 
-        return [
+        $result = [
             'success' => true,
             'bank_data' => [
                 'bic' => $bankInfo['bic'],
@@ -322,12 +323,18 @@ class IbanApiService
             ],
             'error' => null,
         ];
+
+        Log::info('IbanApiService: Mock response generated', [
+            'iban' => $this->mask($iban),
+            'country' => $country,
+            'bank' => $bankInfo['bank'],
+            'bic' => $bankInfo['bic'],
+            'bank_code' => $bankCode,
+        ]);
+
+        return $result;
     }
 
-    /**
-     * @param string $message
-     * @return array{success: bool, bank_data: null, sepa_data: null, validations: null, error: string}
-     */
     private function errorResult(string $message): array
     {
         return [
@@ -339,19 +346,11 @@ class IbanApiService
         ];
     }
 
-    /**
-     * @param string $iban
-     * @return string
-     */
     private function normalize(string $iban): string
     {
         return strtoupper(preg_replace('/[^A-Za-z0-9]/', '', $iban));
     }
 
-    /**
-     * @param string $iban
-     * @return string
-     */
     private function mask(string $iban): string
     {
         $n = $this->normalize($iban);

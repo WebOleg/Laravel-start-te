@@ -9,11 +9,13 @@ use App\Http\Controllers\Admin\DebtorController as AdminDebtorController;
 use App\Http\Controllers\Admin\VopLogController as AdminVopLogController;
 use App\Http\Controllers\Admin\BillingAttemptController as AdminBillingAttemptController;
 use App\Http\Controllers\Admin\BillingController as AdminBillingController;
+use App\Http\Controllers\Admin\ChargebackController;
 use App\Http\Controllers\Admin\ReconciliationController as AdminReconciliationController;
 use App\Http\Controllers\Admin\UploadController as AdminUploadController;
 use App\Http\Controllers\Admin\StatsController as AdminStatsController;
 use App\Http\Controllers\Admin\VopController as AdminVopController;
 use App\Http\Controllers\Admin\EmpRefreshController as AdminEmpRefreshController;
+use App\Http\Controllers\Admin\BicAnalyticsController as AdminBicAnalyticsController;
 
 Route::post('/login', [AuthController::class, 'login']);
 
@@ -27,6 +29,14 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('stats/chargeback-rates', [AdminStatsController::class, 'chargebackRates']);
         Route::get('stats/chargeback-codes', [AdminStatsController::class, 'chargebackCodes']);
         Route::get('stats/chargeback-banks', [AdminStatsController::class, 'chargebackBanks']);
+
+        // BIC Analytics routes
+        Route::prefix('analytics/bic')->group(function () {
+            Route::get('/', [AdminBicAnalyticsController::class, 'index']);
+            Route::get('/export', [AdminBicAnalyticsController::class, 'export']);
+            Route::post('/clear-cache', [AdminBicAnalyticsController::class, 'clearCache']);
+            Route::get('/{bic}', [AdminBicAnalyticsController::class, 'show']);
+        });
 
         Route::get('uploads/{upload}/status', [AdminUploadController::class, 'status']);
         Route::get('uploads/{upload}/debtors', [AdminUploadController::class, 'debtors']);
@@ -58,6 +68,12 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/refresh', [AdminEmpRefreshController::class, 'refresh']);
             Route::get('/refresh/status', [AdminEmpRefreshController::class, 'currentStatus']);
             Route::get('/refresh/{jobId}', [AdminEmpRefreshController::class, 'status']);
+        });
+
+        // Chargeback Routes
+        Route::prefix('chargebacks')->group(function () {
+            Route::get('', [ChargebackController::class, 'index']);
+            Route::get('/codes', [ChargebackController::class, 'codes']);
         });
 
         Route::post('debtors/{debtor}/validate', [AdminDebtorController::class, 'validate']);

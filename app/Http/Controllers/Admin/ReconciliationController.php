@@ -17,10 +17,6 @@ class ReconciliationController extends Controller
         private ReconciliationService $reconciliationService
     ) {}
 
-    /**
-     * Reconcile single billing attempt
-     * POST /admin/billing-attempts/{billing_attempt}/reconcile
-     */
     public function reconcileAttempt(BillingAttempt $billingAttempt): JsonResponse
     {
         if (!$billingAttempt->canReconcile()) {
@@ -53,15 +49,9 @@ class ReconciliationController extends Controller
         ], $statusCode);
     }
 
-    /**
-     * Reconcile all pending for upload (async)
-     * POST /admin/uploads/{upload}/reconcile
-     */
     public function reconcileUpload(Upload $upload): JsonResponse
     {
-        $cacheKey = "reconciliation_upload_{$upload->id}";
-
-        if (Cache::has($cacheKey)) {
+        if ($upload->isReconciliationProcessing()) {
             return response()->json([
                 'message' => 'Reconciliation already in progress',
                 'data' => [
@@ -87,8 +77,6 @@ class ReconciliationController extends Controller
             ]);
         }
 
-        Cache::put($cacheKey, true, now()->addMinutes(30));
-
         ProcessReconciliationJob::dispatch($upload->id, 'upload');
 
         return response()->json([
@@ -101,10 +89,6 @@ class ReconciliationController extends Controller
         ], 202);
     }
 
-    /**
-     * Get reconciliation stats
-     * GET /admin/reconciliation/stats
-     */
     public function stats(): JsonResponse
     {
         $stats = $this->reconciliationService->getStats();
@@ -114,23 +98,19 @@ class ReconciliationController extends Controller
         ]);
     }
 
-    /**
-     * Get reconciliation stats for upload
-     * GET /admin/uploads/{upload}/reconciliation-stats
-     */
     public function uploadStats(Upload $upload): JsonResponse
     {
         $stats = $this->reconciliationService->getUploadStats($upload);
 
         return response()->json([
-            'data' => array_merge(['upload_id' => $upload->id], $stats),
+            'data' => array_merge([
+                'upload_id' => $upload->id,
+                'is_processing' => $upload->isReconciliationProcessing(),
+                'reconciliation_status' => $upload->reconciliation_status,
+            ], $stats),
         ]);
     }
 
-    /**
-     * Bulk reconciliation (admin only)
-     * POST /admin/reconciliation/bulk
-     */
     public function bulk(Request $request): JsonResponse
     {
         $validated = $request->validate([

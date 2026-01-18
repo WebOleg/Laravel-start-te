@@ -38,6 +38,8 @@ class BillingAttemptFactory extends Factory
 
         $errorCode = $hasError ? fake()->randomElement(array_keys($errors)) : null;
 
+        $bics = ['RABONL2UXXX', 'INGBNL2AXXX', 'ABNANL2AXXX', 'DEUTESBBXXX', 'CABORKA1XXX'];
+
         return [
             'upload_id' => Upload::factory(),
             'debtor_id' => Debtor::factory(),
@@ -47,6 +49,7 @@ class BillingAttemptFactory extends Factory
             'currency' => 'EUR',
             'status' => $status,
             'attempt_number' => fake()->numberBetween(1, 3),
+            'bic' => fake()->randomElement($bics),
             'error_code' => $errorCode,
             'error_message' => $errorCode ? $errors[$errorCode] : null,
             'processed_at' => fake()->dateTimeBetween('-30 days', 'now'),
@@ -71,6 +74,15 @@ class BillingAttemptFactory extends Factory
         ]);
     }
 
+    public function chargebacked(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'error_code' => 'AC04',
+            'error_message' => 'Account closed',
+        ]);
+    }
+
     public function pending(): static
     {
         return $this->state(fn (array $attributes) => [
@@ -78,6 +90,13 @@ class BillingAttemptFactory extends Factory
             'error_code' => null,
             'error_message' => null,
             'processed_at' => null,
+        ]);
+    }
+
+    public function withBic(string $bic): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'bic' => $bic,
         ]);
     }
 }

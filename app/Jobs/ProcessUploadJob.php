@@ -61,11 +61,15 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
             $parsed = $this->parseFile($parser, $tempFilePath);
             $rows = $parsed['rows'];
 
+            // Update total records count immediately
+            $this->upload->update(['total_records' => count($rows)]);
+
             if (count($rows) > self::BATCH_THRESHOLD) {
                 $this->processWithBatching($rows);
                 return;
             }
 
+            // For small files, process directly via Service
             $result = $importer->importRows($this->upload, $rows, $this->columnMapping, false, 1);
             $importer->finalizeUpload($this->upload, $result);
 
@@ -107,23 +111,24 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
             ->name("Upload #{$this->upload->id}")
             ->allowFailures()
             ->finally(function () use ($upload) {
-                if ($upload) {
-                    $status = $upload->failed_records === $upload->total_records
-                        ? Upload::STATUS_FAILED
-                        : Upload::STATUS_COMPLETED;
+                // Refresh model to get latest counts from chunk jobs
+                $upload->refresh();
 
-                    $upload->update([
-                        'status' => $status,
-                        'processing_completed_at' => now(),
-                    ]);
+                $status = $upload->failed_records === $upload->total_records && $upload->total_records > 0
+                    ? Upload::STATUS_FAILED
+                    : Upload::STATUS_COMPLETED;
 
-                    Log::info("Upload batch completed", [
-                        'upload_id' => $upload->id,
-                        'status' => $status,
-                        'processed' => $upload->processed_records,
-                        'failed' => $upload->failed_records,
-                    ]);
-                }
+                $upload->update([
+                    'status' => $status,
+                    'processing_completed_at' => now(),
+                ]);
+
+                Log::info("Upload batch completed", [
+                    'upload_id' => $upload->id,
+                    'status' => $status,
+                    'processed' => $upload->processed_records,
+                    'failed' => $upload->failed_records,
+                ]);
             })
             ->dispatch();
 

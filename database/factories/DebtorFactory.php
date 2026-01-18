@@ -3,15 +3,12 @@
  * Factory for generating test Debtor records.
  */
 namespace Database\Factories;
-
 use App\Models\Debtor;
 use App\Models\Upload;
 use Illuminate\Database\Eloquent\Factories\Factory;
-
 class DebtorFactory extends Factory
 {
     protected $model = Debtor::class;
-
     public function definition(): array
     {
         $country = $this->faker->randomElement(['DE', 'ES', 'FR', 'NL', 'IT']);
@@ -47,7 +44,7 @@ class DebtorFactory extends Factory
             'amount' => $this->faker->randomFloat(2, 50, 5000),
             'currency' => 'EUR',
             'sepa_type' => $this->faker->optional(0.3)->randomElement(['CORE', 'B2B']),
-            'status' => Debtor::STATUS_PENDING,
+            'status' => Debtor::STATUS_UPLOADED,
             'risk_class' => $this->faker->randomElement(Debtor::RISK_CLASSES),
             'iban_valid' => true,
             'name_matched' => $this->faker->boolean(80),
@@ -55,32 +52,30 @@ class DebtorFactory extends Factory
             'meta' => null,
         ];
     }
-
+    public function uploaded(): static
+    {
+        return $this->state(fn () => ['status' => Debtor::STATUS_UPLOADED]);
+    }
     public function pending(): static
     {
         return $this->state(fn () => ['status' => Debtor::STATUS_PENDING]);
     }
-
     public function processing(): static
     {
         return $this->state(fn () => ['status' => Debtor::STATUS_PROCESSING]);
     }
-
     public function recovered(): static
     {
         return $this->state(fn () => ['status' => Debtor::STATUS_RECOVERED]);
     }
-
     public function failed(): static
     {
         return $this->state(fn () => ['status' => Debtor::STATUS_FAILED]);
     }
-
     public function highRisk(): static
     {
         return $this->state(fn () => ['risk_class' => Debtor::RISK_HIGH]);
     }
-
     public function spanish(): static
     {
         return $this->state(fn () => [
@@ -88,7 +83,6 @@ class DebtorFactory extends Factory
             'iban' => $this->generateIban('ES'),
         ]);
     }
-
     public function german(): static
     {
         return $this->state(fn () => [
@@ -96,7 +90,6 @@ class DebtorFactory extends Factory
             'iban' => $this->generateIban('DE'),
         ]);
     }
-
     private function generateIban(string $country): string
     {
         $lengths = [
