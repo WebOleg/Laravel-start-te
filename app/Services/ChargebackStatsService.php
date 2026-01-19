@@ -251,8 +251,7 @@ class ChargebackStatsService
         $dateFilter = $this->buildDateFilter($period, $month, $year, $dateMode);
 
         $query = DB::table('billing_attempts')
-            ->where('status', BillingAttempt::STATUS_CHARGEBACKED)
-            ->whereNotNull('chargeback_reason_code');
+            ->where('status', BillingAttempt::STATUS_CHARGEBACKED);
 
         $this->applyDateFilter($query, $dateFilter);
         $this->applyModelFilter($query, $model);
@@ -307,9 +306,17 @@ class ChargebackStatsService
         $dateFilter = $this->buildDateFilter($period, $month, $year, $dateMode);
         $threshold = config('tether.chargeback.alert_threshold', 25);
 
+        // Use a subquery to get the most recent vop_log per debtor
+        $latestVopLogs = DB::table('vop_logs')
+            ->select('debtor_id', DB::raw('MAX(id) as latest_vop_log_id'))
+            ->groupBy('debtor_id');
+
         $query = DB::table('billing_attempts')
             ->leftJoin('debtors', 'billing_attempts.debtor_id', '=', 'debtors.id')
-            ->leftJoin('vop_logs', 'debtors.id', '=', 'vop_logs.debtor_id');
+            ->leftJoinSub($latestVopLogs, 'latest_vop', function ($join) {
+                $join->on('debtors.id', '=', 'latest_vop.debtor_id');
+            })
+            ->leftJoin('vop_logs', 'latest_vop.latest_vop_log_id', '=', 'vop_logs.id');
 
         $this->applyDateFilter($query, $dateFilter);
         $this->applyModelFilter($query, $model);
