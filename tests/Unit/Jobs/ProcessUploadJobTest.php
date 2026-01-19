@@ -2,9 +2,6 @@
 
 /**
  * Unit tests for ProcessUploadJob.
- * 
- * Stage A: Job accepts ALL rows without validation
- * Stage B: Validation runs separately
  */
 
 namespace Tests\Unit\Jobs;
@@ -13,9 +10,7 @@ use App\Jobs\ProcessUploadJob;
 use App\Models\Upload;
 use App\Models\Debtor;
 use App\Services\SpreadsheetParserService;
-use App\Services\IbanValidator;
-use App\Services\BlacklistService;
-use App\Services\DeduplicationService;
+use App\Services\DebtorImportService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
@@ -46,10 +41,8 @@ class ProcessUploadJobTest extends TestCase
 
         $job = new ProcessUploadJob($upload, $columnMapping);
         $job->handle(
-            new SpreadsheetParserService(),
-            new IbanValidator(),
-            app(BlacklistService::class),
-            app(DeduplicationService::class)
+            app(SpreadsheetParserService::class),
+            app(DebtorImportService::class)
         );
 
         $upload->refresh();
@@ -89,10 +82,8 @@ class ProcessUploadJobTest extends TestCase
 
         $job = new ProcessUploadJob($upload, $columnMapping);
         $job->handle(
-            new SpreadsheetParserService(),
-            new IbanValidator(),
-            app(BlacklistService::class),
-            app(DeduplicationService::class)
+            app(SpreadsheetParserService::class),
+            app(DebtorImportService::class)
         );
 
         $upload->refresh();
@@ -132,10 +123,8 @@ class ProcessUploadJobTest extends TestCase
 
         $job = new ProcessUploadJob($upload, $columnMapping);
         $job->handle(
-            new SpreadsheetParserService(),
-            new IbanValidator(),
-            app(BlacklistService::class),
-            app(DeduplicationService::class)
+            app(SpreadsheetParserService::class),
+            app(DebtorImportService::class)
         );
 
         $upload->refresh();

@@ -9,9 +9,7 @@ namespace Tests\Feature;
 use App\Jobs\ProcessUploadJob;
 use App\Models\Upload;
 use App\Models\User;
-use App\Services\BlacklistService;
-use App\Services\DeduplicationService;
-use App\Services\IbanValidator;
+use App\Services\DebtorImportService;
 use App\Services\SpreadsheetParserService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
@@ -71,10 +69,8 @@ class S3FileUploadTest extends TestCase
 
         $job = new ProcessUploadJob($upload, $columnMapping);
         $job->handle(
-            new SpreadsheetParserService(),
-            new IbanValidator(),
-            app(BlacklistService::class),
-            app(DeduplicationService::class)
+            app(SpreadsheetParserService::class),
+            app(DebtorImportService::class)
         );
 
         $upload->refresh();
@@ -114,7 +110,6 @@ class S3FileUploadTest extends TestCase
 
     public function test_full_upload_workflow_with_s3(): void
     {
-        // Step 1: Upload file via API
         $csvContent = "first_name,last_name,iban,amount\nTest,User,DE89370400440532013000,50.00";
         $file = UploadedFile::fake()->createWithContent('workflow_test.csv', $csvContent);
 
@@ -124,17 +119,14 @@ class S3FileUploadTest extends TestCase
         $response->assertStatus(201);
         $upload = Upload::first();
 
-        // Step 2: Verify file exists in S3
         Storage::disk('s3')->assertExists($upload->file_path);
 
-        // Step 3: Verify debtors were created
         $this->assertDatabaseHas('debtors', [
             'upload_id' => $upload->id,
             'first_name' => 'Test',
             'last_name' => 'User',
         ]);
 
-        // Step 4: Delete upload (soft delete because has debtors)
         $filePath = $upload->file_path;
 
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
@@ -142,14 +134,12 @@ class S3FileUploadTest extends TestCase
 
         $response->assertStatus(200);
         
-        // Soft delete - upload is soft deleted, debtors are deleted
         $this->assertSoftDeleted('uploads', ['id' => $upload->id]);
         $this->assertDatabaseMissing('debtors', ['upload_id' => $upload->id, 'deleted_at' => null]);
     }
 
     public function test_hard_delete_removes_file_from_s3(): void
     {
-        // Upload without debtors can be hard deleted
         $filePath = 'uploads/hard_delete_' . uniqid() . '.csv';
         Storage::disk('s3')->put($filePath, 'test content');
 
@@ -159,7 +149,6 @@ class S3FileUploadTest extends TestCase
             'status' => Upload::STATUS_COMPLETED,
         ]);
 
-        // No debtors - can be hard deleted
         Storage::disk('s3')->assertExists($filePath);
 
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)

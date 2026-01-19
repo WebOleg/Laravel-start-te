@@ -2,9 +2,6 @@
 
 /**
  * Unit tests for FileUploadService.
- * 
- * Stage A: FileUploadService accepts rows and skips duplicates/blacklisted
- * Stage B: DebtorValidationService validates remaining records
  */
 
 namespace Tests\Unit\Services;
@@ -12,9 +9,7 @@ namespace Tests\Unit\Services;
 use App\Models\Debtor;
 use App\Services\FileUploadService;
 use App\Services\BlacklistService;
-use App\Services\DeduplicationService;
 use App\Services\IbanValidator;
-use App\Services\SpreadsheetParserService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
@@ -32,16 +27,7 @@ class FileUploadServiceTest extends TestCase
 
     private function createService(): FileUploadService
     {
-        $ibanValidator = new IbanValidator();
-        $blacklistService = new BlacklistService($ibanValidator);
-        $deduplicationService = app(DeduplicationService::class);
-
-        return new FileUploadService(
-            new SpreadsheetParserService(),
-            $ibanValidator,
-            $blacklistService,
-            $deduplicationService
-        );
+        return app(FileUploadService::class);
     }
 
     public function test_process_skips_blacklisted_iban(): void
