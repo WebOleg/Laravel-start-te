@@ -52,7 +52,11 @@ class UploadController extends Controller
             'billingAttempts as chargeback_count' => function ($q) {
                 $q->where('status', BillingAttempt::STATUS_CHARGEBACKED);
             },
-        ]);
+        ])->withSum(['billingAttempts as approved_amount' => function ($q) {
+            $q->where('status', BillingAttempt::STATUS_APPROVED);
+        }], 'amount')->withSum(['billingAttempts as chargeback_amount' => function ($q) {
+            $q->where('status', BillingAttempt::STATUS_CHARGEBACKED);
+        }], 'amount');
 
         if ($request->has('status')) {
             $query->where('status', $request->input('status'));
@@ -96,6 +100,14 @@ class UploadController extends Controller
                 $q->where('status', BillingAttempt::STATUS_CHARGEBACKED);
             },
         ]);
+
+        $upload->loadSum(['billingAttempts as approved_amount' => function ($q) {
+            $q->where('status', BillingAttempt::STATUS_APPROVED);
+        }], 'amount');
+
+        $upload->loadSum(['billingAttempts as chargeback_amount' => function ($q) {
+            $q->where('status', BillingAttempt::STATUS_CHARGEBACKED);
+        }], 'amount');
 
         return new UploadResource($upload);
     }
@@ -228,9 +240,6 @@ class UploadController extends Controller
         return DebtorResource::collection($debtors);
     }
 
-    /**
-     * Start async validation for all debtors in upload.
-     */
     public function validate(Upload $upload): JsonResponse
     {
         if ($upload->status === Upload::STATUS_PROCESSING) {
