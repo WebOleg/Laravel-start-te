@@ -328,7 +328,7 @@ class DebtorImportService
     private function mapRowToDebtor(array $row, array $columnMapping): array
     {
         $data = [
-            'status' => Debtor::STATUS_PENDING,
+            'status' => Debtor::STATUS_UPLOADED,
             'currency' => 'EUR',
             'amount' => 0,
         ];
