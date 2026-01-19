@@ -6,9 +6,9 @@
 
 namespace App\Services;
 
+use App\Enums\BillingModel;
 use App\Jobs\ProcessUploadJob;
 use App\Models\Upload;
-use App\Models\Debtor;
 use App\Traits\ParsesDebtorData;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Log;
@@ -93,21 +93,28 @@ class FileUploadService
 
     public function __construct(
         private SpreadsheetParserService $parser,
-        private IbanValidator $ibanValidator,
-        private BlacklistService $blacklistService,
-        private DeduplicationService $deduplicationService
+        private DebtorImportService $debtorImportService
     ) {}
 
     /**
      * Process file asynchronously via queue.
-     * 
+     *
      * @return array{upload: Upload, queued: bool}
      */
-    public function processAsync(UploadedFile $file, ?int $userId = null): array
-    {
+    public function processAsync(
+        UploadedFile $file,
+        ?int $userId = null,
+        BillingModel $billingModel = BillingModel::Legacy
+    ): array {
         $parsed = $this->parser->parse($file);
         $storedPath = $this->storeFile($file);
-        $upload = $this->createUploadRecord($file, $storedPath, $parsed['total_rows'], $userId);
+        $upload = $this->createUploadRecord(
+            $file,
+            $storedPath,
+            $parsed['total_rows'],
+            $userId,
+            $billingModel
+        );
 
         $columnMapping = $this->buildColumnMapping($parsed['headers']);
         $upload->update([
@@ -125,14 +132,23 @@ class FileUploadService
 
     /**
      * Process file synchronously.
-     * 
+     *
      * @return array{upload: Upload, created: int, failed: int, skipped: array, errors: array}
      */
-    public function process(UploadedFile $file, ?int $userId = null): array
-    {
+    public function process(
+        UploadedFile $file,
+        ?int $userId = null,
+        BillingModel $billingModel = BillingModel::Legacy
+    ): array {
         $parsed = $this->parser->parse($file);
         $storedPath = $this->storeFile($file);
-        $upload = $this->createUploadRecord($file, $storedPath, $parsed['total_rows'], $userId);
+        $upload = $this->createUploadRecord(
+            $file,
+            $storedPath,
+            $parsed['total_rows'],
+            $userId,
+            $billingModel
+        );
 
         $columnMapping = $this->buildColumnMapping($parsed['headers']);
         $upload->update([
@@ -140,7 +156,12 @@ class FileUploadService
             'headers' => $parsed['headers'],
         ]);
 
-        $result = $this->processRows($upload, $parsed['rows'], $columnMapping);
+        $result = $this->debtorImportService->importRows(
+            $upload,
+            $parsed['rows'],
+            $columnMapping
+        );
+
         $this->finalizeUpload($upload, $result);
 
         return [
@@ -180,7 +201,8 @@ class FileUploadService
         UploadedFile $file,
         string $storedPath,
         int $totalRows,
-        ?int $userId
+        ?int $userId,
+        BillingModel $billingModel
     ): Upload {
         return Upload::create([
             'filename' => basename($storedPath),
@@ -189,6 +211,7 @@ class FileUploadService
             'file_size' => $file->getSize(),
             'mime_type' => $file->getMimeType(),
             'status' => Upload::STATUS_PENDING,
+            'billing_model' => $billingModel->value,
             'total_records' => $totalRows,
             'processed_records' => 0,
             'failed_records' => 0,
@@ -218,131 +241,9 @@ class FileUploadService
         return trim($name, '_');
     }
 
-    private function processRows(Upload $upload, array $rows, array $columnMapping): array
-    {
-        $upload->update([
-            'status' => Upload::STATUS_PROCESSING,
-            'processing_started_at' => now(),
-        ]);
-
-        $created = 0;
-        $failed = 0;
-        $errors = [];
-        
-        $skipped = [
-            'total' => 0,
-            DeduplicationService::SKIP_BLACKLISTED => 0,
-            DeduplicationService::SKIP_BLACKLISTED_NAME => 0,
-            DeduplicationService::SKIP_BLACKLISTED_EMAIL => 0,
-            DeduplicationService::SKIP_CHARGEBACKED => 0,
-            DeduplicationService::SKIP_RECOVERED => 0,
-            DeduplicationService::SKIP_RECENTLY_ATTEMPTED => 0,
-        ];
-        $skippedRows = [];
-
-        $debtorDataList = [];
-        foreach ($rows as $index => $row) {
-            $debtorData = $this->mapRowToDebtor($row, $columnMapping);
-            $this->normalizeIban($debtorData);
-            $debtorDataList[$index] = $debtorData;
-        }
-
-        $dedupeResults = $this->deduplicationService->checkDebtorBatch($debtorDataList, $upload->id);
-
-        foreach ($rows as $index => $row) {
-            try {
-                $debtorData = $debtorDataList[$index];
-                
-                if (isset($dedupeResults[$index])) {
-                    $skipInfo = $dedupeResults[$index];
-                    $skipped['total']++;
-                    
-                    if (isset($skipped[$skipInfo['reason']])) {
-                        $skipped[$skipInfo['reason']]++;
-                    }
-                    
-                    $skippedRows[] = [
-                        'row' => $index + 2,
-                        'iban_masked' => $this->ibanValidator->mask($debtorData['iban'] ?? ''),
-                        'name' => trim(($debtorData['first_name'] ?? '') . ' ' . ($debtorData['last_name'] ?? '')),
-                        'email' => $debtorData['email'] ?? null,
-                        'reason' => $skipInfo['reason'],
-                        'days_ago' => $skipInfo['days_ago'] ?? null,
-                        'last_status' => $skipInfo['last_status'] ?? null,
-                    ];
-                    continue;
-                }
-
-                $debtorData['upload_id'] = $upload->id;
-                $debtorData['raw_data'] = $row;
-                
-                $this->enrichCountryFromIban($debtorData);
-                $debtorData['validation_status'] = Debtor::VALIDATION_PENDING;
-
-                Debtor::create($debtorData);
-                $created++;
-
-            } catch (\Exception $e) {
-                $failed++;
-                $errors[] = [
-                    'row' => $index + 2,
-                    'message' => $e->getMessage(),
-                    'data' => array_slice($row, 0, 3),
-                ];
-            }
-        }
-
-        return [
-            'created' => $created,
-            'failed' => $failed,
-            'skipped' => $skipped,
-            'skipped_rows' => $skippedRows,
-            'errors' => $errors,
-        ];
-    }
-
-    private function mapRowToDebtor(array $row, array $columnMapping): array
-    {
-        $data = [
-            'status' => Debtor::STATUS_UPLOADED,
-            'currency' => 'EUR',
-            'amount' => 0,
-        ];
-
-        foreach ($row as $header => $value) {
-            if (!isset($columnMapping[$header]) || $value === null) {
-                continue;
-            }
-
-            $field = $columnMapping[$header];
-            $data[$field] = $this->castValue($field, $value);
-        }
-
-        $this->splitFullName($data);
-
-        return $data;
-    }
-
-    private function normalizeIban(array &$data): void
-    {
-        if (empty($data['iban'])) {
-            $data['iban'] = '';
-            $data['iban_hash'] = null;
-            $data['iban_valid'] = false;
-            return;
-        }
-
-        $data['iban'] = $this->ibanValidator->normalize($data['iban']);
-        $data['iban_hash'] = $this->ibanValidator->hash($data['iban']);
-
-        $result = $this->ibanValidator->validate($data['iban']);
-        $data['iban_valid'] = $result['valid'];
-
-        if ($result['valid']) {
-            $data['bank_code'] = $data['bank_code'] ?? $result['bank_id'];
-        }
-    }
-
+    /**
+     * Finalize upload with skipped counts in meta.
+     */
     private function finalizeUpload(Upload $upload, array $result): void
     {
         $status = $result['failed'] === 0

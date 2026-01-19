@@ -7,12 +7,8 @@
 namespace App\Jobs;
 
 use App\Models\Upload;
-use App\Models\Debtor;
+use App\Services\DebtorImportService;
 use App\Services\SpreadsheetParserService;
-use App\Services\IbanValidator;
-use App\Services\BlacklistService;
-use App\Services\DeduplicationService;
-use App\Traits\ParsesDebtorData;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -25,7 +21,7 @@ use Illuminate\Support\Facades\Storage;
 
 class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
 {
-    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels, ParsesDebtorData;
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     public int $tries = 3;
     public int $timeout = 600;
@@ -48,9 +44,7 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
 
     public function handle(
         SpreadsheetParserService $parser,
-        IbanValidator $ibanValidator,
-        BlacklistService $blacklistService,
-        DeduplicationService $deduplicationService
+        DebtorImportService $importer,
     ): void {
         Log::info("ProcessUploadJob started", ['upload_id' => $this->upload->id]);
 
@@ -67,22 +61,82 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
             $parsed = $this->parseFile($parser, $tempFilePath);
             $rows = $parsed['rows'];
 
+            // Update total records count immediately
+            $this->upload->update(['total_records' => count($rows)]);
+
             if (count($rows) > self::BATCH_THRESHOLD) {
-                $this->processWithBatching($rows, $ibanValidator);
-            } else {
-                $this->processDirectly($rows, $ibanValidator, $deduplicationService);
+                $this->processWithBatching($rows);
+                return;
             }
 
-        } catch (\Exception $e) {
+            // For small files, process directly via Service
+            $result = $importer->importRows($this->upload, $rows, $this->columnMapping, false, 1);
+            $importer->finalizeUpload($this->upload, $result);
+
+            Log::info("ProcessUploadJob completed directly", [
+                'upload_id' => $this->upload->id,
+                'created' => $result['created'] ?? null,
+                'failed' => $result['failed'] ?? null,
+            ]);
+
+        } catch (\Throwable $e) {
             Log::error("ProcessUploadJob failed", [
                 'upload_id' => $this->upload->id,
                 'error' => $e->getMessage(),
             ]);
-
             throw $e;
         } finally {
             $this->cleanupTempFile($tempFilePath);
         }
+    }
+
+    private function processWithBatching(array $rows): void
+    {
+        $chunks = array_chunk($rows, self::CHUNK_SIZE);
+        $jobs = [];
+
+        $upload = $this->upload;
+
+        foreach ($chunks as $index => $chunk) {
+            $jobs[] = new ProcessUploadChunkJob(
+                $upload,
+                $chunk,
+                $this->columnMapping,
+                $index,
+                $index * self::CHUNK_SIZE + 1
+            );
+        }
+
+        Bus::batch($jobs)
+            ->name("Upload #{$this->upload->id}")
+            ->allowFailures()
+            ->finally(function () use ($upload) {
+                // Refresh model to get latest counts from chunk jobs
+                $upload->refresh();
+
+                $status = $upload->failed_records === $upload->total_records && $upload->total_records > 0
+                    ? Upload::STATUS_FAILED
+                    : Upload::STATUS_COMPLETED;
+
+                $upload->update([
+                    'status' => $status,
+                    'processing_completed_at' => now(),
+                ]);
+
+                Log::info("Upload batch completed", [
+                    'upload_id' => $upload->id,
+                    'status' => $status,
+                    'processed' => $upload->processed_records,
+                    'failed' => $upload->failed_records,
+                ]);
+            })
+            ->dispatch();
+
+        Log::info("ProcessUploadJob dispatched batch", [
+            'upload_id' => $this->upload->id,
+            'chunks' => count($chunks),
+            'total_rows' => count($rows),
+        ]);
     }
 
     private function downloadFromS3(): string
@@ -90,15 +144,10 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
         $s3Path = $this->upload->file_path;
 
         if (!Storage::disk('s3')->exists($s3Path)) {
-            Log::error('File not found in S3', [
-                'upload_id' => $this->upload->id,
-                'path' => $s3Path,
-            ]);
             throw new \RuntimeException("File not found in S3: {$s3Path}");
         }
 
         $content = Storage::disk('s3')->get($s3Path);
-
         if ($content === null) {
             throw new \RuntimeException("Failed to download file from S3: {$s3Path}");
         }
@@ -110,13 +159,6 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
             throw new \RuntimeException("Failed to write temp file: {$tempFilePath}");
         }
 
-        Log::info('File downloaded from S3 to temp', [
-            'upload_id' => $this->upload->id,
-            's3_path' => $s3Path,
-            'temp_path' => $tempFilePath,
-            'size' => strlen($content),
-        ]);
-
         return $tempFilePath;
     }
 
@@ -124,256 +166,7 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
     {
         if ($tempFilePath && file_exists($tempFilePath)) {
             @unlink($tempFilePath);
-            Log::debug('Temp file cleaned up', ['path' => $tempFilePath]);
         }
-    }
-
-    public function failed(\Throwable $exception): void
-    {
-        Log::error("ProcessUploadJob permanently failed", [
-            'upload_id' => $this->upload->id,
-            'error' => $exception->getMessage(),
-        ]);
-
-        $this->upload->update([
-            'status' => Upload::STATUS_FAILED,
-            'processing_completed_at' => now(),
-            'meta' => array_merge($this->upload->meta ?? [], [
-                'error' => $exception->getMessage(),
-            ]),
-        ]);
-    }
-
-    /**
-     * Deduplicate rows by IBAN before batching.
-     * Single pass O(n) with hash map - no DB queries.
-     *
-     * @return array{rows: array, duplicates: int}
-     */
-    private function deduplicateRows(array $rows, IbanValidator $ibanValidator): array
-    {
-        $uniqueRows = [];
-        $seenHashes = [];
-        $duplicates = 0;
-
-        foreach ($rows as $row) {
-            $iban = null;
-            
-            // Find IBAN in row using column mapping
-            foreach ($row as $header => $value) {
-                if (isset($this->columnMapping[$header]) && $this->columnMapping[$header] === 'iban') {
-                    $iban = $value;
-                    break;
-                }
-            }
-
-            // If no IBAN or empty - keep row (will fail validation later)
-            if (empty($iban)) {
-                $uniqueRows[] = $row;
-                continue;
-            }
-
-            $normalized = $ibanValidator->normalize($iban);
-            $hash = $ibanValidator->hash($normalized);
-
-            if (isset($seenHashes[$hash])) {
-                $duplicates++;
-                continue;
-            }
-
-            $seenHashes[$hash] = true;
-            $uniqueRows[] = $row;
-        }
-
-        return [
-            'rows' => $uniqueRows,
-            'duplicates' => $duplicates,
-        ];
-    }
-
-    private function processWithBatching(array $rows, IbanValidator $ibanValidator): void
-    {
-        $totalRows = count($rows);
-
-        // Deduplicate before chunking - O(n), no DB queries
-        $deduped = $this->deduplicateRows($rows, $ibanValidator);
-        $uniqueRows = $deduped['rows'];
-        $duplicateCount = $deduped['duplicates'];
-
-        Log::info("ProcessUploadJob deduplication completed", [
-            'upload_id' => $this->upload->id,
-            'total_rows' => $totalRows,
-            'unique_rows' => count($uniqueRows),
-            'duplicates_removed' => $duplicateCount,
-        ]);
-
-        // Store duplicate count in meta
-        $this->upload->update([
-            'total_records' => $totalRows,
-            'meta' => array_merge($this->upload->meta ?? [], [
-                'skipped' => [
-                    'total' => $duplicateCount,
-                    'duplicates' => $duplicateCount,
-                ],
-            ]),
-        ]);
-
-        $chunks = array_chunk($uniqueRows, self::CHUNK_SIZE);
-        $jobs = [];
-
-        foreach ($chunks as $index => $chunk) {
-            $jobs[] = new ProcessUploadChunkJob(
-                upload: $this->upload,
-                rows: $chunk,
-                columnMapping: $this->columnMapping,
-                chunkIndex: $index,
-                startRow: $index * self::CHUNK_SIZE + 1
-            );
-        }
-
-        $uploadId = $this->upload->id;
-
-        Bus::batch($jobs)
-            ->name("Upload #{$uploadId}")
-            ->allowFailures()
-            ->finally(function () use ($uploadId) {
-                $upload = Upload::find($uploadId);
-                if ($upload) {
-                    $status = $upload->failed_records === $upload->total_records
-                        ? Upload::STATUS_FAILED
-                        : Upload::STATUS_COMPLETED;
-
-                    $upload->update([
-                        'status' => $status,
-                        'processing_completed_at' => now(),
-                    ]);
-
-                    Log::info("Upload batch completed", [
-                        'upload_id' => $uploadId,
-                        'status' => $status,
-                        'processed' => $upload->processed_records,
-                        'failed' => $upload->failed_records,
-                    ]);
-                }
-            })
-            ->dispatch();
-
-        Log::info("ProcessUploadJob dispatched batch", [
-            'upload_id' => $this->upload->id,
-            'chunks' => count($chunks),
-            'total_rows' => $totalRows,
-            'unique_rows' => count($uniqueRows),
-        ]);
-    }
-
-    private function processDirectly(
-        array $rows,
-        IbanValidator $ibanValidator,
-        DeduplicationService $deduplicationService
-    ): void {
-        $created = 0;
-        $failed = 0;
-        $errors = [];
-        
-        $skipped = [
-            'total' => 0,
-            'duplicates' => 0,
-            DeduplicationService::SKIP_BLACKLISTED => 0,
-            DeduplicationService::SKIP_BLACKLISTED_NAME => 0,
-            DeduplicationService::SKIP_BLACKLISTED_EMAIL => 0,
-            DeduplicationService::SKIP_CHARGEBACKED => 0,
-            DeduplicationService::SKIP_RECOVERED => 0,
-            DeduplicationService::SKIP_RECENTLY_ATTEMPTED => 0,
-        ];
-        $skippedRows = [];
-
-        // Deduplicate within file first
-        $seenHashes = [];
-        $debtorDataList = [];
-        $duplicateIndices = [];
-
-        foreach ($rows as $index => $row) {
-            $debtorData = $this->mapRowToDebtor($row);
-            $this->normalizeIban($debtorData, $ibanValidator);
-            
-            $hash = $debtorData['iban_hash'] ?? null;
-            if ($hash && isset($seenHashes[$hash])) {
-                $duplicateIndices[$index] = true;
-                $skipped['total']++;
-                $skipped['duplicates']++;
-                continue;
-            }
-            
-            if ($hash) {
-                $seenHashes[$hash] = true;
-            }
-            
-            $debtorDataList[$index] = $debtorData;
-        }
-
-        $dedupeResults = $deduplicationService->checkDebtorBatch($debtorDataList, $this->upload->id);
-
-        foreach ($rows as $index => $row) {
-            // Skip duplicates within file
-            if (isset($duplicateIndices[$index])) {
-                continue;
-            }
-
-            try {
-                $debtorData = $debtorDataList[$index] ?? null;
-                if (!$debtorData) {
-                    continue;
-                }
-
-                if (isset($dedupeResults[$index])) {
-                    $skipInfo = $dedupeResults[$index];
-                    $skipped['total']++;
-                    
-                    if (isset($skipped[$skipInfo['reason']])) {
-                        $skipped[$skipInfo['reason']]++;
-                    }
-                    
-                    $skippedRows[] = [
-                        'row' => $index + 2,
-                        'iban_masked' => $ibanValidator->mask($debtorData['iban'] ?? ''),
-                        'name' => trim(($debtorData['first_name'] ?? '') . ' ' . ($debtorData['last_name'] ?? '')),
-                        'email' => $debtorData['email'] ?? null,
-                        'reason' => $skipInfo['reason'],
-                    ];
-                    continue;
-                }
-
-                $debtorData['upload_id'] = $this->upload->id;
-                $debtorData['raw_data'] = $row;
-
-                $this->validateBasicStructure($debtorData);
-                $this->enrichCountryFromIban($debtorData);
-
-                $debtorData['validation_status'] = Debtor::VALIDATION_PENDING;
-
-                Debtor::create($debtorData);
-                $created++;
-
-            } catch (\Exception $e) {
-                $failed++;
-                if (count($errors) < 100) {
-                    $errors[] = [
-                        'row' => $index + 2,
-                        'message' => $e->getMessage(),
-                    ];
-                }
-            }
-        }
-
-        $this->finalizeUpload($created, $failed, $errors, $skipped, $skippedRows);
-
-        Log::info("ProcessUploadJob completed directly", [
-            'upload_id' => $this->upload->id,
-            'created' => $created,
-            'failed' => $failed,
-            'skipped' => $skipped['total'],
-            'duplicates' => $skipped['duplicates'],
-        ]);
     }
 
     private function parseFile(SpreadsheetParserService $parser, string $filePath): array
@@ -387,77 +180,13 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
         };
     }
 
-    private function mapRowToDebtor(array $row): array
+    public function failed(\Throwable $exception): void
     {
-        $data = [
-            'status' => Debtor::STATUS_UPLOADED,
-            'currency' => 'EUR',
-        ];
-
-        foreach ($row as $header => $value) {
-            if (isset($this->columnMapping[$header]) && $value !== null) {
-                $field = $this->columnMapping[$header];
-                $data[$field] = $this->castValue($field, $value);
-            }
-        }
-
-        $this->splitFullName($data);
-
-        return $data;
-    }
-
-    private function validateBasicStructure(array $data): void
-    {
-        $errors = [];
-
-        if (empty($data['first_name']) && empty($data['last_name'])) {
-            $errors[] = 'Name is required';
-        }
-
-        if (!isset($data['amount']) || !is_numeric($data['amount'])) {
-            $errors[] = 'Valid amount is required';
-        }
-
-        if (!empty($errors)) {
-            throw new \InvalidArgumentException(implode('; ', $errors));
-        }
-    }
-
-    private function normalizeIban(array &$data, IbanValidator $ibanValidator): void
-    {
-        if (empty($data['iban'])) {
-            $data['iban'] = '';
-            $data['iban_hash'] = null;
-            $data['iban_valid'] = false;
-            return;
-        }
-
-        $data['iban'] = $ibanValidator->normalize($data['iban']);
-        $data['iban_hash'] = $ibanValidator->hash($data['iban']);
-
-        $result = $ibanValidator->validate($data['iban']);
-        $data['iban_valid'] = $result['valid'];
-
-        if ($result['valid']) {
-            $data['bank_code'] = $data['bank_code'] ?? $result['bank_id'];
-        }
-    }
-
-    private function finalizeUpload(int $created, int $failed, array $errors, array $skipped = [], array $skippedRows = []): void
-    {
-        $status = $failed === 0
-            ? Upload::STATUS_COMPLETED
-            : ($created > 0 ? Upload::STATUS_COMPLETED : Upload::STATUS_FAILED);
-
         $this->upload->update([
-            'status' => $status,
-            'processed_records' => $created,
-            'failed_records' => $failed,
+            'status' => Upload::STATUS_FAILED,
             'processing_completed_at' => now(),
             'meta' => array_merge($this->upload->meta ?? [], [
-                'errors' => $errors,
-                'skipped' => $skipped,
-                'skipped_rows' => array_slice($skippedRows, 0, 100),
+                'error' => $exception->getMessage(),
             ]),
         ]);
     }

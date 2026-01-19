@@ -1,13 +1,15 @@
 <?php
 
 /**
- * Service for VOP (Verification of Payer) verification.
- * Handles IBAN verification with caching support.
+ * VOP verification service orchestrating scoring and VopLog management.
+ *
+ * Uses IbanApiService (IBAN SUITE - unlimited) for bank identification.
  */
 
 namespace App\Services;
 
 use App\Models\Debtor;
+use App\Models\DebtorProfile;
 use App\Models\Upload;
 use App\Models\VopLog;
 use Illuminate\Support\Facades\Log;
@@ -87,23 +89,56 @@ class VopVerificationService
         return $vopLog;
     }
 
-    public function getUploadStats(int $uploadId): array
+    /**
+     * Get verification stats for upload.
+     *
+     * @param int $uploadId
+     * @param string|null $debtorType
+     * @return array
+     */
+    public function getUploadStats(int $uploadId, ?string $debtorType = null): array
     {
         $upload = Upload::find($uploadId);
 
-        $total = Debtor::where('upload_id', $uploadId)
-            ->where('validation_status', Debtor::VALIDATION_VALID)
-            ->count();
+        $applyDebtorFilter = function ($query) use ($debtorType) {
+            if (!$debtorType || $debtorType === 'all') {
+                return;
+            }
 
-        $verified = VopLog::where('upload_id', $uploadId)->count();
+            if ($debtorType === DebtorProfile::MODEL_LEGACY) {
+                // Legacy = No profile OR Profile is explicitly Legacy
+                $query->where(function ($q) {
+                    $q->whereDoesntHave('debtorProfile')
+                        ->orWhereHas('debtorProfile', fn($sq) => $sq->where('billing_model', DebtorProfile::MODEL_LEGACY));
+                });
+            } else {
+                // Specific models (Flywheel, Recovery)
+                $query->whereHas('debtorProfile', fn($q) => $q->where('billing_model', $debtorType));
+            }
+        };
 
-        $byResult = VopLog::where('upload_id', $uploadId)
+        $totalQuery = Debtor::where('upload_id', $uploadId)
+            ->where('validation_status', Debtor::VALIDATION_VALID);
+
+        $applyDebtorFilter($totalQuery);
+
+        $total = $totalQuery->count();
+
+        $vopLogsQuery = VopLog::where('upload_id', $uploadId);
+
+        if ($debtorType && $debtorType !== 'all') {
+            $vopLogsQuery->whereHas('debtor', $applyDebtorFilter);
+        }
+
+        $verified = (clone $vopLogsQuery)->count();
+
+        $byResult = (clone $vopLogsQuery)
             ->selectRaw('result, COUNT(*) as count')
             ->groupBy('result')
             ->pluck('count', 'result')
             ->toArray();
 
-        $avgScore = VopLog::where('upload_id', $uploadId)->avg('vop_score');
+        $avgScore = (clone $vopLogsQuery)->avg('vop_score');
 
         return [
             'total_eligible' => $total,
@@ -111,6 +146,7 @@ class VopVerificationService
             'pending' => $total - $verified,
             'by_result' => $byResult,
             'avg_score' => round($avgScore ?? 0),
+            // Merged job status from main branch
             'is_processing' => $upload?->isVopProcessing() ?? false,
             'vop_status' => $upload?->vop_status ?? 'idle',
             'vop_started_at' => $upload?->vop_started_at?->toIso8601String(),

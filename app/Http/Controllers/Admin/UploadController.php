@@ -6,10 +6,12 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Enums\BillingModel;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\StoreUploadRequest;
 use App\Http\Resources\UploadResource;
 use App\Http\Resources\DebtorResource;
+use App\Models\DebtorProfile;
 use App\Models\Upload;
 use App\Models\Debtor;
 use App\Models\BillingAttempt;
@@ -50,7 +52,11 @@ class UploadController extends Controller
             'billingAttempts as chargeback_count' => function ($q) {
                 $q->where('status', BillingAttempt::STATUS_CHARGEBACKED);
             },
-        ]);
+        ])->withSum(['billingAttempts as approved_amount' => function ($q) {
+            $q->where('status', BillingAttempt::STATUS_APPROVED);
+        }], 'amount')->withSum(['billingAttempts as chargeback_amount' => function ($q) {
+            $q->where('status', BillingAttempt::STATUS_CHARGEBACKED);
+        }], 'amount');
 
         if ($request->has('status')) {
             $query->where('status', $request->input('status'));
@@ -95,6 +101,14 @@ class UploadController extends Controller
             },
         ]);
 
+        $upload->loadSum(['billingAttempts as approved_amount' => function ($q) {
+            $q->where('status', BillingAttempt::STATUS_APPROVED);
+        }], 'amount');
+
+        $upload->loadSum(['billingAttempts as chargeback_amount' => function ($q) {
+            $q->where('status', BillingAttempt::STATUS_CHARGEBACKED);
+        }], 'amount');
+
         return new UploadResource($upload);
     }
 
@@ -102,6 +116,10 @@ class UploadController extends Controller
     {
         try {
             $file = $request->file('file');
+
+            $billingModel = BillingModel::from(
+                $request->input('billing_model', BillingModel::Legacy->value)
+            );
 
             $preValidation = $this->preValidationService->validate($file);
             if (!$preValidation['valid']) {
@@ -116,7 +134,8 @@ class UploadController extends Controller
             if ($forceAsync || $this->shouldProcessAsync($file)) {
                 $result = $this->uploadService->processAsync(
                     $file,
-                    $request->user()?->id
+                    $request->user()?->id,
+                    $billingModel
                 );
 
                 return response()->json([
@@ -130,7 +149,8 @@ class UploadController extends Controller
 
             $result = $this->uploadService->process(
                 $file,
-                $request->user()?->id
+                $request->user()?->id,
+                $billingModel
             );
 
             return response()->json([
@@ -174,7 +194,26 @@ class UploadController extends Controller
 
     public function debtors(Upload $upload, Request $request): AnonymousResourceCollection
     {
-        $query = $upload->debtors()->with(['latestBillingAttempt']);
+        $query = $upload->debtors()->with(['latestBillingAttempt', 'debtorProfile']);
+
+
+        if ($request->filled('debtor_type') && $request->input('debtor_type') !== 'all') {
+            $type = $request->input('debtor_type');
+
+            // filters by billing models
+            if ($type === DebtorProfile::MODEL_LEGACY) {
+                $query->where(function ($q) {
+                    $q->whereDoesntHave('debtorProfile')
+                        ->orWhereHas('debtorProfile', function ($subQ) {
+                            $subQ->where('billing_model', DebtorProfile::MODEL_LEGACY);
+                        });
+                });
+            } else {
+                $query->whereHas('debtorProfile', function ($q) use ($type) {
+                    $q->where('billing_model', $type);
+                });
+            }
+        }
 
         if ($request->has('validation_status')) {
             $query->where('validation_status', $request->input('validation_status'));
@@ -201,9 +240,6 @@ class UploadController extends Controller
         return DebtorResource::collection($debtors);
     }
 
-    /**
-     * Start async validation for all debtors in upload.
-     */
     public function validate(Upload $upload): JsonResponse
     {
         if ($upload->status === Upload::STATUS_PROCESSING) {
@@ -227,9 +263,41 @@ class UploadController extends Controller
         ], 202);
     }
 
-    public function validationStats(Upload $upload): JsonResponse
+    public function validationStats(Upload $upload, Request $request): JsonResponse
     {
-        $stats = $upload->debtors()
+        $modelStats = $upload->debtors()
+            ->leftJoin('debtor_profiles', 'debtors.debtor_profile_id', '=', 'debtor_profiles.id')
+            ->selectRaw("
+            COUNT(*) as all_count,
+            SUM(CASE WHEN debtor_profiles.billing_model = ? THEN 1 ELSE 0 END) as flywheel,
+            SUM(CASE WHEN debtor_profiles.billing_model = ? THEN 1 ELSE 0 END) as recovery,
+            SUM(CASE WHEN debtor_profiles.billing_model = ? OR debtors.debtor_profile_id IS NULL THEN 1 ELSE 0 END) as legacy
+        ", [
+                DebtorProfile::MODEL_FLYWHEEL,
+                DebtorProfile::MODEL_RECOVERY,
+                DebtorProfile::MODEL_LEGACY
+            ])
+            ->toBase()
+            ->first();
+
+        $query = $upload->debtors();
+
+        if ($request->filled('debtor_type') && $request->input('debtor_type') !== 'all') {
+            $type = $request->input('debtor_type');
+
+            if ($type === DebtorProfile::MODEL_LEGACY) {
+                // Legacy = No Profile OR Profile is explicitly Legacy
+                $query->where(function ($q) {
+                    $q->whereDoesntHave('debtorProfile')
+                        ->orWhereHas('debtorProfile', fn($sub) => $sub->where('billing_model', DebtorProfile::MODEL_LEGACY));
+                });
+            } else {
+                // Standard filtering for Flywheel/Recovery
+                $query->whereHas('debtorProfile', fn($q) => $q->where('billing_model', $type));
+            }
+        }
+
+        $stats = (clone $query)
             ->selectRaw("
                 COUNT(*) as total,
                 SUM(CASE WHEN validation_status = ? THEN 1 ELSE 0 END) as valid,
@@ -241,7 +309,7 @@ class UploadController extends Controller
         $driver = DB::connection()->getDriverName();
         $blacklistQuery = $upload->debtors()
             ->where('validation_status', Debtor::VALIDATION_INVALID);
-        
+
         if ($driver === 'pgsql') {
             $blacklisted = $blacklistQuery
                 ->whereRaw("validation_errors::text LIKE ?", ['%blacklist%'])
@@ -269,9 +337,15 @@ class UploadController extends Controller
                 'pending' => (int) $stats->pending,
                 'blacklisted' => $blacklisted,
                 'chargebacked' => $chargebacked,
-                'ready_for_sync' => $upload->debtors()->readyForSync()->count(),
+                'ready_for_sync' => (clone $query)->readyForSync()->count(),
                 'skipped' => $skipped,
                 'is_processing' => $upload->isValidationProcessing(),
+                'model_counts' => [
+                    'all' => (int) $modelStats->all_count,
+                    'legacy' => (int) $modelStats->legacy,
+                    'flywheel' => (int) $modelStats->flywheel,
+                    'recovery' => (int) $modelStats->recovery,
+                ]
             ],
         ]);
     }

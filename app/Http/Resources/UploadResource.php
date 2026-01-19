@@ -1,7 +1,9 @@
 <?php
+
 /**
  * API resource for Upload model.
  */
+
 namespace App\Http\Resources;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
@@ -34,6 +36,8 @@ class UploadResource extends JsonResource
             'bav_verified_count' => $this->when(isset($this->bav_verified_count), $this->bav_verified_count),
             'billed_with_emp_count' => $this->when(isset($this->billed_with_emp_count), $this->billed_with_emp_count),
             'chargeback_count' => $this->when(isset($this->chargeback_count), $this->chargeback_count),
+            'approved_amount' => $this->when(isset($this->approved_amount), (float) $this->approved_amount),
+            'chargeback_amount' => $this->when(isset($this->chargeback_amount), (float) $this->chargeback_amount),
             'cb_percentage' => $this->when(
                 isset($this->billed_with_emp_count) && isset($this->chargeback_count),
                 function () {
@@ -41,6 +45,16 @@ class UploadResource extends JsonResource
                         return null;
                     }
                     return round(($this->chargeback_count / $this->billed_with_emp_count) * 100, 2);
+                }
+            ),
+
+            'cb_amount_percentage' => $this->when(
+                isset($this->approved_amount) && isset($this->chargeback_amount),
+                function () {
+                    if (!$this->approved_amount || $this->approved_amount == 0) {
+                        return null;
+                    }
+                    return round(($this->chargeback_amount / $this->approved_amount) * 100, 2);
                 }
             ),
             'skipped' => $this->when(isset($meta['skipped']), $meta['skipped'] ?? null),

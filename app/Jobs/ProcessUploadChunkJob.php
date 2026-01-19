@@ -1,18 +1,17 @@
 <?php
 
-/**
- * Job for processing a chunk of rows from uploaded file.
- */
-
 namespace App\Jobs;
 
-use App\Models\Upload;
+use App\Enums\BillingModel;
 use App\Models\Debtor;
-use App\Services\IbanValidator;
+use App\Models\DebtorProfile;
+use App\Models\Upload;
+use App\Services\DebtorImportService;
 use App\Services\DeduplicationService;
 use Illuminate\Bus\Batchable;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
@@ -37,7 +36,7 @@ class ProcessUploadChunkJob implements ShouldQueue
         $this->onQueue('default');
     }
 
-    public function handle(IbanValidator $ibanValidator, DeduplicationService $deduplicationService): void
+    public function handle(DebtorImportService $debtorImportService): void
     {
         if ($this->batch()?->cancelled()) {
             return;
@@ -47,238 +46,99 @@ class ProcessUploadChunkJob implements ShouldQueue
             'upload_id' => $this->upload->id,
             'chunk' => $this->chunkIndex,
             'rows' => count($this->rows),
+            'billing_model' => $this->upload->billing_model,
         ]);
 
-        $created = 0;
-        $failed = 0;
-        $skippedByReason = [];
-        $errors = [];
+        $result = $debtorImportService->importRows(
+            upload: $this->upload,
+            rows: $this->rows,
+            columnMapping: $this->columnMapping,
+            validateBasicStructure: true,
+            startRow: $this->startRow
+        );
 
-        $debtorDataList = [];
-        foreach ($this->rows as $index => $row) {
-            $debtorData = $this->mapRowToDebtor($row);
-            $this->validateAndEnrichIban($debtorData, $ibanValidator);
-            $debtorDataList[$index] = $debtorData;
-        }
+        $this->upload->increment('processed_records', (int) ($result['created'] ?? 0));
+        $this->upload->increment('failed_records', (int) ($result['failed'] ?? 0));
 
-        $dedupeResults = $deduplicationService->checkDebtorBatch($debtorDataList, $this->upload->id);
-
-        foreach ($this->rows as $index => $row) {
-            try {
-                $debtorData = $debtorDataList[$index];
-
-                if (isset($dedupeResults[$index])) {
-                    $reason = $dedupeResults[$index]['reason'];
-                    $skippedByReason[$reason] = ($skippedByReason[$reason] ?? 0) + 1;
-                    Log::debug("Row skipped due to deduplication", [
-                        'upload_id' => $this->upload->id,
-                        'row' => $this->startRow + $index + 1,
-                        'reason' => $reason,
-                    ]);
-                    continue;
-                }
-
-                $debtorData['upload_id'] = $this->upload->id;
-                $debtorData['raw_data'] = $row;
-                $debtorData['validation_status'] = Debtor::VALIDATION_PENDING;
-
-                $this->validateRequiredFields($debtorData);
-
-                Debtor::create($debtorData);
-                $created++;
-
-            } catch (\Exception $e) {
-                $failed++;
-                if (count($errors) < 10) {
-                    $errors[] = [
-                        'row' => $this->startRow + $index + 1,
-                        'message' => $e->getMessage(),
-                    ];
-                }
-            }
-        }
-
-        $skippedTotal = array_sum($skippedByReason);
-        $this->updateUploadProgressAtomic($created, $failed, $skippedTotal, $skippedByReason, $errors);
+        $this->storeChunkResult($result);
 
         Log::info("ProcessUploadChunkJob completed", [
             'upload_id' => $this->upload->id,
             'chunk' => $this->chunkIndex,
-            'created' => $created,
-            'failed' => $failed,
-            'skipped' => $skippedTotal,
-            'skipped_by_reason' => $skippedByReason,
+            'created' => $result['created'] ?? 0,
+            'failed' => $result['failed'] ?? 0,
+            'skipped_total' => ($result['skipped']['total'] ?? null),
+            'billing_model' => $this->upload->billing_model,
         ]);
     }
 
-    private function updateUploadProgressAtomic(int $created, int $failed, int $skipped, array $skippedByReason, array $errors): void
+    private function storeChunkResult(array $result): void
     {
-        $this->upload->increment('processed_records', $created);
-        $this->upload->increment('failed_records', $failed);
+        $uploadId = $this->upload->id;
+        $chunkKey = (string) $this->chunkIndex;
 
-        DB::statement("
-            UPDATE uploads 
-            SET meta = jsonb_set(
-                COALESCE(meta, '{}'::jsonb),
-                '{skipped}',
-                jsonb_build_object(
-                    'total', COALESCE((meta->'skipped'->>'total')::int, 0) + ?,
-                    'blacklisted', COALESCE((meta->'skipped'->>'blacklisted')::int, 0) + ?,
-                    'blacklisted_name', COALESCE((meta->'skipped'->>'blacklisted_name')::int, 0) + ?,
-                    'blacklisted_email', COALESCE((meta->'skipped'->>'blacklisted_email')::int, 0) + ?,
-                    'blacklisted_bic', COALESCE((meta->'skipped'->>'blacklisted_bic')::int, 0) + ?,
-                    'chargebacked', COALESCE((meta->'skipped'->>'chargebacked')::int, 0) + ?,
-                    'already_recovered', COALESCE((meta->'skipped'->>'already_recovered')::int, 0) + ?,
-                    'recently_attempted', COALESCE((meta->'skipped'->>'recently_attempted')::int, 0) + ?,
-                    'duplicates', COALESCE((meta->'skipped'->>'duplicates')::int, 0)
-                )
-            )
-            WHERE id = ?
-        ", [
-            $skipped,
-            $skippedByReason[DeduplicationService::SKIP_BLACKLISTED] ?? 0,
-            $skippedByReason[DeduplicationService::SKIP_BLACKLISTED_NAME] ?? 0,
-            $skippedByReason[DeduplicationService::SKIP_BLACKLISTED_EMAIL] ?? 0,
-            $skippedByReason[DeduplicationService::SKIP_BLACKLISTED_BIC] ?? 0,
-            $skippedByReason[DeduplicationService::SKIP_CHARGEBACKED] ?? 0,
-            $skippedByReason[DeduplicationService::SKIP_RECOVERED] ?? 0,
-            $skippedByReason[DeduplicationService::SKIP_RECENTLY_ATTEMPTED] ?? 0,
-            $this->upload->id,
-        ]);
-
-        if (!empty($errors)) {
-            $this->upload->refresh();
-            $existingMeta = $this->upload->meta ?? [];
-            $existingErrors = $existingMeta['errors'] ?? [];
-            $mergedErrors = array_slice(array_merge($existingErrors, $errors), 0, 100);
-            
-            DB::table('uploads')
-                ->where('id', $this->upload->id)
-                ->update([
-                    'meta' => DB::raw("jsonb_set(COALESCE(meta, '{}'::jsonb), '{errors}', '" . json_encode($mergedErrors) . "'::jsonb)")
-                ]);
-        }
-    }
-
-    private function mapRowToDebtor(array $row): array
-    {
-        $data = [
-            'status' => Debtor::STATUS_UPLOADED,
-            'currency' => 'EUR',
+        // Keys expected in the 'skipped' statistics breakdown
+        // Merged keys from HEAD and main to ensure full coverage
+        $skippedKeys = [
+            'total',
+            'blacklisted',
+            'chargebacked',
+            'blacklisted_name',
+            'already_recovered',
+            'blacklisted_email',
+            'blacklisted_bic', 
+            'recently_attempted',
+            'duplicates',
         ];
 
-        foreach ($row as $header => $value) {
-            if (isset($this->columnMapping[$header]) && $value !== null) {
-                $field = $this->columnMapping[$header];
-                $data[$field] = $this->castValue($field, $value);
+        DB::transaction(function () use ($uploadId, $chunkKey, $result, $skippedKeys) {
+            /** @var Upload $upload */
+            $upload = Upload::query()->lockForUpdate()->findOrFail($uploadId);
+
+            $meta = $upload->meta ?? [];
+
+            // 1. Initialize global structure if missing
+            if (!isset($meta['skipped'])) {
+                $meta['skipped'] = array_fill_keys($skippedKeys, 0);
             }
-        }
-
-        if (isset($data['name']) && !isset($data['first_name'])) {
-            $parts = preg_split('/\s+/', trim($data['name']), 2);
-            $data['first_name'] = $parts[0] ?? '';
-            $data['last_name'] = $parts[1] ?? '';
-            unset($data['name']);
-        }
-
-        return $data;
-    }
-
-    private function castValue(string $field, mixed $value): mixed
-    {
-        if ($value === null || $value === '') {
-            return null;
-        }
-
-        return match ($field) {
-            'amount' => $this->parseAmount($value),
-            'birth_date' => $this->parseDate($value),
-            'country' => strtoupper(substr(trim($value), 0, 2)),
-            'currency' => strtoupper(substr(trim($value), 0, 3)),
-            default => trim((string) $value),
-        };
-    }
-
-    private function parseAmount(mixed $value): ?float
-    {
-        if ($value === null || $value === '') {
-            return null;
-        }
-
-        $value = str_replace(' ', '', (string) $value);
-
-        if (str_contains($value, ',') && str_contains($value, '.')) {
-            if (strrpos($value, ',') > strrpos($value, '.')) {
-                $value = str_replace('.', '', $value);
-                $value = str_replace(',', '.', $value);
-            } else {
-                $value = str_replace(',', '', $value);
+            if (!isset($meta['errors'])) {
+                $meta['errors'] = [];
             }
-        } elseif (str_contains($value, ',')) {
-            if (preg_match('/,\d{1,2}$/', $value)) {
-                $value = str_replace(',', '.', $value);
-            } else {
-                $value = str_replace(',', '', $value);
+            if (!isset($meta['skipped_rows'])) {
+                $meta['skipped_rows'] = [];
             }
-        }
 
-        return (float) $value;
-    }
+            // 2. Aggregate 'Skipped' Counters (Global + Current Chunk)
+            $chunkSkippedStats = $result['skipped'] ?? [];
 
-    private function parseDate(mixed $value): ?string
-    {
-        if ($value === null || $value === '') {
-            return null;
-        }
+            foreach ($skippedKeys as $key) {
+                $currentGlobal = (int) ($meta['skipped'][$key] ?? 0);
+                $newChunkValue = (int) ($chunkSkippedStats[$key] ?? 0);
 
-        $formats = ['Y-m-d', 'd.m.Y', 'd/m/Y', 'm/d/Y', 'd-m-Y'];
-
-        foreach ($formats as $format) {
-            $date = \DateTime::createFromFormat($format, trim($value));
-            if ($date) {
-                return $date->format('Y-m-d');
+                $meta['skipped'][$key] = $currentGlobal + $newChunkValue;
             }
-        }
 
-        $timestamp = strtotime($value);
-        return $timestamp ? date('Y-m-d', $timestamp) : null;
-    }
+            // 3. Aggregate Arrays (Errors & Skipped Rows)
+            // We merge the new items into the existing global list.
+            // NOTE: We apply a slice (e.g., 100) to prevent the JSON column from becoming too large.
+            $meta['errors'] = array_merge($meta['errors'], $result['errors'] ?? []);
+            $meta['errors'] = array_slice($meta['errors'], 0, 100);
 
-    private function validateAndEnrichIban(array &$data, IbanValidator $ibanValidator): void
-    {
-        if (empty($data['iban'])) {
-            $data['iban'] = '';
-            $data['iban_hash'] = null;
-            $data['iban_valid'] = false;
-            return;
-        }
+            $meta['skipped_rows'] = array_merge($meta['skipped_rows'], $result['skipped_rows'] ?? []);
+            $meta['skipped_rows'] = array_slice($meta['skipped_rows'], 0, 100);
 
-        $result = $ibanValidator->validate($data['iban']);
+            // 4. Store individual chunk payload
+            $chunks = $meta['chunks'] ?? [];
+            $chunks[$chunkKey] = [
+                'created'      => (int) ($result['created'] ?? 0),
+                'failed'       => (int) ($result['failed'] ?? 0),
+                'skipped'      => $result['skipped'] ?? [],
+                'errors'       => array_slice(($result['errors'] ?? []), 0, 20),
+                'skipped_rows' => array_slice(($result['skipped_rows'] ?? []), 0, 20),
+            ];
+            $meta['chunks'] = $chunks;
 
-        $data['iban'] = $ibanValidator->normalize($data['iban']);
-        $data['iban_hash'] = $ibanValidator->hash($data['iban']);
-        $data['iban_valid'] = $result['valid'];
-
-        if ($result['valid']) {
-            $data['country'] = $data['country'] ?? $result['country_code'];
-            $data['bank_code'] = $data['bank_code'] ?? $result['bank_id'];
-        }
-    }
-
-    private function validateRequiredFields(array $data): void
-    {
-        $errors = [];
-
-        if (empty($data['first_name']) && empty($data['last_name'])) {
-            $errors[] = 'Name is required';
-        }
-
-        if (empty($data['amount']) || $data['amount'] < 1) {
-            $errors[] = 'Valid amount is required';
-        }
-
-        if (!empty($errors)) {
-            throw new \InvalidArgumentException(implode('; ', $errors));
-        }
+            $upload->update(['meta' => $meta]);
+        });
     }
 }

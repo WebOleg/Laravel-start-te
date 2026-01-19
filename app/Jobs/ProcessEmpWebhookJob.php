@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Models\BillingAttempt;
+use App\Models\DebtorProfile;
 use App\Services\BlacklistService;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
@@ -76,7 +77,7 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
 
     /**
      * Handle chargeback event.
-     * 
+     *
      * EMP sends: event=chargeback, unique_id=original_tx_unique_id, status=chargebacked
      * The unique_id refers to the ORIGINAL transaction that was chargebacked.
      */
@@ -107,9 +108,9 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
             return;
         }
 
-        $errorCode = $this->webhookData['reason_code'] 
-            ?? $this->webhookData['rc_code'] 
-            ?? $this->webhookData['error_code'] 
+        $errorCode = $this->webhookData['reason_code']
+            ?? $this->webhookData['rc_code']
+            ?? $this->webhookData['error_code']
             ?? null;
 
         $chargebackMeta = [
@@ -117,10 +118,10 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
             'arn' => $this->webhookData['arn'] ?? null,
             'amount' => $this->webhookData['amount'] ?? null,
             'currency' => $this->webhookData['currency'] ?? null,
-            'reason' => $this->webhookData['reason'] 
-                ?? $this->webhookData['rc_description'] 
-                ?? $this->webhookData['reason_description'] 
-                ?? null,
+            'reason' => $this->webhookData['reason']
+                ?? $this->webhookData['rc_description']
+                    ?? $this->webhookData['reason_description']
+                    ?? null,
             'reason_code' => $errorCode,
             'post_date' => $this->webhookData['post_date'] ?? null,
             'received_at' => $this->receivedAt,
@@ -157,6 +158,10 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
             }
         }
 
+        // PROFILE DEACTIVATION
+        // If a chargeback occurs, we must stop the Flywheel/Recovery cycle immediately.
+        $this->deactivateProfile($billingAttempt, $chargebackMeta['amount'] ?? null);
+
         Log::info('Chargeback processed', [
             'billing_attempt_id' => $billingAttempt->id,
             'debtor_id' => $billingAttempt->debtor_id,
@@ -169,7 +174,7 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
 
     /**
      * Handle retrieval request event.
-     * 
+     *
      * Retrieval requests are pre-chargeback inquiries from issuers.
      * We log them but don't change transaction status.
      */
@@ -222,7 +227,9 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
             return;
         }
 
-        $billingAttempt = BillingAttempt::where('unique_id', $uniqueId)->first();
+        $billingAttempt = BillingAttempt::with('debtorProfile')
+            ->where('unique_id', $uniqueId)
+            ->first();
 
         if (!$billingAttempt) {
             Log::info('SDD status update for unknown transaction', ['unique_id' => $uniqueId]);
@@ -233,16 +240,20 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
 
         if ($mappedStatus && $billingAttempt->status !== $mappedStatus) {
             $oldStatus = $billingAttempt->status;
-            
+
             $updateData = ['status' => $mappedStatus];
-            
+
             // Set chargebacked_at when status becomes chargebacked
             if ($mappedStatus === BillingAttempt::STATUS_CHARGEBACKED && !$billingAttempt->chargebacked_at) {
                 $updateData['chargebacked_at'] = now();
             }
-            
+
             $billingAttempt->update($updateData);
-            
+
+            if ($mappedStatus === BillingAttempt::STATUS_APPROVED) {
+                $this->handleSuccess($billingAttempt);
+            }
+
             Log::info('SDD transaction status updated', [
                 'billing_attempt_id' => $billingAttempt->id,
                 'old_status' => $oldStatus,
@@ -254,6 +265,83 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
                 'billing_attempt_id' => $billingAttempt->id,
                 'current_status' => $billingAttempt->status,
                 'emp_status' => $status,
+            ]);
+        }
+    }
+
+    /**
+     * Update Profile on Successful Payment
+     *
+     * @param BillingAttempt $attempt
+     * @return void
+     */
+    private function handleSuccess(BillingAttempt $attempt): void
+    {
+        // 1. Resolve Profile
+        $profile = $attempt->debtorProfile;
+
+        // Fallback: try via debtor relationship if not directly linked
+        if (!$profile) {
+            $attempt->load('debtor.debtorProfile');
+            $profile = $attempt->debtor?->debtorProfile;
+        }
+
+        if ($profile) {
+            // We use the amount from the attempt. Ensure it's not null.
+            if ($attempt->amount > 0) {
+                $profile->addLifetimeRevenue((float) $attempt->amount);
+            }
+
+            // 2. Determine Model
+            // Use the model snapshot from the attempt, or fall back to profile's current model
+            $modelUsed = $attempt->billing_model ?? $profile->billing_model;
+
+            // 3. Update Cycle Dates (Flywheel/Recovery only)
+            if ($modelUsed !== DebtorProfile::MODEL_LEGACY) {
+
+                $profile->last_success_at = now();
+                $profile->last_billed_at = now();
+
+                // Pushes the next bill date 90 days or 6 months into the future
+                // This prevents the user from being picked up by 'canBill' until then.
+                $profile->next_bill_at = DebtorProfile::calculateNextBillDate($modelUsed);
+
+                $profile->save();
+
+                Log::info("Cycle updated for Profile {$profile->id}", [
+                    'model' => $modelUsed,
+                    'next_bill_at' => $profile->next_bill_at,
+                    'added_amount' => $attempt->amount
+                ]);
+            }
+        }
+    }
+
+    /**
+     * Deactivate Profile on Chargeback
+     *
+     * @param BillingAttempt $attempt
+     * @param mixed $chargebackAmount
+     * @return void
+     */
+    private function deactivateProfile(BillingAttempt $attempt, mixed $chargebackAmount): void
+    {
+        $profile = $attempt->debtorProfile ?? $attempt->debtor?->debtorProfile;
+
+        if ($profile) {
+            // Deduct revenue
+            // Use the amount from the webhook if available, otherwise fallback to the attempt amount
+            $amountToDeduct = $chargebackAmount ?? $attempt->amount;
+            if ($amountToDeduct > 0) {
+                $profile->deductLifetimeRevenue((float) $amountToDeduct);
+            }
+
+            $profile->is_active = false;
+            $profile->next_bill_at = null; // Remove from billing schedule entirely
+            $profile->save();
+
+            Log::warning("Profile {$profile->id} deactivated and revenue adjusted due to chargeback", [
+                'deducted_amount' => $amountToDeduct
             ]);
         }
     }

@@ -39,6 +39,9 @@ class Upload extends Model
         'processing_completed_at',
         'uploaded_by',
         'meta',
+        // Merged from HEAD
+        'billing_model',
+        // Merged from main
         'validation_status',
         'validation_batch_id',
         'validation_started_at',

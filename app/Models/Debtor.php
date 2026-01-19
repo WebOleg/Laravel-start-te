@@ -71,6 +71,8 @@ class Debtor extends Model
         'birth_date',
         'meta',
         'raw_data',
+        'debtor_profile_id',
+        'billing_model',
     ];
 
     protected $casts = [
@@ -231,5 +233,10 @@ class Debtor extends Model
     {
         $this->bav_selected = true;
         $this->save();
+    }
+
+    public function debtorProfile(): BelongsTo
+    {
+        return $this->belongsTo(DebtorProfile::class);
     }
 }

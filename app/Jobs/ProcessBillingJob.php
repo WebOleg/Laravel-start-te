@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Models\DebtorProfile;
 use App\Models\Upload;
 use App\Models\Debtor;
 use Illuminate\Bus\Queueable;
@@ -25,7 +26,8 @@ class ProcessBillingJob implements ShouldQueue, ShouldBeUnique
 
     public function __construct(
         public Upload $upload,
-        public ?string $notificationUrl = null
+        public ?string $notificationUrl = null,
+        public ?string $billingModel = DebtorProfile::MODEL_LEGACY
     ) {
         $this->onQueue('billing');
     }
@@ -39,15 +41,42 @@ class ProcessBillingJob implements ShouldQueue, ShouldBeUnique
     {
         $uploadId = $this->upload->id;
 
-        Log::info('ProcessBillingJob started', ['upload_id' => $uploadId]);
+        Log::info('ProcessBillingJob started', [
+            'upload_id' => $uploadId,
+            'model' => $this->billingModel
+        ]);
 
         $query = Debtor::where('upload_id', $uploadId)
             ->where('validation_status', Debtor::VALIDATION_VALID)
-            ->where('status', Debtor::STATUS_UPLOADED)
-            ->whereDoesntHave('billingAttempts', function ($query) {
-                $query->whereIn('status', ['pending', 'approved']);
-            });
+            ->where('status', Debtor::STATUS_PENDING);
 
+        // 1. Filter by Target Billing Model
+        // Match debtors that have the requested Profile Model OR have No Profile at all.
+        $query->when($this->billingModel !== DebtorProfile::ALL, function ($q) {
+            $q->where(function ($subQuery) {
+                $subQuery->whereHas('debtorProfile', function ($profileQuery) {
+                    $profileQuery->where('billing_model', $this->billingModel);
+                })
+                    ->orWhereDoesntHave('debtorProfile');
+            });
+        });
+
+        // 2. Conditional Billing Attempt Check
+        // Rule: "If not legacy, billing attempts don't matter."
+        // Logic: (Is Non-Legacy Profile) OR (Has No Active Attempts)
+        $query->where(function ($q) {
+            // Condition A: The profile is explicitly NOT legacy (e.g. Flywheel/Recovery)
+            // We include these regardless of billing attempts.
+            $q->whereHas('debtorProfile', function ($p) {
+                $p->where('billing_model', '!=', DebtorProfile::MODEL_LEGACY);
+            })
+                // Condition B: Otherwise (Legacy or No Profile), we MUST ensure no active attempts exist.
+                ->orWhereDoesntHave('billingAttempts', function ($ba) {
+                    $ba->whereIn('status', ['pending', 'approved']);
+                });
+        });
+
+        // 3. Exclude BAV mismatches
         $query->where(function ($q) {
             $q->whereDoesntHave('vopLogs', function ($vopQuery) {
                 $vopQuery->where('name_match', 'no');
@@ -56,9 +85,10 @@ class ProcessBillingJob implements ShouldQueue, ShouldBeUnique
 
         $debtorIds = $query->pluck('id')->toArray();
 
+        // Calculate exclusions for logging (Logic from main, adapted to HEAD status)
         $excludedCount = Debtor::where('upload_id', $uploadId)
             ->where('validation_status', Debtor::VALIDATION_VALID)
-            ->where('status', Debtor::STATUS_UPLOADED)
+            ->where('status', Debtor::STATUS_PENDING)
             ->whereHas('vopLogs', function ($q) {
                 $q->where('name_match', 'no');
             })
@@ -76,19 +106,26 @@ class ProcessBillingJob implements ShouldQueue, ShouldBeUnique
         $chunks = array_chunk($debtorIds, self::CHUNK_SIZE);
         $jobs = [];
 
+        Log::info('Ids=', [
+            'ids' => $chunks,
+            'model' => $this->billingModel
+        ]);
+
         foreach ($chunks as $index => $chunk) {
             $jobs[] = new ProcessBillingChunkJob(
                 debtorIds: $chunk,
                 uploadId: $uploadId,
                 chunkIndex: $index,
+                billingModel: $this->billingModel,
                 notificationUrl: $this->notificationUrl
             );
         }
 
         $upload = $this->upload;
+        $model = $this->billingModel;
 
         $batch = Bus::batch($jobs)
-            ->name("Billing Upload #{$uploadId}")
+            ->name("Billing Upload #{$uploadId} ({$model})")
             ->allowFailures()
             ->onQueue('billing')
             ->finally(function () use ($upload) {

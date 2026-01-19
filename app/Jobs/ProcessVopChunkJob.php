@@ -13,6 +13,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 class ProcessVopChunkJob implements ShouldQueue
@@ -28,7 +29,7 @@ class ProcessVopChunkJob implements ShouldQueue
 
     public function __construct(
         public array $debtorIds,
-        public int $uploadId,
+        public ?int $uploadId,
         public int $chunkIndex,
         public bool $forceRefresh = false
     ) {
@@ -42,7 +43,7 @@ class ProcessVopChunkJob implements ShouldQueue
         }
 
         Log::info('ProcessVopChunkJob started', [
-            'upload_id' => $this->uploadId,
+            'upload_id' => $this->uploadId ?? 'recurring',
             'chunk' => $this->chunkIndex,
             'debtors' => count($this->debtorIds),
         ]);
@@ -74,16 +75,19 @@ class ProcessVopChunkJob implements ShouldQueue
                 }
 
             } catch (\Exception $e) {
+                Cache::forget("billing:lock:vop:{$debtorId}");
+
                 $failed++;
                 Log::error('VOP verification error', [
                     'debtor_id' => $debtorId,
+                    'upload_id' => $this->uploadId ?? 'recurring',
                     'error' => $e->getMessage(),
                 ]);
             }
         }
 
         Log::info('ProcessVopChunkJob completed', [
-            'upload_id' => $this->uploadId,
+            'upload_id' => $this->uploadId ?? 'recurring',
             'chunk' => $this->chunkIndex,
             'verified' => $verified,
             'bav_verified' => $bavVerified,

@@ -2,7 +2,7 @@
 
 /**
  * Service for IBAN deduplication during file upload.
- * 
+ *
  * Implements three-tier skip logic:
  * 1. Hard block forever: blacklisted, chargebacked
  * 2. Soft block forever: already recovered
@@ -26,6 +26,9 @@ class DeduplicationService
     public const SKIP_RECOVERED = 'already_recovered';
     public const SKIP_RECENTLY_ATTEMPTED = 'recently_attempted';
 
+    public const SKIP_MODEL_CONFLICT = 'billing_model_conflict';
+    public const SKIP_EXISTING_LEGACY_IBAN = 'existing_legacy_iban';
+
     public const COOLDOWN_DAYS = 30;
 
     public function __construct(
@@ -35,7 +38,7 @@ class DeduplicationService
 
     /**
      * Check if IBAN should be skipped during upload.
-     * 
+     *
      * @return array{reason: string, permanent: bool, days_ago?: int, last_status?: string}|null
      */
     public function checkIban(string $iban, ?int $excludeUploadId = null): ?array
@@ -82,7 +85,7 @@ class DeduplicationService
 
     /**
      * Check if debtor should be skipped during upload (IBAN + name + email + BIC).
-     * 
+     *
      * @param array $data Debtor data with iban, first_name, last_name, email, bic
      * @return array{reason: string, permanent: bool, days_ago?: int, last_status?: string}|null
      */
@@ -185,7 +188,7 @@ class DeduplicationService
 
     /**
      * Batch check for IBANs only (legacy method).
-     * 
+     *
      * @param array<string> $ibanHashes
      * @return array<string, array{reason: string, permanent: bool, days_ago?: int, last_status?: string}>
      */
@@ -204,11 +207,11 @@ class DeduplicationService
 
         $recoveredQuery = Debtor::whereIn('iban_hash', $ibanHashes)
             ->where('status', Debtor::STATUS_RECOVERED);
-        
+
         if ($excludeUploadId) {
             $recoveredQuery->where('upload_id', '!=', $excludeUploadId);
         }
-        
+
         $recovered = $recoveredQuery
             ->pluck('iban_hash')
             ->flip()
@@ -224,17 +227,17 @@ class DeduplicationService
             ->all();
 
         $cutoffDate = now()->subDays(self::COOLDOWN_DAYS);
-        
+
         $recentAttemptsQuery = DB::table('billing_attempts')
             ->join('debtors', 'billing_attempts.debtor_id', '=', 'debtors.id')
             ->whereIn('debtors.iban_hash', $ibanHashes)
             ->whereIn('billing_attempts.status', BillingAttempt::IN_FLIGHT_STATUSES)
             ->where('billing_attempts.created_at', '>=', $cutoffDate);
-        
+
         if ($excludeUploadId) {
             $recentAttemptsQuery->where('debtors.upload_id', '!=', $excludeUploadId);
         }
-        
+
         $recentAttempts = $recentAttemptsQuery
             ->select('debtors.iban_hash', 'billing_attempts.status', 'billing_attempts.created_at')
             ->orderByDesc('billing_attempts.created_at')
@@ -267,7 +270,7 @@ class DeduplicationService
 
     /**
      * Batch check for full debtor data (IBAN + name + email + BIC).
-     * 
+     *
      * @param array<array{iban?: string, iban_hash?: string, first_name?: string, last_name?: string, email?: string, bic?: string}> $debtors
      * @return array<int, array{reason: string, permanent: bool}>
      */
@@ -282,7 +285,7 @@ class DeduplicationService
         // Collect all IBANs for batch check
         $ibanHashes = [];
         $ibanHashToIndex = [];
-        
+
         foreach ($debtors as $index => $debtor) {
             $iban = $debtor['iban'] ?? '';
             if (!empty($iban)) {

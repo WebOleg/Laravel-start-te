@@ -17,9 +17,12 @@ class VopController extends Controller
         private VopVerificationService $vopService
     ) {}
 
-    public function stats(Upload $upload): JsonResponse
+    public function stats(Upload $upload, Request $request): JsonResponse
     {
-        $stats = $this->vopService->getUploadStats($upload->id);
+        $debtorType = $request->input('debtor_type');
+
+        $stats = $this->vopService->getUploadStats($upload->id, $debtorType);
+
         return response()->json(['data' => $stats]);
     }
 
@@ -58,9 +61,9 @@ class VopController extends Controller
         ]);
 
         $useMock = $request->boolean('use_mock', true);
-        
+
         config(['services.iban.mock' => $useMock]);
-        
+
         $bavService = app(\App\Services\IbanBavService::class);
         $result = $bavService->verify($request->iban, $request->name);
 

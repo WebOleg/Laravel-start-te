@@ -1,13 +1,9 @@
 <?php
 
-/**
- * Controller for BIC (Bank Identifier Code) analytics endpoints.
- * Provides bank-level transaction metrics for risk monitoring.
- */
-
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Models\DebtorProfile;
 use App\Services\BicAnalyticsService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -20,9 +16,6 @@ class BicAnalyticsController extends Controller
 
     /**
      * Get BIC analytics summary.
-     *
-     * @param Request $request
-     * @return JsonResponse
      */
     public function index(Request $request): JsonResponse
     {
@@ -30,33 +23,33 @@ class BicAnalyticsController extends Controller
             'period' => 'nullable|in:7d,30d,60d,90d',
             'start_date' => 'nullable|date',
             'end_date' => 'nullable|date|after_or_equal:start_date',
+            'model' => 'nullable|string|in:' . implode(',', DebtorProfile::BILLING_MODELS),
         ]);
 
         $period = $request->input('period', BicAnalyticsService::DEFAULT_PERIOD);
         $startDate = $request->input('start_date');
         $endDate = $request->input('end_date');
+        $billingModel = $request->input('model');
 
-        $data = $this->bicAnalyticsService->getAnalytics($period, $startDate, $endDate);
+        $data = $this->bicAnalyticsService->getAnalytics($period, $startDate, $endDate, $billingModel);
 
         return response()->json(['data' => $data]);
     }
 
     /**
      * Get analytics for a specific BIC.
-     *
-     * @param Request $request
-     * @param string $bic
-     * @return JsonResponse
      */
     public function show(Request $request, string $bic): JsonResponse
     {
         $request->validate([
             'period' => 'nullable|in:7d,30d,60d,90d',
+            'model' => 'nullable|string|in:' . implode(',', DebtorProfile::BILLING_MODELS),
         ]);
 
         $period = $request->input('period', BicAnalyticsService::DEFAULT_PERIOD);
+        $billingModel = $request->input('model');
 
-        $data = $this->bicAnalyticsService->getBicSummary($bic, $period);
+        $data = $this->bicAnalyticsService->getBicSummary($bic, $period, $billingModel);
 
         if (!$data) {
             return response()->json(['error' => 'BIC not found or no data'], 404);
@@ -67,8 +60,6 @@ class BicAnalyticsController extends Controller
 
     /**
      * Clear analytics cache.
-     *
-     * @return JsonResponse
      */
     public function clearCache(): JsonResponse
     {
@@ -79,9 +70,6 @@ class BicAnalyticsController extends Controller
 
     /**
      * Export BIC analytics as CSV.
-     *
-     * @param Request $request
-     * @return \Symfony\Component\HttpFoundation\StreamedResponse
      */
     public function export(Request $request)
     {
@@ -89,15 +77,19 @@ class BicAnalyticsController extends Controller
             'period' => 'nullable|in:7d,30d,60d,90d',
             'start_date' => 'nullable|date',
             'end_date' => 'nullable|date|after_or_equal:start_date',
+            'model' => 'nullable|string|in:' . implode(',', DebtorProfile::BILLING_MODELS),
         ]);
 
         $period = $request->input('period', BicAnalyticsService::DEFAULT_PERIOD);
         $startDate = $request->input('start_date');
         $endDate = $request->input('end_date');
+        $billingModel = $request->input('model');
 
-        $data = $this->bicAnalyticsService->getAnalytics($period, $startDate, $endDate);
+        $data = $this->bicAnalyticsService->getAnalytics($period, $startDate, $endDate, $billingModel);
 
-        $filename = 'bic_analytics_' . $period . '_' . now()->format('Ymd_His') . '.csv';
+        // Include model in filename if present
+        $prefix = $billingModel ? "bic_analytics_{$billingModel}_{$period}" : "bic_analytics_{$period}";
+        $filename = $prefix . '_' . now()->format('Ymd_His') . '.csv';
 
         return response()->streamDownload(function () use ($data) {
             $handle = fopen('php://output', 'w');

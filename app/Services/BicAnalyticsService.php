@@ -8,6 +8,7 @@
 namespace App\Services;
 
 use App\Models\BillingAttempt;
+use App\Models\DebtorProfile;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
@@ -22,19 +23,29 @@ class BicAnalyticsService
     /**
      * Get BIC analytics with caching.
      */
-    public function getAnalytics(string $period = self::DEFAULT_PERIOD, ?string $startDate = null, ?string $endDate = null): array
+    public function getAnalytics(
+        string $period = self::DEFAULT_PERIOD,
+        ?string $startDate = null,
+        ?string $endDate = null,
+        ?string $billingModel = null
+    ): array
     {
-        $cacheKey = $this->buildCacheKey($period, $startDate, $endDate);
-        
-        return Cache::remember($cacheKey, self::CACHE_TTL, function () use ($period, $startDate, $endDate) {
-            return $this->calculateAnalytics($period, $startDate, $endDate);
+        $cacheKey = $this->buildCacheKey($period, $startDate, $endDate, $billingModel);
+
+        return Cache::remember($cacheKey, self::CACHE_TTL, function () use ($period, $startDate, $endDate, $billingModel) {
+            return $this->calculateAnalytics($period, $startDate, $endDate, $billingModel);
         });
     }
 
     /**
      * Calculate BIC analytics.
      */
-    public function calculateAnalytics(string $period, ?string $startDate = null, ?string $endDate = null): array
+    public function calculateAnalytics(
+        string $period,
+        ?string $startDate = null,
+        ?string $endDate = null,
+        ?string $billingModel = null
+    ): array
     {
         [$start, $end] = $this->resolveDateRange($period, $startDate, $endDate);
         $threshold = config('tether.chargeback.alert_threshold', self::HIGH_RISK_THRESHOLD);
@@ -42,8 +53,14 @@ class BicAnalyticsService
         $query = DB::table('billing_attempts')
             ->whereBetween('created_at', [$start, $end])
             ->whereNotNull('bic')
-            ->where('bic', '!=', '')
-            ->groupBy('bic')
+            ->where('bic', '!=', '');
+
+        // Apply Billing Model Filter
+        if ($billingModel) {
+            $query->where('billing_model', $billingModel);
+        }
+
+        $query->groupBy('bic')
             ->select([
                 'bic',
                 DB::raw('COUNT(*) as total_transactions'),
@@ -80,6 +97,7 @@ class BicAnalyticsService
 
         return [
             'period' => $period,
+            'model' => $billingModel ?? 'all', // Return context
             'start_date' => $start->toIso8601String(),
             'end_date' => $end->toIso8601String(),
             'threshold' => $threshold,
@@ -92,22 +110,28 @@ class BicAnalyticsService
     /**
      * Get summary for a specific BIC.
      */
-    public function getBicSummary(string $bic, string $period = self::DEFAULT_PERIOD): ?array
+    public function getBicSummary(string $bic, string $period = self::DEFAULT_PERIOD, ?string $billingModel = null): ?array
     {
         [$start, $end] = $this->resolveDateRange($period, null, null);
 
-        $result = DB::table('billing_attempts')
+        $query = DB::table('billing_attempts')
             ->where('bic', $bic)
-            ->whereBetween('created_at', [$start, $end])
-            ->select([
-                DB::raw('COUNT(*) as total_transactions'),
-                DB::raw("SUM(CASE WHEN status = '" . BillingAttempt::STATUS_APPROVED . "' THEN 1 ELSE 0 END) as approved_count"),
-                DB::raw("SUM(CASE WHEN status = '" . BillingAttempt::STATUS_DECLINED . "' THEN 1 ELSE 0 END) as declined_count"),
-                DB::raw("SUM(CASE WHEN status = '" . BillingAttempt::STATUS_CHARGEBACKED . "' THEN 1 ELSE 0 END) as chargeback_count"),
-                DB::raw('SUM(amount) as total_volume'),
-                DB::raw("SUM(CASE WHEN status = '" . BillingAttempt::STATUS_APPROVED . "' THEN amount ELSE 0 END) as approved_volume"),
-                DB::raw("SUM(CASE WHEN status = '" . BillingAttempt::STATUS_CHARGEBACKED . "' THEN amount ELSE 0 END) as chargeback_volume"),
-            ])
+            ->whereBetween('created_at', [$start, $end]);
+
+        // Apply Billing Model Filter
+        if ($billingModel) {
+            $query->where('billing_model', $billingModel);
+        }
+
+        $result = $query->select([
+            DB::raw('COUNT(*) as total_transactions'),
+            DB::raw("SUM(CASE WHEN status = '" . BillingAttempt::STATUS_APPROVED . "' THEN 1 ELSE 0 END) as approved_count"),
+            DB::raw("SUM(CASE WHEN status = '" . BillingAttempt::STATUS_DECLINED . "' THEN 1 ELSE 0 END) as declined_count"),
+            DB::raw("SUM(CASE WHEN status = '" . BillingAttempt::STATUS_CHARGEBACKED . "' THEN 1 ELSE 0 END) as chargeback_count"),
+            DB::raw('SUM(amount) as total_volume'),
+            DB::raw("SUM(CASE WHEN status = '" . BillingAttempt::STATUS_APPROVED . "' THEN amount ELSE 0 END) as approved_volume"),
+            DB::raw("SUM(CASE WHEN status = '" . BillingAttempt::STATUS_CHARGEBACKED . "' THEN amount ELSE 0 END) as chargeback_volume"),
+        ])
             ->first();
 
         if (!$result || $result->total_transactions == 0) {
@@ -124,9 +148,34 @@ class BicAnalyticsService
      */
     public function clearCache(): void
     {
+        $models = array_merge([null], DebtorProfile::BILLING_MODELS);
+
         foreach (self::PERIODS as $period) {
-            Cache::forget("bic_analytics_{$period}");
+            foreach ($models as $model) {
+                // Clear Standard keys
+                $key = $this->buildCacheKey($period, null, null, $model);
+                Cache::forget($key);
+            }
         }
+    }
+
+
+    /**
+     * Build cache key for analytics.
+     */
+    private function buildCacheKey(
+        string $period,
+        ?string $startDate,
+        ?string $endDate,
+        ?string $billingModel
+    ): string
+    {
+        $suffix = $billingModel ? "_{$billingModel}" : "";
+
+        if ($startDate && $endDate) {
+            return "bic_analytics_custom_{$startDate}_{$endDate}{$suffix}";
+        }
+        return "bic_analytics_{$period}{$suffix}";
     }
 
     /**
@@ -152,7 +201,7 @@ class BicAnalyticsService
 
     /**
      * Process a single BIC row into analytics data.
-     * 
+     *
      * KPIs (bank standard):
      * - cb_rate_count: chargebacks / approved_count × 100
      * - cb_rate_volume: chargeback_volume / approved_volume × 100
@@ -242,7 +291,7 @@ class BicAnalyticsService
 
     /**
      * Calculate final rates for totals.
-     * 
+     *
      * KPIs (bank standard):
      * - cb_rate_count: chargebacks / approved_count × 100
      * - cb_rate_volume: chargeback_volume / approved_volume × 100
@@ -262,16 +311,5 @@ class BicAnalyticsService
             : 0;
 
         $totals['is_high_risk'] = $totals['cb_rate_count'] >= $threshold || $totals['cb_rate_volume'] >= $threshold;
-    }
-
-    /**
-     * Build cache key for analytics.
-     */
-    private function buildCacheKey(string $period, ?string $startDate, ?string $endDate): string
-    {
-        if ($startDate && $endDate) {
-            return "bic_analytics_custom_{$startDate}_{$endDate}";
-        }
-        return "bic_analytics_{$period}";
     }
 }

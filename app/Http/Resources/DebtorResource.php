@@ -57,6 +57,7 @@ class DebtorResource extends JsonResource
             'upload' => new UploadResource($this->whenLoaded('upload')),
             'latest_vop' => new VopLogResource($this->whenLoaded('latestVopLog')),
             'latest_billing' => new BillingAttemptResource($this->whenLoaded('latestBillingAttempt')),
+            'debtor_profile' => new DebtorProfileResource($this->whenLoaded('debtorProfile'))
         ];
     }
 

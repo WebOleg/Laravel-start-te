@@ -7,6 +7,8 @@
 namespace App\Http\Requests;
 
 use Illuminate\Foundation\Http\FormRequest;
+use App\Enums\BillingModel;
+use Illuminate\Validation\Rule;
 
 class StoreUploadRequest extends FormRequest
 {
@@ -24,6 +26,8 @@ class StoreUploadRequest extends FormRequest
                 'max:51200',
                 'mimes:csv,txt,xlsx,xls',
             ],
+
+            'billing_model' => ['sometimes', Rule::enum(BillingModel::class)],
         ];
     }
 
