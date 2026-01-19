@@ -3,16 +3,13 @@
  * API resource for Upload model.
  */
 namespace App\Http\Resources;
-
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
-
 class UploadResource extends JsonResource
 {
     public function toArray(Request $request): array
     {
         $meta = $this->meta ?? [];
-
         return [
             'id' => $this->id,
             'filename' => $this->filename,
@@ -37,6 +34,15 @@ class UploadResource extends JsonResource
             'bav_verified_count' => $this->when(isset($this->bav_verified_count), $this->bav_verified_count),
             'billed_with_emp_count' => $this->when(isset($this->billed_with_emp_count), $this->billed_with_emp_count),
             'chargeback_count' => $this->when(isset($this->chargeback_count), $this->chargeback_count),
+            'cb_percentage' => $this->when(
+                isset($this->billed_with_emp_count) && isset($this->chargeback_count),
+                function () {
+                    if (!$this->billed_with_emp_count || $this->billed_with_emp_count == 0) {
+                        return null;
+                    }
+                    return round(($this->chargeback_count / $this->billed_with_emp_count) * 100, 2);
+                }
+            ),
             'skipped' => $this->when(isset($meta['skipped']), $meta['skipped'] ?? null),
             'skipped_rows' => $this->when(isset($meta['skipped_rows']), $meta['skipped_rows'] ?? null),
             'uploader' => new UserResource($this->whenLoaded('uploader')),
