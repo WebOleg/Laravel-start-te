@@ -9,6 +9,13 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Database\Query\Builder;
 
+/**
+ * Chargeback Statistics Service
+ * 
+ * Supports two date filtering modes:
+ * 1. Transaction Date (default): Filter by emp_created_at/created_at, calculate rates normally
+ * 2. Chargeback Date: Filter by chargebacked_at, rates are NULL (approved transactions don't have this date)
+ */
 class ChargebackStatsService
 {
     public const DATE_MODE_TRANSACTION = 'transaction';
@@ -79,15 +86,28 @@ class ChargebackStatsService
             'approved_amount' => 0,
         ];
 
-        foreach ($stats as $row) {
-            $cbRateTotal = $row->total > 0
-                ? round(($row->chargebacks / $row->total) * 100, 2)
-                : 0;
+        // When filtering by chargeback date, rates cannot be calculated
+        // because approved transactions don't have chargebacked_at timestamp
+        $canCalculateRates = $dateMode !== self::DATE_MODE_CHARGEBACK;
 
-            $everApproved = $row->approved + $row->chargebacks;
-            $cbRateApproved = $everApproved > 0
-                ? round(($row->chargebacks / $everApproved) * 100, 2)
-                : 0;
+        foreach ($stats as $row) {
+            if ($canCalculateRates) {
+                $cbRateTotal = $row->total > 0 
+                    ? round(($row->chargebacks / $row->total) * 100, 2) 
+                    : 0;
+                
+                $everApproved = $row->approved + $row->chargebacks;
+                $cbRateApproved = $everApproved > 0 
+                    ? round(($row->chargebacks / $everApproved) * 100, 2) 
+                    : 0;
+
+                $alert = $cbRateTotal >= $threshold || $cbRateApproved >= $threshold;
+            } else {
+                // Chargeback date mode: rates are NULL (not calculable)
+                $cbRateTotal = null;
+                $cbRateApproved = null;
+                $alert = false;
+            }
 
             $countries[] = [
                 'country' => $row->country,
@@ -99,7 +119,7 @@ class ChargebackStatsService
                 'chargeback_amount' => round((float) $row->chargeback_amount, 2),
                 'cb_rate_total' => $cbRateTotal,
                 'cb_rate_approved' => $cbRateApproved,
-                'alert' => $cbRateTotal >= $threshold || $cbRateApproved >= $threshold,
+                'alert' => $alert,
             ];
 
             $totals['total'] += $row->total;
@@ -119,20 +139,32 @@ class ChargebackStatsService
 
         $totals['chargeback_amount'] = round($totals['chargeback_amount'], 2);
         $totals['approved_amount'] = round($totals['approved_amount'], 2);
-        $totals['cb_rate_total'] = $totals['total'] > 0
-            ? round(($totals['chargebacks'] / $totals['total']) * 100, 2)
-            : 0;
-
-        $totalsEverApproved = $totals['approved'] + $totals['chargebacks'];
-        $totals['cb_rate_approved'] = $totalsEverApproved > 0
-            ? round(($totals['chargebacks'] / $totalsEverApproved) * 100, 2)
-            : 0;
-
-        $totals['alert'] = $totals['cb_rate_total'] >= $threshold || $totals['cb_rate_approved'] >= $threshold;
-        $totals['cb_rate_amount_approved'] = $totals['approved_amount'] > 0
-            ? round(($totals['chargeback_amount'] / $totals['approved_amount']) * 100, 2)
-            : 0;
-        $totals['cb_alert_amount_approved'] = $totals['cb_rate_amount_approved'] >= $threshold;
+        
+        if ($canCalculateRates) {
+            $totals['cb_rate_total'] = $totals['total'] > 0 
+                ? round(($totals['chargebacks'] / $totals['total']) * 100, 2) 
+                : 0;
+            
+            $totalsEverApproved = $totals['approved'] + $totals['chargebacks'];
+            $totals['cb_rate_approved'] = $totalsEverApproved > 0 
+                ? round(($totals['chargebacks'] / $totalsEverApproved) * 100, 2) 
+                : 0;
+            
+            $totals['alert'] = $totals['cb_rate_total'] >= $threshold || $totals['cb_rate_approved'] >= $threshold;
+            
+            $totals['cb_rate_amount_approved'] = $totals['approved_amount'] > 0 
+                ? round(($totals['chargeback_amount'] / $totals['approved_amount']) * 100, 2) 
+                : 0;
+            
+            $totals['cb_alert_amount_approved'] = $totals['cb_rate_amount_approved'] >= $threshold;
+        } else {
+            // Chargeback date mode: rates are NULL
+            $totals['cb_rate_total'] = null;
+            $totals['cb_rate_approved'] = null;
+            $totals['cb_rate_amount_approved'] = null;
+            $totals['alert'] = false;
+            $totals['cb_alert_amount_approved'] = false;
+        }
 
         return [
             'period' => $month && $year ? 'monthly' : $period,
@@ -346,14 +378,26 @@ class ChargebackStatsService
             ],
         ];
 
+        // When filtering by chargeback date, rates cannot be calculated
+        // because approved transactions don't have chargebacked_at timestamp
+        $canCalculateRates = $dateMode !== self::DATE_MODE_CHARGEBACK;
+
         foreach ($banks as $row) {
-            $everApproved = $row->approved + $row->chargebacks;
-            $cbBankRate = $everApproved > 0
-                ? round(($row->chargebacks / $everApproved) * 100, 2)
-                : 0;
-            $cbBankRateAmount = $row->total_amount > 0
-                ? round(($row->chargeback_amount / $row->total_amount) * 100, 2)
-                : 0;
+
+            if ($canCalculateRates) {
+                $everApproved = $row->approved + $row->chargebacks;
+                $cbBankRate = $everApproved > 0
+                    ? round(($row->chargebacks / $everApproved) * 100, 2) 
+                    : 0;
+                $cbBankRateAmount = $row->total_amount > 0 
+                    ? round(($row->chargeback_amount / $row->total_amount) * 100, 2) 
+                    : 0;
+                $alert = $cbBankRate >= $threshold || $cbBankRateAmount >= $threshold;
+            } else {
+                // Chargeback date mode: rates are NULL
+                $cbBankRate = null;
+                $alert = false;
+            }
 
             $result['banks'][] = [
                 'bank_name' => $row->bank_name,
@@ -362,8 +406,8 @@ class ChargebackStatsService
                 'total_amount' => round((float) $row->total_amount, 2),
                 'chargebacks' => (int) $row->chargebacks,
                 'chargeback_amount' => round((float) $row->chargeback_amount, 2),
-                'cb_rate' => (float) $cbBankRate,
-                'alert' => $cbBankRate >= $threshold || $cbBankRateAmount >= $threshold,
+                'cb_rate' => $cbBankRate,
+                'alert' => $alert,
             ];
 
             $result['totals']['total'] += (int) $row->total;
@@ -375,16 +419,22 @@ class ChargebackStatsService
 
         $result['totals']['total_amount'] = round($result['totals']['total_amount'], 2);
         $result['totals']['chargeback_amount'] = round($result['totals']['chargeback_amount'], 2);
-
-        $totalsEverApproved = $result['totals']['approved'] + $result['totals']['chargebacks'];
-        $result['totals']['cb_rate'] = $totalsEverApproved > 0
-            ? round(($result['totals']['chargebacks'] / $totalsEverApproved) * 100, 2)
-            : 0;
-
-        $totalsAlertAmount = $result['totals']['total_amount'] > 0
-            ? round(($result['totals']['chargeback_amount'] / $result['totals']['total_amount']) * 100, 2)
-            : 0;
-        $result['totals']['alert'] = $result['totals']['cb_rate'] >= $threshold || $totalsAlertAmount >= $threshold;
+        
+        if ($canCalculateRates) {
+            $totalsEverApproved = $result['totals']['approved'] + $result['totals']['chargebacks'];
+            $result['totals']['cb_rate'] = $totalsEverApproved > 0 
+                ? round(($result['totals']['chargebacks'] / $totalsEverApproved) * 100, 2) 
+                : 0;
+            
+            $totalsAlertAmount = $result['totals']['total_amount'] > 0 
+                ? round(($result['totals']['chargeback_amount'] / $result['totals']['total_amount']) * 100, 2) 
+                : 0;
+            $result['totals']['alert'] = $result['totals']['cb_rate'] >= $threshold || $totalsAlertAmount >= $threshold;
+        } else {
+            // Chargeback date mode: rates are NULL
+            $result['totals']['cb_rate'] = null;
+            $result['totals']['alert'] = false;
+        }
 
         return $result;
     }
