@@ -20,7 +20,7 @@ class StatsController extends Controller
     public function chargebackRates(Request $request): JsonResponse
     {
         $request->validate([
-            'period' => 'nullable|string|in:24h,7d,30d,90d',
+            'period' => 'nullable|string|in:24h,7d,30d,90d,all',
             'month' => 'nullable|integer|min:1|max:12',
             'year' => 'nullable|integer|min:2020|max:2100',
             'date_mode' => 'nullable|string|in:transaction,chargeback',
@@ -42,7 +42,7 @@ class StatsController extends Controller
     public function chargebackCodes(Request $request): JsonResponse
     {
         $request->validate([
-            'period' => 'nullable|string|in:24h,7d,30d,90d',
+            'period' => 'nullable|string|in:24h,7d,30d,90d,all',
             'month' => 'nullable|integer|min:1|max:12',
             'year' => 'nullable|integer|min:2020|max:2100',
             'date_mode' => 'nullable|string|in:transaction,chargeback',
@@ -63,7 +63,7 @@ class StatsController extends Controller
     public function chargebackBanks(Request $request): JsonResponse
     {
         $request->validate([
-            'period' => 'nullable|string|in:24h,7d,30d,90d',
+            'period' => 'nullable|string|in:24h,7d,30d,90d,all',
             'month' => 'nullable|integer|min:1|max:12',
             'year' => 'nullable|integer|min:2020|max:2100',
             'date_mode' => 'nullable|string|in:transaction,chargeback',

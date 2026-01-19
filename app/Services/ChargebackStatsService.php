@@ -42,7 +42,7 @@ class ChargebackStatsService
 
     public function getStats(?string $period = null, ?int $month = null, ?int $year = null, string $dateMode = self::DATE_MODE_TRANSACTION, ?string $model = null): array
     {
-        $period = $period ?? '7d';
+        $period = $period ?? 'all';
         $cacheKey = $this->getCacheKey('chargeback_stats', $period, $month, $year, $dateMode, $model);
         $ttl = config('tether.chargeback.cache_ttl', 900);
 
@@ -168,7 +168,7 @@ class ChargebackStatsService
         return [
             'period' => $month && $year ? 'monthly' : $period,
             'model' => $model ?? 'all',
-            'start_date' => $dateFilter['start']->toIso8601String(),
+            'start_date' => $dateFilter['start']?->toIso8601String(),
             'end_date' => $dateFilter['end']?->toIso8601String(),
             'month' => $month,
             'year' => $year,
@@ -181,7 +181,7 @@ class ChargebackStatsService
 
     private function buildDateFilter(?string $period, ?int $month, ?int $year, string $dateMode = self::DATE_MODE_TRANSACTION): array
     {
-        $period = $period ?? '7d';
+        $period = $period ?? 'all';
 
         if ($month && $year) {
             return [
@@ -192,8 +192,8 @@ class ChargebackStatsService
             ];
         }
 
-        // If period is null, return all-time (no date filter)
-        if ($period === null) {
+        // If period is 'all', return all-time (no date filter)
+        if ($period === 'all') {
             return [
                 'start' => null,
                 'end' => null,
@@ -248,6 +248,7 @@ class ChargebackStatsService
             '7d' => now()->subDays(7),
             '30d' => now()->subDays(30),
             '90d' => now()->subDays(90),
+            'all' => Carbon::parse('1970-01-01'),
             default => now()->subDays(7),
         };
     }
@@ -265,7 +266,7 @@ class ChargebackStatsService
 
     public function clearCache(): void
     {
-        $periods = ['24h', '7d', '30d', '90d'];
+        $periods = ['24h', '7d', '30d', '90d', 'all'];
         // Include 'all' plus the defined models from DebtorProfile
         $models = array_merge([DebtorProfile::ALL], DebtorProfile::BILLING_MODELS);
         $dateModes = ['_tx', '_cb'];
@@ -284,7 +285,7 @@ class ChargebackStatsService
 
     public function getChargebackCodes(?string $period = null, ?int $month = null, ?int $year = null, string $dateMode = self::DATE_MODE_TRANSACTION, ?string $model = null): array
     {
-        $period = $period ?? '7d';
+        $period = $period ?? 'all';
         $cacheKey = $this->getCacheKey('chargeback_codes', $period, $month, $year, $dateMode, $model);
         $ttl = config('tether.chargeback.cache_ttl', 900);
 
@@ -314,7 +315,7 @@ class ChargebackStatsService
         $result = [
             'period' => $month && $year ? 'monthly' : $period,
             'model' => $model ?? 'all',
-            'start_date' => $dateFilter['start']->toIso8601String(),
+            'start_date' => $dateFilter['start']?->toIso8601String(),
             'end_date' => $dateFilter['end']?->toIso8601String(),
             'month' => $month,
             'year' => $year,
@@ -338,7 +339,7 @@ class ChargebackStatsService
 
     public function getChargebackBanks(?string $period = null, ?int $month = null, ?int $year = null, string $dateMode = self::DATE_MODE_TRANSACTION, ?string $model = null): array
     {
-        $period = $period ?? '7d';
+        $period = $period ?? 'all';
         $cacheKey = $this->getCacheKey('chargeback_banks', $period, $month, $year, $dateMode, $model);
         $ttl = config('tether.chargeback.cache_ttl', 900);
 
@@ -380,7 +381,7 @@ class ChargebackStatsService
         $result = [
             'period' => $month && $year ? 'monthly' : $period,
             'model' => $model ?? 'all',
-            'start_date' => $dateFilter['start']->toIso8601String(),
+            'start_date' => $dateFilter['start']?->toIso8601String(),
             'end_date' => $dateFilter['end']?->toIso8601String(),
             'month' => $month,
             'year' => $year,

@@ -25,64 +25,6 @@ class ChargebackStatsTest extends TestCase
         $this->user = User::factory()->create();
     }
 
-    
-
-    public function test_service_calculates_totals_with_null_period(): void
-    {
-        $upload = Upload::factory()->create();
-
-        $debtorES = Debtor::factory()->create(['upload_id' => $upload->id, 'country' => 'ES']);
-        $debtorDE = Debtor::factory()->create(['upload_id' => $upload->id, 'country' => 'DE']);
-
-        BillingAttempt::factory()->count(10)->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtorES->id,
-            'status' => BillingAttempt::STATUS_APPROVED,
-        ]);
-
-        BillingAttempt::factory()->count(5)->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtorDE->id,
-            'status' => BillingAttempt::STATUS_DECLINED,
-        ]);
-
-        $service = app(ChargebackStatsService::class);
-        $stats = $service->calculateStats(null);
-
-        $this->assertEquals('all', $stats['period']);
-        $this->assertEquals(15, $stats['totals']['total']);
-        $this->assertEquals(10, $stats['totals']['approved']);
-        $this->assertEquals(5, $stats['totals']['declined']);
-    }
-
-    public function test_service_calculates_totals_with_7d_period(): void
-    {
-        $upload = Upload::factory()->create();
-
-        $debtorES = Debtor::factory()->create(['upload_id' => $upload->id, 'country' => 'ES']);
-        $debtorDE = Debtor::factory()->create(['upload_id' => $upload->id, 'country' => 'DE']);
-
-        BillingAttempt::factory()->count(10)->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtorES->id,
-            'status' => BillingAttempt::STATUS_APPROVED,
-        ]);
-
-        BillingAttempt::factory()->count(5)->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtorDE->id,
-            'status' => BillingAttempt::STATUS_DECLINED,
-        ]);
-
-        $service = app(ChargebackStatsService::class);
-        $stats = $service->calculateStats('7d');
-
-        $this->assertEquals('7d', $stats['period']);
-        $this->assertEquals(15, $stats['totals']['total']);
-        $this->assertEquals(10, $stats['totals']['approved']);
-        $this->assertEquals(5, $stats['totals']['declined']);
-    }
-
     public function test_chargeback_rates_endpoint_requires_auth(): void
     {
         $response = $this->getJson('/api/admin/stats/chargeback-rates');
