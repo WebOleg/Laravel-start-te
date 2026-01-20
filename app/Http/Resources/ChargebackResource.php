@@ -26,6 +26,8 @@ class ChargebackResource extends JsonResource
             'bank_name' => $this->debtor?->latestVopLog?->bank_name,
             'bank_country' => $this->debtor?->latestVopLog?->country,
             'processed_at' => $this->processed_at,
+            'emp_created_at' => $this->emp_created_at,
+            'chargebacked_at' => $this->chargebacked_at,
             'debtor' => $this->debtor ? [
                 'id' => $this->debtor->id,
                 'first_name' => $this->debtor->first_name,
