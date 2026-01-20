@@ -7,6 +7,7 @@
 namespace Tests\Feature\Admin;
 
 use App\Models\Debtor;
+use App\Models\DebtorProfile;
 use App\Models\Upload;
 use App\Models\User;
 use App\Models\Blacklist;
@@ -307,7 +308,7 @@ class DebtorControllerTest extends TestCase
     {
         $upload = Upload::factory()->create();
         $iban = 'DE89370400440532013000';
-        
+
         Blacklist::create([
             'iban' => $iban,
             'iban_hash' => hash('sha256', $iban),
@@ -355,5 +356,157 @@ class DebtorControllerTest extends TestCase
             ->deleteJson('/api/admin/debtors/99999');
 
         $response->assertStatus(404);
+    }
+
+    public function test_index_filters_by_legacy_model(): void
+    {
+        $upload = Upload::factory()->create();
+
+        // 1. Pure Legacy (No Profile) - Should match
+        $legacy1 = Debtor::factory()->create(['upload_id' => $upload->id]);
+
+        // 2. Explicit Legacy Profile - Should match
+        $legacyProfile = DebtorProfile::factory()->create(['billing_model' => DebtorProfile::MODEL_LEGACY]);
+        $legacy2 = Debtor::factory()->create(['upload_id' => $upload->id, 'debtor_profile_id' => $legacyProfile->id]);
+
+        // 3. Flywheel Profile - Should NOT match
+        $flywheelProfile = DebtorProfile::factory()->create(['billing_model' => DebtorProfile::MODEL_FLYWHEEL]);
+        $flywheel = Debtor::factory()->create(['upload_id' => $upload->id, 'debtor_profile_id' => $flywheelProfile->id]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/debtors?model=legacy');
+
+        $response->assertStatus(200)
+            ->assertJsonCount(2, 'data')
+            ->assertJsonFragment(['id' => $legacy1->id])
+            ->assertJsonFragment(['id' => $legacy2->id])
+            ->assertJsonMissing(['id' => $flywheel->id]);
+    }
+
+    public function test_index_filters_by_flywheel_model(): void
+    {
+        $upload = Upload::factory()->create();
+
+        // 1. Flywheel Profile - Should Match
+        $profile = DebtorProfile::factory()->create(['billing_model' => DebtorProfile::MODEL_FLYWHEEL]);
+        $match = Debtor::factory()->create(['upload_id' => $upload->id, 'debtor_profile_id' => $profile->id]);
+
+        // 2. Recovery Profile - Should NOT Match
+        $otherProfile = DebtorProfile::factory()->create(['billing_model' => DebtorProfile::MODEL_RECOVERY]);
+        $noMatch = Debtor::factory()->create(['upload_id' => $upload->id, 'debtor_profile_id' => $otherProfile->id]);
+
+        // 3. Legacy - Should NOT Match
+        $legacy = Debtor::factory()->create(['upload_id' => $upload->id]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/debtors?model=flywheel');
+
+        $response->assertStatus(200)
+            ->assertJsonCount(1, 'data')
+            ->assertJsonFragment(['id' => $match->id])
+            ->assertJsonMissing(['id' => $noMatch->id])
+            ->assertJsonMissing(['id' => $legacy->id]);
+    }
+
+    public function test_update_creates_profile_when_switching_to_flywheel(): void
+    {
+        // Debtor starts as Legacy (No Profile)
+        $debtor = Debtor::factory()->create([
+            'iban' => 'DE123456789',
+            'iban_hash' => 'hash_DE123456789',
+            'debtor_profile_id' => null
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->putJson("/api/admin/debtors/{$debtor->id}", [
+                'model' => DebtorProfile::MODEL_FLYWHEEL
+            ]);
+
+        $response->assertStatus(200);
+
+        // Verify Profile Created
+        $debtor->refresh();
+        $this->assertNotNull($debtor->debtorProfile);
+        $this->assertEquals(DebtorProfile::MODEL_FLYWHEEL, $debtor->debtorProfile->billing_model);
+        $this->assertEquals($debtor->iban_hash, $debtor->debtorProfile->iban_hash);
+    }
+
+    public function test_update_deletes_profile_when_switching_to_legacy(): void
+    {
+        // Debtor starts with Flywheel Profile
+        $profile = DebtorProfile::factory()->create(['billing_model' => DebtorProfile::MODEL_FLYWHEEL]);
+        $debtor = Debtor::factory()->create(['debtor_profile_id' => $profile->id]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->putJson("/api/admin/debtors/{$debtor->id}", [
+                'model' => DebtorProfile::MODEL_LEGACY
+            ]);
+
+        $response->assertStatus(200);
+
+        // Verify Profile Deleted and Dissociated
+        $debtor->refresh();
+        $this->assertNull($debtor->debtor_profile_id);
+        $this->assertDatabaseMissing('debtor_profiles', ['id' => $profile->id]);
+    }
+
+    public function test_update_preserves_cycle_date_when_switching_models(): void
+    {
+        // User paid 30 days ago
+        $lastSuccess = now()->subDays(30);
+
+        // Current: Flywheel (90 day cycle) -> Next bill was ~60 days from now
+        $profile = DebtorProfile::factory()->create([
+            'billing_model' => DebtorProfile::MODEL_FLYWHEEL,
+            'last_success_at' => $lastSuccess,
+            'next_bill_at' => $lastSuccess->copy()->addDays(90)
+        ]);
+
+        $debtor = Debtor::factory()->create(['debtor_profile_id' => $profile->id]);
+
+        // Switch to Recovery (6 month cycle)
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->putJson("/api/admin/debtors/{$debtor->id}", [
+                'model' => DebtorProfile::MODEL_RECOVERY
+            ]);
+
+        $response->assertStatus(200);
+
+        $debtor->refresh();
+        $this->assertEquals(DebtorProfile::MODEL_RECOVERY, $debtor->debtorProfile->billing_model);
+
+        // Assert date was recalculated: Last Success + 6 Months
+        $expectedDate = $lastSuccess->copy()->addMonths(6);
+
+        // Check matching Y-m-d H:i (ignore seconds)
+        $this->assertEquals(
+            $expectedDate->format('Y-m-d H:i'),
+            $debtor->debtorProfile->next_bill_at->format('Y-m-d H:i')
+        );
+    }
+
+    public function test_update_sets_immediate_billing_if_cycle_passed(): void
+    {
+        // User paid 1 year ago (cycle definitely passed)
+        $lastSuccess = now()->subYear();
+
+        $profile = DebtorProfile::factory()->create([
+            'billing_model' => DebtorProfile::MODEL_FLYWHEEL,
+            'last_success_at' => $lastSuccess,
+            'next_bill_at' => now()->subMonths(9) // Was due long ago
+        ]);
+
+        $debtor = Debtor::factory()->create(['debtor_profile_id' => $profile->id]);
+
+        // Update Model
+        $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->putJson("/api/admin/debtors/{$debtor->id}", [
+                'model' => DebtorProfile::MODEL_RECOVERY
+            ]);
+
+        $debtor->refresh();
+
+        // Should be NULL (Bill Immediately), because calculated date (Last Success + 6mo) is in the past
+        $this->assertNull($debtor->debtorProfile->next_bill_at);
     }
 }

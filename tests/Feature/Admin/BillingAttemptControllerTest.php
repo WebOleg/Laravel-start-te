@@ -8,6 +8,7 @@ namespace Tests\Feature\Admin;
 
 use App\Models\BillingAttempt;
 use App\Models\Debtor;
+use App\Models\DebtorProfile;
 use App\Models\Upload;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -68,7 +69,7 @@ class BillingAttemptControllerTest extends TestCase
     {
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
-        
+
         BillingAttempt::factory()->create([
             'upload_id' => $upload->id,
             'debtor_id' => $debtor->id,
@@ -95,7 +96,7 @@ class BillingAttemptControllerTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor1 = Debtor::factory()->create(['upload_id' => $upload->id]);
         $debtor2 = Debtor::factory()->create(['upload_id' => $upload->id]);
-        
+
         BillingAttempt::factory()->count(2)->create([
             'upload_id' => $upload->id,
             'debtor_id' => $debtor1->id,
@@ -142,5 +143,97 @@ class BillingAttemptControllerTest extends TestCase
             ->getJson('/api/admin/billing-attempts/99999');
 
         $response->assertStatus(404);
+    }
+
+    public function test_index_filters_by_flywheel_model(): void
+    {
+        // 1. Flywheel Attempt (Target)
+        $flywheel = BillingAttempt::factory()->create([
+            'billing_model' => DebtorProfile::MODEL_FLYWHEEL,
+            'status' => BillingAttempt::STATUS_APPROVED,
+        ]);
+
+        // 2. Recovery Attempt (Should skip)
+        $recovery = BillingAttempt::factory()->create([
+            'billing_model' => DebtorProfile::MODEL_RECOVERY,
+            'status' => BillingAttempt::STATUS_APPROVED,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/billing-attempts?model=' . DebtorProfile::MODEL_FLYWHEEL);
+
+        $response->assertStatus(200);
+        $data = $response->json('data');
+
+        $this->assertCount(1, $data);
+
+        // Assert by ID since Resource might not expose billing_model
+        $this->assertEquals($flywheel->id, $data[0]['id']);
+    }
+
+    public function test_index_filters_by_legacy_model_includes_null_profiles(): void
+    {
+        // 1. Explicit Legacy
+        $legacy = BillingAttempt::factory()->create([
+            'billing_model' => DebtorProfile::MODEL_LEGACY,
+        ]);
+
+        // 2. Null Profile + Null Model (Implied Legacy)
+        $impliedLegacy = BillingAttempt::factory()->create([
+            'billing_model' => null,
+            'debtor_profile_id' => null,
+        ]);
+
+        // 3. Flywheel (Should skip)
+        // FIX: Must have a profile ID, otherwise 'orWhereNull(debtor_profile_id)' will catch it
+        $flywheelProfile = DebtorProfile::factory()->create(['billing_model' => DebtorProfile::MODEL_FLYWHEEL]);
+        $flywheel = BillingAttempt::factory()->create([
+            'billing_model' => DebtorProfile::MODEL_FLYWHEEL,
+            'debtor_profile_id' => $flywheelProfile->id, // Critical: Ensure ID is present
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/billing-attempts?model=' . DebtorProfile::MODEL_LEGACY);
+
+        $response->assertStatus(200);
+        $data = $response->json('data');
+
+        $this->assertCount(2, $data);
+
+        $ids = collect($data)->pluck('id');
+        $this->assertContains($legacy->id, $ids);
+        $this->assertContains($impliedLegacy->id, $ids);
+        $this->assertNotContains($flywheel->id, $ids);
+    }
+
+    // --- NEW: Search Functionality ---
+
+    public function test_index_search_finds_by_transaction_id(): void
+    {
+        BillingAttempt::factory()->create(['transaction_id' => 'TX_FIND_ME']);
+        BillingAttempt::factory()->create(['transaction_id' => 'TX_OTHER']);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/billing-attempts?search=FIND_ME');
+
+        $response->assertStatus(200);
+        $data = $response->json('data');
+
+        $this->assertCount(1, $data);
+        $this->assertEquals('TX_FIND_ME', $data[0]['transaction_id']);
+    }
+
+    public function test_index_search_finds_by_debtor_name(): void
+    {
+        $debtor = Debtor::factory()->create(['first_name' => 'Waldo', 'last_name' => 'Smith']);
+        BillingAttempt::factory()->create(['debtor_id' => $debtor->id]);
+
+        BillingAttempt::factory()->create(); // Random other
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/billing-attempts?search=Waldo');
+
+        $response->assertStatus(200);
+        $this->assertCount(1, $response->json('data'));
     }
 }
