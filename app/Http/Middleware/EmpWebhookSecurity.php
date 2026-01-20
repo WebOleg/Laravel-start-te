@@ -24,9 +24,7 @@ class EmpWebhookSecurity
         $requestToken = $request->route('token');
 
         if (!$expectedToken || !hash_equals($expectedToken, $requestToken ?? '')) {
-            Log::warning('EMP webhook invalid token', [
-                'ip' => $request->ip(),
-            ]);
+            Log::warning('EMP webhook invalid token', ['ip' => $request->ip()]);
             return $this->reject('Forbidden', 403);
         }
 
@@ -35,9 +33,9 @@ class EmpWebhookSecurity
             return $this->reject('Invalid content type', 415);
         }
 
-        $size = (int) $request->header('Content-Length', 0);
-        if ($size > self::MAX_BODY_SIZE || $size === 0) {
-            return $this->reject('Invalid payload size', 413);
+        $size = strlen($request->getContent());
+        if ($size > self::MAX_BODY_SIZE) {
+            return $this->reject('Payload too large', 413);
         }
 
         if (!$this->checkRateLimit($request->ip())) {
