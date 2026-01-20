@@ -1,50 +1,46 @@
 <?php
-/**
- * Job for processing EMP webhook notifications asynchronously.
- */
+
 namespace App\Jobs;
 
 use App\Models\BillingAttempt;
 use App\Models\Debtor;
 use App\Models\DebtorProfile;
+use App\Models\WebhookEvent;
 use App\Services\BlacklistService;
 use Illuminate\Contracts\Queue\ShouldQueue;
-use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
 
-class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
+class ProcessEmpWebhookJob implements ShouldQueue
 {
     use Queueable, Dispatchable, InteractsWithQueue, SerializesModels;
 
     public int $tries = 3;
+    public array $backoff = [10, 60, 300];
     public int $timeout = 60;
+    public int $maxExceptions = 3;
 
     private ?array $blacklistCodesFlipped = null;
 
     public function __construct(
         private array $webhookData,
         private string $processingType,
-        private string $receivedAt
+        private string $receivedAt,
+        private ?int $webhookEventId = null
     ) {
         $this->onQueue('webhooks');
     }
 
-    public function uniqueId(): string|null
+    public function uniqueId(): ?string
     {
         $uniqueId = $this->webhookData['unique_id'] ?? null;
-
         if ($uniqueId === null) {
-            Log::warning('EMP webhook missing unique_id - uniqueness cannot be enforced', [
-                'processing_type' => $this->processingType,
-            ]);
             return null;
         }
-
-        return "webhook_{$this->processingType}_{$uniqueId}";
+        return "emp_wh_{$this->processingType}_{$uniqueId}";
     }
 
     public function uniqueFor(): int
@@ -54,11 +50,14 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
 
     public function handle(BlacklistService $blacklistService): void
     {
+        $uniqueId = $this->webhookData['unique_id'] ?? null;
+
+        $this->updateWebhookStatus(WebhookEvent::PROCESSING);
+
         Log::info('ProcessEmpWebhookJob started', [
             'processing_type' => $this->processingType,
-            'unique_id' => $this->webhookData['unique_id'] ?? null,
-            'event' => $this->webhookData['event'] ?? null,
-            'status' => $this->webhookData['status'] ?? null,
+            'unique_id' => $uniqueId,
+            'attempt' => $this->attempts(),
         ]);
 
         try {
@@ -68,22 +67,61 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
                 'sdd_status_update' => $this->handleSddStatusUpdate(),
                 default => $this->handleUnknown(),
             };
+
+            $this->updateWebhookStatus(WebhookEvent::COMPLETED);
+
         } catch (\Exception $e) {
             Log::error('ProcessEmpWebhookJob failed', [
                 'processing_type' => $this->processingType,
+                'unique_id' => $uniqueId,
+                'attempt' => $this->attempts(),
                 'error' => $e->getMessage(),
-                'data' => $this->webhookData,
             ]);
+
+            $this->incrementWebhookRetry();
+
             throw $e;
         }
     }
 
-    /**
-     * Handle chargeback event.
-     *
-     * EMP sends: event=chargeback, unique_id=original_tx_unique_id, status=chargebacked
-     * The unique_id refers to the ORIGINAL transaction that was chargebacked.
-     */
+    public function failed(\Throwable $exception): void
+    {
+        $this->updateWebhookStatus(WebhookEvent::FAILED, $exception->getMessage());
+
+        Log::error('ProcessEmpWebhookJob moved to DLQ', [
+            'processing_type' => $this->processingType,
+            'unique_id' => $this->webhookData['unique_id'] ?? null,
+            'webhook_event_id' => $this->webhookEventId,
+            'error' => $exception->getMessage(),
+        ]);
+    }
+
+    private function updateWebhookStatus(int $status, ?string $error = null): void
+    {
+        if (!$this->webhookEventId) {
+            return;
+        }
+
+        $event = WebhookEvent::find($this->webhookEventId);
+        if (!$event) {
+            return;
+        }
+
+        match ($status) {
+            WebhookEvent::PROCESSING => $event->markProcessing(),
+            WebhookEvent::COMPLETED => $event->markCompleted(),
+            WebhookEvent::FAILED => $event->markFailed($error ?? 'Unknown error'),
+            default => null,
+        };
+    }
+
+    private function incrementWebhookRetry(): void
+    {
+        if ($this->webhookEventId) {
+            WebhookEvent::where('id', $this->webhookEventId)->increment('retry_count');
+        }
+    }
+
     private function handleChargeback(BlacklistService $blacklistService): void
     {
         $originalUniqueId = $this->webhookData['unique_id'] ?? null;
@@ -127,6 +165,7 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
             'reason_code' => $errorCode,
             'post_date' => $this->webhookData['post_date'] ?? null,
             'received_at' => $this->receivedAt,
+            'webhook_event_id' => $this->webhookEventId,
         ];
 
         $currentMeta = $billingAttempt->meta ?? [];
@@ -143,26 +182,13 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
         $debtor = $billingAttempt->debtor;
         if ($debtor && $debtor->status !== Debtor::STATUS_FAILED) {
             $debtor->update(['status' => Debtor::STATUS_FAILED]);
-            Log::info('Debtor status updated to failed due to chargeback', [
-                'debtor_id' => $debtor->id,
-            ]);
         }
 
         $blacklisted = false;
         if ($errorCode && $this->shouldBlacklistCode($errorCode)) {
             if ($debtor && $debtor->iban) {
-                $blacklistService->addDebtor(
-                    $debtor,
-                    'chargeback',
-                    "Auto-blacklisted: {$errorCode}"
-                );
+                $blacklistService->addDebtor($debtor, 'chargeback', "Auto-blacklisted: {$errorCode}");
                 $blacklisted = true;
-                Log::info('Debtor auto-blacklisted due to chargeback', [
-                    'debtor_id' => $debtor->id,
-                    'iban' => $debtor->iban,
-                    'name' => $debtor->first_name . ' ' . $debtor->last_name,
-                    'error_code' => $errorCode,
-                ]);
             }
         }
 
@@ -170,26 +196,18 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
 
         Log::info('Chargeback processed', [
             'billing_attempt_id' => $billingAttempt->id,
-            'debtor_id' => $billingAttempt->debtor_id,
             'unique_id' => $originalUniqueId,
             'error_code' => $errorCode,
-            'arn' => $chargebackMeta['arn'],
             'blacklisted' => $blacklisted,
         ]);
     }
 
-    /**
-     * Handle retrieval request event.
-     *
-     * Retrieval requests are pre-chargeback inquiries from issuers.
-     * We log them but don't change transaction status.
-     */
     private function handleRetrievalRequest(): void
     {
         $uniqueId = $this->webhookData['unique_id'] ?? null;
 
         if (!$uniqueId) {
-            Log::warning('Retrieval request missing unique_id', $this->webhookData);
+            Log::warning('Retrieval request missing unique_id');
             return;
         }
 
@@ -208,6 +226,7 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
             'reason_description' => $this->webhookData['reason_description'] ?? null,
             'post_date' => $this->webhookData['post_date'] ?? null,
             'received_at' => $this->receivedAt,
+            'webhook_event_id' => $this->webhookEventId,
         ];
 
         $billingAttempt->update(['meta' => $currentMeta]);
@@ -215,20 +234,16 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
         Log::info('Retrieval request logged', [
             'billing_attempt_id' => $billingAttempt->id,
             'unique_id' => $uniqueId,
-            'arn' => $this->webhookData['arn'] ?? null,
         ]);
     }
 
-    /**
-     * Handle SDD transaction status update.
-     */
     private function handleSddStatusUpdate(): void
     {
         $uniqueId = $this->webhookData['unique_id'] ?? null;
         $status = $this->webhookData['status'] ?? null;
 
         if (!$uniqueId) {
-            Log::warning('SDD status update missing unique_id', $this->webhookData);
+            Log::warning('SDD status update missing unique_id');
             return;
         }
 
@@ -262,9 +277,6 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
                 $debtor = $billingAttempt->debtor;
                 if ($debtor && $debtor->status !== Debtor::STATUS_FAILED) {
                     $debtor->update(['status' => Debtor::STATUS_FAILED]);
-                    Log::info('Debtor status updated to failed via SDD status update', [
-                        'debtor_id' => $debtor->id,
-                    ]);
                 }
             }
 
@@ -272,20 +284,10 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
                 'billing_attempt_id' => $billingAttempt->id,
                 'old_status' => $oldStatus,
                 'new_status' => $mappedStatus,
-                'emp_status' => $status,
-            ]);
-        } else {
-            Log::debug('SDD status unchanged or no valid status', [
-                'billing_attempt_id' => $billingAttempt->id,
-                'current_status' => $billingAttempt->status,
-                'emp_status' => $status,
             ]);
         }
     }
 
-    /**
-     * Update Profile and Debtor on Successful Payment.
-     */
     private function handleSuccess(BillingAttempt $attempt): void
     {
         $profile = $attempt->debtorProfile;
@@ -307,27 +309,15 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
                 $profile->last_billed_at = now();
                 $profile->next_bill_at = DebtorProfile::calculateNextBillDate($modelUsed);
                 $profile->save();
-
-                Log::info("Cycle updated for Profile {$profile->id}", [
-                    'model' => $modelUsed,
-                    'next_bill_at' => $profile->next_bill_at,
-                    'added_amount' => $attempt->amount,
-                ]);
             }
         }
 
         $debtor = $attempt->debtor;
         if ($debtor && $debtor->status !== Debtor::STATUS_RECOVERED) {
             $debtor->update(['status' => Debtor::STATUS_RECOVERED]);
-            Log::info('Debtor status updated to recovered', [
-                'debtor_id' => $debtor->id,
-            ]);
         }
     }
 
-    /**
-     * Deactivate Profile on Chargeback.
-     */
     private function deactivateProfile(BillingAttempt $attempt, mixed $chargebackAmount): void
     {
         $profile = $attempt->debtorProfile ?? $attempt->debtor?->debtorProfile;
@@ -341,18 +331,13 @@ class ProcessEmpWebhookJob implements ShouldQueue, ShouldBeUnique
             $profile->is_active = false;
             $profile->next_bill_at = null;
             $profile->save();
-
-            Log::warning("Profile {$profile->id} deactivated and revenue adjusted due to chargeback", [
-                'deducted_amount' => $amountToDeduct,
-            ]);
         }
     }
 
     private function handleUnknown(): void
     {
-        Log::info('EMP webhook unknown processing type', [
+        Log::info('EMP webhook unknown type', [
             'processing_type' => $this->processingType,
-            'data' => $this->webhookData,
         ]);
     }
 

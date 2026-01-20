@@ -1,10 +1,5 @@
 <?php
 return [
-    /*
-    |--------------------------------------------------------------------------
-    | Third Party Services
-    |--------------------------------------------------------------------------
-    */
     'postmark' => [
         'key' => env('POSTMARK_API_KEY'),
     ],
@@ -22,16 +17,12 @@ return [
             'channel' => env('SLACK_BOT_USER_DEFAULT_CHANNEL'),
         ],
     ],
-    /*
-    |--------------------------------------------------------------------------
-    | emerchantpay Genesis API Configuration
-    |--------------------------------------------------------------------------
-    */
     'emp' => [
         'endpoint' => env('EMP_GENESIS_ENDPOINT', 'gate.emerchantpay.net'),
         'username' => env('EMP_GENESIS_USERNAME'),
         'password' => env('EMP_GENESIS_PASSWORD'),
         'terminal_token' => env('EMP_GENESIS_TERMINAL_TOKEN'),
+        'webhook_token' => env('EMP_WEBHOOK_TOKEN'),
         'rate_limit' => [
             'requests_per_second' => 50,
             'max_retries' => 3,
@@ -40,13 +31,6 @@ return [
         'timeout' => 30,
         'connect_timeout' => 10,
     ],
-    /*
-    |--------------------------------------------------------------------------
-    | IBAN.com API Configuration
-    |--------------------------------------------------------------------------
-    | api_url: IBAN Suite v4 (unlimited) - bank info, BIC, SEPA support
-    | bav_api_url: BAV v3 (limited credits) - name matching verification
-    */
     'iban' => [
         'api_key' => env('IBAN_API_KEY'),
         'api_url' => env('IBAN_API_URL', 'https://api.iban.com/clients/api/v4/iban/'),
