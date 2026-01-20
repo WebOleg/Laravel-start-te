@@ -11,4 +11,4 @@ Artisan::command('inspire', function () {
 
 Schedule::command('billing:dispatch')->everyMinute();
 
-Schedule::command('emp:fetch-chargeback-codes --empty --chunk=200')->dailyAt('02:00');
+Schedule::command('emp:fetch-chargeback-code --empty --chunk=300')->everySixHours();
