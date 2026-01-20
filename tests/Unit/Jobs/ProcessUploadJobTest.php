@@ -2,6 +2,9 @@
 
 /**
  * Unit tests for ProcessUploadJob.
+ *
+ * Stage A: Job accepts ALL rows without validation
+ * Stage B: Validation runs separately
  */
 
 namespace Tests\Unit\Jobs;
@@ -9,8 +12,8 @@ namespace Tests\Unit\Jobs;
 use App\Jobs\ProcessUploadJob;
 use App\Models\Upload;
 use App\Models\Debtor;
-use App\Services\SpreadsheetParserService;
 use App\Services\DebtorImportService;
+use App\Services\SpreadsheetParserService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
@@ -23,7 +26,7 @@ class ProcessUploadJobTest extends TestCase
     {
         $filePath = 'uploads/test_' . uniqid() . '.csv';
         $content = "first_name,last_name,iban,amount\nJohn,Doe,DE89370400440532013000,100.00";
-        
+
         Storage::disk('s3')->put($filePath, $content);
 
         $upload = Upload::factory()->create([
@@ -64,7 +67,7 @@ class ProcessUploadJobTest extends TestCase
     {
         $filePath = 'uploads/test_' . uniqid() . '.csv';
         $content = "first_name,last_name,iban,amount\nJohn,Doe,INVALID,100.00\nJane,Smith,DE89370400440532013000,200.00";
-        
+
         Storage::disk('s3')->put($filePath, $content);
 
         $upload = Upload::factory()->create([
@@ -81,6 +84,7 @@ class ProcessUploadJobTest extends TestCase
         ];
 
         $job = new ProcessUploadJob($upload, $columnMapping);
+
         $job->handle(
             app(SpreadsheetParserService::class),
             app(DebtorImportService::class)
@@ -93,6 +97,7 @@ class ProcessUploadJobTest extends TestCase
         $this->assertEquals(0, $upload->failed_records);
 
         $this->assertDatabaseCount('debtors', 2);
+        // Assuming your ImportService logic allows invalid IBANs to be saved as PENDING
         $this->assertDatabaseHas('debtors', [
             'upload_id' => $upload->id,
             'first_name' => 'John',
@@ -105,7 +110,7 @@ class ProcessUploadJobTest extends TestCase
     {
         $filePath = 'uploads/test_' . uniqid() . '.csv';
         $content = "first_name,last_name,iban,amount\nJohn,Doe,INVALID,100.00";
-        
+
         Storage::disk('s3')->put($filePath, $content);
 
         $upload = Upload::factory()->create([
@@ -122,6 +127,7 @@ class ProcessUploadJobTest extends TestCase
         ];
 
         $job = new ProcessUploadJob($upload, $columnMapping);
+
         $job->handle(
             app(SpreadsheetParserService::class),
             app(DebtorImportService::class)

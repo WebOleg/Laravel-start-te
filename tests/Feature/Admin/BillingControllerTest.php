@@ -9,6 +9,7 @@ namespace Tests\Feature\Admin;
 use App\Jobs\ProcessBillingJob;
 use App\Models\BillingAttempt;
 use App\Models\Debtor;
+use App\Models\DebtorProfile;
 use App\Models\Upload;
 use App\Models\User;
 use App\Models\VopLog;
@@ -70,7 +71,8 @@ class BillingControllerTest extends TestCase
             'upload_id' => $upload->id,
             'validation_status' => Debtor::VALIDATION_VALID,
             'iban_valid' => true,
-            'status' => Debtor::STATUS_PENDING,
+            // FIX: Use STATUS_UPLOADED so the controller picks them up
+            'status' => Debtor::STATUS_UPLOADED,
         ]);
 
         foreach ($debtors as $debtor) {
@@ -97,24 +99,25 @@ class BillingControllerTest extends TestCase
         Bus::fake();
 
         $upload = Upload::factory()->create();
-        
+
         $validDebtor = Debtor::factory()->create([
             'upload_id' => $upload->id,
             'validation_status' => Debtor::VALIDATION_VALID,
             'iban_valid' => true,
-            'status' => Debtor::STATUS_PENDING,
+            // FIX: Use STATUS_UPLOADED
+            'status' => Debtor::STATUS_UPLOADED,
         ]);
-        
+
         VopLog::factory()->create([
             'upload_id' => $upload->id,
             'debtor_id' => $validDebtor->id,
         ]);
-        
+
         Debtor::factory()->create([
             'upload_id' => $upload->id,
             'validation_status' => Debtor::VALIDATION_INVALID,
             'iban_valid' => false,
-            'status' => Debtor::STATUS_PENDING,
+            'status' => Debtor::STATUS_UPLOADED,
         ]);
 
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
@@ -133,7 +136,8 @@ class BillingControllerTest extends TestCase
             'upload_id' => $upload->id,
             'validation_status' => Debtor::VALIDATION_VALID,
             'iban_valid' => true,
-            'status' => Debtor::STATUS_PENDING,
+            // FIX: Use STATUS_UPLOADED to verify the BillingAttempt check logic works
+            'status' => Debtor::STATUS_UPLOADED,
         ]);
 
         VopLog::factory()->create([
@@ -164,7 +168,8 @@ class BillingControllerTest extends TestCase
             'upload_id' => $upload->id,
             'validation_status' => Debtor::VALIDATION_VALID,
             'iban_valid' => true,
-            'status' => Debtor::STATUS_PENDING,
+            // FIX: Use STATUS_UPLOADED
+            'status' => Debtor::STATUS_UPLOADED,
         ]);
 
         VopLog::factory()->create([
@@ -195,7 +200,7 @@ class BillingControllerTest extends TestCase
             'upload_id' => $upload->id,
             'validation_status' => Debtor::VALIDATION_VALID,
             'iban_valid' => true,
-            'status' => Debtor::STATUS_PENDING,
+            'status' => Debtor::STATUS_UPLOADED,
         ]);
 
         VopLog::factory()->create([
@@ -203,8 +208,8 @@ class BillingControllerTest extends TestCase
             'debtor_id' => $debtor->id,
         ]);
 
-        $lockKey = "billing_sync_{$upload->id}_all";
-        Cache::put($lockKey, true, 300);
+        $defaultType = DebtorProfile::ALL;
+        Cache::put("billing_sync_{$upload->id}_{$defaultType}", true, 300);
 
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
             ->postJson("/api/admin/uploads/{$upload->id}/sync");
@@ -220,12 +225,12 @@ class BillingControllerTest extends TestCase
         Bus::fake();
 
         $upload = Upload::factory()->create();
-        
+
         Debtor::factory()->count(3)->create([
             'upload_id' => $upload->id,
             'validation_status' => Debtor::VALIDATION_VALID,
             'iban_valid' => true,
-            'status' => Debtor::STATUS_PENDING,
+            'status' => Debtor::STATUS_UPLOADED,
         ]);
 
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
@@ -243,12 +248,12 @@ class BillingControllerTest extends TestCase
         Bus::fake();
 
         $upload = Upload::factory()->create();
-        
+
         $debtors = Debtor::factory()->count(3)->create([
             'upload_id' => $upload->id,
             'validation_status' => Debtor::VALIDATION_VALID,
             'iban_valid' => true,
-            'status' => Debtor::STATUS_PENDING,
+            'status' => Debtor::STATUS_UPLOADED,
         ]);
 
         VopLog::factory()->create([

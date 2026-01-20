@@ -2,14 +2,20 @@
 
 /**
  * Unit tests for FileUploadService.
+ *
+ * Stage A: FileUploadService accepts rows and skips duplicates/blacklisted
+ * Stage B: DebtorValidationService validates remaining records
  */
 
 namespace Tests\Unit\Services;
 
 use App\Models\Debtor;
-use App\Services\FileUploadService;
 use App\Services\BlacklistService;
+use App\Services\DebtorImportService;
+use App\Services\DeduplicationService;
+use App\Services\FileUploadService;
 use App\Services\IbanValidator;
+use App\Services\SpreadsheetParserService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
@@ -27,13 +33,23 @@ class FileUploadServiceTest extends TestCase
 
     private function createService(): FileUploadService
     {
-        return app(FileUploadService::class);
+        $debtorImportService = new DebtorImportService(
+            new IbanValidator(),
+            app(DeduplicationService::class)
+        );
+
+        return new FileUploadService(
+            new SpreadsheetParserService(),
+            $debtorImportService
+        );
     }
 
     public function test_process_skips_blacklisted_iban(): void
     {
         $ibanValidator = new IbanValidator();
         $blacklistService = new BlacklistService($ibanValidator);
+
+        // Assuming BlacklistService writes to the DB, this will persist for the DeduplicationService check
         $blacklistService->add('DE89370400440532013000', 'Fraud');
 
         $service = $this->createService();
@@ -45,7 +61,8 @@ class FileUploadServiceTest extends TestCase
 
         $this->assertEquals(0, $result['created']);
         $this->assertEquals(1, $result['skipped']['total']);
-        $this->assertEquals(1, $result['skipped']['blacklisted']);
+
+        $this->assertEquals(1, $result['skipped']['blacklisted'] ?? $result['skipped'][DeduplicationService::SKIP_BLACKLISTED] ?? 0);
     }
 
     public function test_process_accepts_clean_iban(): void

@@ -72,7 +72,7 @@ class BillingController extends Controller
         // 3. Count eligible debtors
         $query = Debtor::where('upload_id', $upload->id)
             ->where('validation_status', Debtor::VALIDATION_VALID)
-            ->where('status', Debtor::STATUS_PENDING);
+            ->where('status', Debtor::STATUS_UPLOADED);
 
         // Filter by requested Debtor Type (if not 'all')
         // Matches logic: (Has Profile == Type) OR (Has No Profile)

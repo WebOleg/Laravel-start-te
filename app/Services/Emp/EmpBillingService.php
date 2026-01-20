@@ -223,7 +223,7 @@ class EmpBillingService
             }
         }
 
-        if ($amount <= 0) {
+        if ($amount < 1) {
             return false;
         }
 

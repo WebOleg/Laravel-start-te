@@ -133,7 +133,7 @@ class S3FileUploadTest extends TestCase
             ->deleteJson('/api/admin/uploads/' . $upload->id);
 
         $response->assertStatus(200);
-        
+
         $this->assertSoftDeleted('uploads', ['id' => $upload->id]);
         $this->assertDatabaseMissing('debtors', ['upload_id' => $upload->id, 'deleted_at' => null]);
     }
