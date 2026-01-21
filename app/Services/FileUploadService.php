@@ -182,11 +182,11 @@ class FileUploadService
             'uploads',
             $filename,
             [
+                'disk'  => 's3',
                 'Metadata' => [
                     'original-filename' => $originalFilename,
                 ],
             ],
-            's3'
         );
 
         if ($path === false) {
