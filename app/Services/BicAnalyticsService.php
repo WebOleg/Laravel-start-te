@@ -236,6 +236,7 @@ class BicAnalyticsService
         if (strlen($bic) >= 6) {
             return strtoupper(substr($bic, 4, 2));
         }
+
         return 'XX';
     }
 
