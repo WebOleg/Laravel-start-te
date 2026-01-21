@@ -9,6 +9,7 @@ namespace Tests\Feature\Admin;
 use App\Models\User;
 use App\Models\Upload;
 use App\Models\Debtor;
+use App\Models\DebtorProfile;
 use App\Models\BillingAttempt;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -92,11 +93,6 @@ class BicAnalyticsControllerTest extends TestCase
             ->assertJsonPath('data.totals.total_transactions', 7);
     }
 
-    /**
-     * Test chargeback rate calculation.
-     * Formula: chargebacks / approved_count × 100
-     * 9 approved, 1 chargeback = 1/9 × 100 = 11.11%
-     */
     public function test_bic_analytics_calculates_chargeback_rate(): void
     {
         $upload = Upload::factory()->create();
@@ -133,11 +129,6 @@ class BicAnalyticsControllerTest extends TestCase
         $this->assertEquals(11.11, $data['cb_rate_count']);
     }
 
-    /**
-     * Test high risk flagging.
-     * Formula: chargebacks / approved_count × 100
-     * 5 approved, 5 chargebacks = 5/5 × 100 = 100% (high risk threshold is 25%)
-     */
     public function test_bic_analytics_flags_high_risk_bics(): void
     {
         $upload = Upload::factory()->create();
@@ -413,5 +404,88 @@ class BicAnalyticsControllerTest extends TestCase
             ->assertJsonPath('data.bics.0.total_volume', 150.75)
             ->assertJsonPath('data.bics.0.approved_volume', 100.50)
             ->assertJsonPath('data.bics.0.chargeback_volume', 50.25);
+    }
+
+    public function test_bic_analytics_filters_by_billing_model(): void
+    {
+        // 1. Recovery Bank Data (Target)
+        $recoveryProfile = DebtorProfile::factory()->create(['billing_model' => DebtorProfile::MODEL_RECOVERY]);
+        $recoveryDebtor = Debtor::factory()->create(['debtor_profile_id' => $recoveryProfile->id, 'bic' => 'RECOVERY_BIC']);
+
+        BillingAttempt::factory()->create([
+            'debtor_id' => $recoveryDebtor->id,
+            'debtor_profile_id' => $recoveryProfile->id,
+            'billing_model' => DebtorProfile::MODEL_RECOVERY,
+            'bic' => 'RECOVERY_BIC',
+            'status' => BillingAttempt::STATUS_APPROVED,
+            'amount' => 100,
+        ]);
+
+        // 2. Flywheel Bank Data (Should be ignored)
+        $flywheelProfile = DebtorProfile::factory()->create(['billing_model' => DebtorProfile::MODEL_FLYWHEEL]);
+        $flywheelDebtor = Debtor::factory()->create(['debtor_profile_id' => $flywheelProfile->id, 'bic' => 'FLYWHEEL_BIC']);
+
+        BillingAttempt::factory()->create([
+            'debtor_id' => $flywheelDebtor->id,
+            'debtor_profile_id' => $flywheelProfile->id,
+            'billing_model' => DebtorProfile::MODEL_FLYWHEEL,
+            'bic' => 'FLYWHEEL_BIC',
+            'status' => BillingAttempt::STATUS_APPROVED,
+            'amount' => 200,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/analytics/bic?model=' . DebtorProfile::MODEL_RECOVERY);
+
+        $response->assertStatus(200);
+
+        $data = $response->json('data');
+
+        // Should contain exactly 1 BIC
+        $this->assertCount(1, $data['bics']);
+        $this->assertEquals('RECOVERY_BIC', $data['bics'][0]['bic']);
+
+        // Totals should match only Recovery
+        $this->assertEquals(100, $data['totals']['total_volume']);
+        $this->assertEquals(1, $data['totals']['total_transactions']);
+    }
+
+    public function test_bic_analytics_show_filters_by_billing_model(): void
+    {
+        // 1. Recovery Data for BIC 'SHARED_BIC'
+        $recoveryProfile = DebtorProfile::factory()->create(['billing_model' => DebtorProfile::MODEL_RECOVERY]);
+        $recoveryDebtor = Debtor::factory()->create(['debtor_profile_id' => $recoveryProfile->id, 'bic' => 'SHARED_BIC']);
+
+        BillingAttempt::factory()->create([
+            'debtor_id' => $recoveryDebtor->id,
+            'debtor_profile_id' => $recoveryProfile->id,
+            'billing_model' => DebtorProfile::MODEL_RECOVERY,
+            'bic' => 'SHARED_BIC',
+            'status' => BillingAttempt::STATUS_APPROVED,
+            'amount' => 50,
+        ]);
+
+        // 2. Flywheel Data for SAME BIC 'SHARED_BIC'
+        $flywheelProfile = DebtorProfile::factory()->create(['billing_model' => DebtorProfile::MODEL_FLYWHEEL]);
+        $flywheelDebtor = Debtor::factory()->create(['debtor_profile_id' => $flywheelProfile->id, 'bic' => 'SHARED_BIC']);
+
+        BillingAttempt::factory()->create([
+            'debtor_id' => $flywheelDebtor->id,
+            'debtor_profile_id' => $flywheelProfile->id,
+            'billing_model' => DebtorProfile::MODEL_FLYWHEEL,
+            'bic' => 'SHARED_BIC',
+            'status' => BillingAttempt::STATUS_APPROVED,
+            'amount' => 50,
+        ]);
+
+        // Request details for SHARED_BIC but filtered by 'recovery'
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/analytics/bic/SHARED_BIC?model=' . DebtorProfile::MODEL_RECOVERY);
+
+        $response->assertStatus(200);
+
+        // Should only count the 1 Recovery transaction (50 amount), not 2 (100 amount)
+        $response->assertJsonPath('data.total_transactions', 1)
+            ->assertJsonPath('data.total_volume', 50);
     }
 }
