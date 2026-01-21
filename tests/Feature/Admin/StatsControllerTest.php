@@ -139,8 +139,8 @@ class StatsControllerTest extends TestCase
             'debtor_profile_id' => $recoveryProfile->id,
             'billing_model' => DebtorProfile::MODEL_RECOVERY,
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'bic' => 'RECOVERY_BANK_XX',
-            'amount' => 100.00, // Explicit amount for verification
+            'bic' => 'RECOVERY_XX',
+            'amount' => 100.00,
             'created_at' => now()->subHour(),
             'chargebacked_at' => now(),
         ]);
@@ -154,8 +154,8 @@ class StatsControllerTest extends TestCase
             'debtor_profile_id' => $flywheelProfile->id,
             'billing_model' => DebtorProfile::MODEL_FLYWHEEL,
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'bic' => 'FLYWHEEL_BANK_XX',
-            'amount' => 50.00, // Different amount
+            'bic' => 'FLYWHEEL_XX',
+            'amount' => 50.00,
             'created_at' => now()->subHour(),
             'chargebacked_at' => now(),
         ]);

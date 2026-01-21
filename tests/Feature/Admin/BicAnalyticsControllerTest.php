@@ -410,26 +410,28 @@ class BicAnalyticsControllerTest extends TestCase
     {
         // 1. Recovery Bank Data (Target)
         $recoveryProfile = DebtorProfile::factory()->create(['billing_model' => DebtorProfile::MODEL_RECOVERY]);
-        $recoveryDebtor = Debtor::factory()->create(['debtor_profile_id' => $recoveryProfile->id, 'bic' => 'RECOVERY_BIC']);
+        $recoveryDebtor = Debtor::factory()->create(['debtor_profile_id' => $recoveryProfile->id, 'bic' => 'RECOVERY_XX']);
 
         BillingAttempt::factory()->create([
             'debtor_id' => $recoveryDebtor->id,
             'debtor_profile_id' => $recoveryProfile->id,
             'billing_model' => DebtorProfile::MODEL_RECOVERY,
-            'bic' => 'RECOVERY_BIC',
+            // CHANGED: Match the debtor BIC
+            'bic' => 'RECOVERY_XX',
             'status' => BillingAttempt::STATUS_APPROVED,
             'amount' => 100,
         ]);
 
         // 2. Flywheel Bank Data (Should be ignored)
         $flywheelProfile = DebtorProfile::factory()->create(['billing_model' => DebtorProfile::MODEL_FLYWHEEL]);
-        $flywheelDebtor = Debtor::factory()->create(['debtor_profile_id' => $flywheelProfile->id, 'bic' => 'FLYWHEEL_BIC']);
+        $flywheelDebtor = Debtor::factory()->create(['debtor_profile_id' => $flywheelProfile->id, 'bic' => 'FLYWHEEL_XX']);
 
         BillingAttempt::factory()->create([
             'debtor_id' => $flywheelDebtor->id,
             'debtor_profile_id' => $flywheelProfile->id,
             'billing_model' => DebtorProfile::MODEL_FLYWHEEL,
-            'bic' => 'FLYWHEEL_BIC',
+            // CHANGED: Match the debtor BIC
+            'bic' => 'FLYWHEEL_XX',
             'status' => BillingAttempt::STATUS_APPROVED,
             'amount' => 200,
         ]);
@@ -443,7 +445,7 @@ class BicAnalyticsControllerTest extends TestCase
 
         // Should contain exactly 1 BIC
         $this->assertCount(1, $data['bics']);
-        $this->assertEquals('RECOVERY_BIC', $data['bics'][0]['bic']);
+        $this->assertEquals('RECOVERY_XX', $data['bics'][0]['bic']);
 
         // Totals should match only Recovery
         $this->assertEquals(100, $data['totals']['total_volume']);
