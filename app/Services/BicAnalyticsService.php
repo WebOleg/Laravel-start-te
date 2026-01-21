@@ -55,7 +55,6 @@ class BicAnalyticsService
             ->whereNotNull('bic')
             ->where('bic', '!=', '');
 
-        // Apply Billing Model Filter
         if ($billingModel) {
             $query->where('billing_model', $billingModel);
         }
@@ -97,7 +96,7 @@ class BicAnalyticsService
 
         return [
             'period' => $period,
-            'model' => $billingModel ?? 'all', // Return context
+            'model' => $billingModel ?? 'all',
             'start_date' => $start->toIso8601String(),
             'end_date' => $end->toIso8601String(),
             'threshold' => $threshold,
@@ -118,7 +117,6 @@ class BicAnalyticsService
             ->where('bic', $bic)
             ->whereBetween('created_at', [$start, $end]);
 
-        // Apply Billing Model Filter
         if ($billingModel) {
             $query->where('billing_model', $billingModel);
         }
@@ -152,17 +150,12 @@ class BicAnalyticsService
 
         foreach (self::PERIODS as $period) {
             foreach ($models as $model) {
-                // Clear Standard keys
                 $key = $this->buildCacheKey($period, null, null, $model);
                 Cache::forget($key);
             }
         }
     }
 
-
-    /**
-     * Build cache key for analytics.
-     */
     private function buildCacheKey(
         string $period,
         ?string $startDate,
@@ -178,9 +171,6 @@ class BicAnalyticsService
         return "bic_analytics_{$period}{$suffix}";
     }
 
-    /**
-     * Resolve date range from period or explicit dates.
-     */
     private function resolveDateRange(string $period, ?string $startDate, ?string $endDate): array
     {
         if ($startDate && $endDate) {
@@ -208,19 +198,17 @@ class BicAnalyticsService
      */
     private function processBicRow(object $row, float $threshold): array
     {
-        $totalTxCount = (int) $row->total_transactions;
-        $totalTxVolume = (int) $row->total_volume;
         $approvedCount = (int) $row->approved_count;
         $chargebackCount = (int) $row->chargeback_count;
         $approvedVolume = (float) ($row->approved_volume ?? 0);
         $chargebackVolume = (float) $row->chargeback_volume;
 
-        $cbRateCount = $chargebackCount > 0
-            ? round(($chargebackCount / $totalTxCount) * 100, 2)
+        $cbRateCount = $approvedCount > 0
+            ? round(($chargebackCount / $approvedCount) * 100, 2)
             : 0;
 
-        $cbRateVolume = $chargebackVolume > 0
-            ? round(($chargebackVolume / $totalTxVolume) * 100, 2)
+        $cbRateVolume = $approvedVolume > 0
+            ? round(($chargebackVolume / $approvedVolume) * 100, 2)
             : 0;
 
         $country = $this->extractCountryFromBic($row->bic);
@@ -243,9 +231,6 @@ class BicAnalyticsService
         ];
     }
 
-    /**
-     * Extract country code from BIC (positions 5-6).
-     */
     private function extractCountryFromBic(string $bic): string
     {
         if (strlen($bic) >= 6) {
@@ -254,9 +239,6 @@ class BicAnalyticsService
         return 'XX';
     }
 
-    /**
-     * Initialize totals array.
-     */
     private function initTotals(): array
     {
         return [
@@ -275,9 +257,6 @@ class BicAnalyticsService
         ];
     }
 
-    /**
-     * Add BIC data to running totals.
-     */
     private function addToTotals(array &$totals, array $bicData): void
     {
         $totals['total_transactions'] += $bicData['total_transactions'];
@@ -304,12 +283,12 @@ class BicAnalyticsService
         $totals['approved_volume'] = round($totals['approved_volume'], 2);
         $totals['chargeback_volume'] = round($totals['chargeback_volume'], 2);
 
-        $totals['cb_rate_count'] = $totals['chargeback_count'] > 0
-            ? round(($totals['chargeback_count'] / $totals['total_transactions']) * 100, 2)
+        $totals['cb_rate_count'] = $totals['approved_count'] > 0
+            ? round(($totals['chargeback_count'] / $totals['approved_count']) * 100, 2)
             : 0;
 
-        $totals['cb_rate_volume'] = $totals['chargeback_volume'] > 0
-            ? round(($totals['chargeback_volume'] / $totals['total_volume']) * 100, 2)
+        $totals['cb_rate_volume'] = $totals['approved_volume'] > 0
+            ? round(($totals['chargeback_volume'] / $totals['approved_volume']) * 100, 2)
             : 0;
 
         $totals['is_high_risk'] = $totals['cb_rate_count'] >= $threshold || $totals['cb_rate_volume'] >= $threshold;
