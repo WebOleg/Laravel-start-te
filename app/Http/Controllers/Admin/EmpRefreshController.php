@@ -16,11 +16,6 @@ use Illuminate\Support\Str;
 
 class EmpRefreshController extends Controller
 {
-    /**
-     * Trigger EMP refresh for a date range.
-     *
-     * POST /api/admin/emp/refresh
-     */
     public function refresh(Request $request): JsonResponse
     {
         $validated = $request->validate([
@@ -41,7 +36,7 @@ class EmpRefreshController extends Controller
         $existingJob = Cache::get('emp_refresh_active');
         if ($existingJob && $existingJob['status'] === 'processing') {
             $jobStatus = Cache::get("emp_refresh_{$existingJob['job_id']}");
-            if ($jobStatus) {
+            if ($jobStatus || $this->isJobPending($existingJob)) {
                 return response()->json([
                     'message' => 'Refresh already in progress',
                     'data' => [
@@ -65,6 +60,18 @@ class EmpRefreshController extends Controller
             'to' => $validated['to'],
         ], 7200);
 
+        Cache::put("emp_refresh_{$jobId}", [
+            'status' => 'pending',
+            'progress' => 0,
+            'stats' => [
+                'inserted' => 0,
+                'updated' => 0,
+                'unchanged' => 0,
+                'errors' => 0,
+            ],
+            'started_at' => now()->toIso8601String(),
+        ], 7200);
+
         EmpRefreshByDateJob::dispatch(
             $validated['from'],
             $validated['to'],
@@ -83,16 +90,31 @@ class EmpRefreshController extends Controller
         ], 202);
     }
 
-    /**
-     * Get refresh job status.
-     *
-     * GET /api/admin/emp/refresh/{jobId}
-     */
     public function status(string $jobId): JsonResponse
     {
         $status = Cache::get("emp_refresh_{$jobId}");
 
         if (!$status) {
+            $active = Cache::get('emp_refresh_active');
+            if ($active && $active['job_id'] === $jobId) {
+                return response()->json([
+                    'message' => 'Job is pending',
+                    'data' => [
+                        'job_id' => $jobId,
+                        'status' => 'pending',
+                        'progress' => 0,
+                        'stats' => [
+                            'inserted' => 0,
+                            'updated' => 0,
+                            'unchanged' => 0,
+                            'errors' => 0,
+                        ],
+                        'started_at' => $active['started_at'] ?? null,
+                        'completed_at' => null,
+                    ],
+                ]);
+            }
+
             return response()->json([
                 'message' => 'Job completed or expired',
                 'data' => [
@@ -114,9 +136,8 @@ class EmpRefreshController extends Controller
                 'stats' => $status['stats'] ?? [
                     'inserted' => 0,
                     'updated' => 0,
+                    'unchanged' => 0,
                     'errors' => 0,
-                    'processed_pages' => 0,
-                    'total_pages' => 0,
                 ],
                 'started_at' => $status['started_at'] ?? null,
                 'completed_at' => $status['completed_at'] ?? null,
@@ -124,11 +145,6 @@ class EmpRefreshController extends Controller
         ]);
     }
 
-    /**
-     * Get current refresh status (is any job running).
-     *
-     * GET /api/admin/emp/refresh/status
-     */
     public function currentStatus(): JsonResponse
     {
         $active = Cache::get('emp_refresh_active');
@@ -147,6 +163,22 @@ class EmpRefreshController extends Controller
         $jobStatus = Cache::get("emp_refresh_{$active['job_id']}");
 
         if (!$jobStatus) {
+            if ($this->isJobPending($active)) {
+                return response()->json([
+                    'data' => [
+                        'is_processing' => true,
+                        'job_id' => $active['job_id'],
+                        'progress' => 0,
+                        'stats' => [
+                            'inserted' => 0,
+                            'updated' => 0,
+                            'unchanged' => 0,
+                            'errors' => 0,
+                        ],
+                    ],
+                ]);
+            }
+
             Cache::forget('emp_refresh_active');
             return response()->json([
                 'data' => [
@@ -178,5 +210,11 @@ class EmpRefreshController extends Controller
                 'stats' => $jobStatus['stats'] ?? null,
             ],
         ]);
+    }
+
+    private function isJobPending(array $active): bool
+    {
+        $startedAt = \Carbon\Carbon::parse($active['started_at'] ?? now());
+        return $startedAt->diffInMinutes(now()) < 5;
     }
 }
