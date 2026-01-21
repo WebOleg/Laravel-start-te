@@ -20,6 +20,8 @@ class Debtor extends Model
     public const STATUS_UPLOADED = 'uploaded';
     public const STATUS_PENDING = 'pending';
     public const STATUS_PROCESSING = 'processing';
+    public const STATUS_APPROVED = 'approved';
+    public const STATUS_CHARGEBACKED = 'chargebacked';
     public const STATUS_RECOVERED = 'recovered';
     public const STATUS_FAILED = 'failed';
 

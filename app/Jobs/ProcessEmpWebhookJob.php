@@ -180,8 +180,8 @@ class ProcessEmpWebhookJob implements ShouldQueue
         ]);
 
         $debtor = $billingAttempt->debtor;
-        if ($debtor && $debtor->status !== Debtor::STATUS_FAILED) {
-            $debtor->update(['status' => Debtor::STATUS_FAILED]);
+        if ($debtor && $debtor->status !== Debtor::STATUS_CHARGEBACKED) {
+            $debtor->update(['status' => Debtor::STATUS_CHARGEBACKED]);
         }
 
         $blacklisted = false;
@@ -275,8 +275,8 @@ class ProcessEmpWebhookJob implements ShouldQueue
 
             if ($mappedStatus === BillingAttempt::STATUS_CHARGEBACKED) {
                 $debtor = $billingAttempt->debtor;
-                if ($debtor && $debtor->status !== Debtor::STATUS_FAILED) {
-                    $debtor->update(['status' => Debtor::STATUS_FAILED]);
+                if ($debtor && $debtor->status !== Debtor::STATUS_CHARGEBACKED) {
+                    $debtor->update(['status' => Debtor::STATUS_CHARGEBACKED]);
                 }
             }
 
@@ -313,8 +313,8 @@ class ProcessEmpWebhookJob implements ShouldQueue
         }
 
         $debtor = $attempt->debtor;
-        if ($debtor && $debtor->status !== Debtor::STATUS_RECOVERED) {
-            $debtor->update(['status' => Debtor::STATUS_RECOVERED]);
+        if ($debtor && $debtor->status !== Debtor::STATUS_APPROVED) {
+            $debtor->update(['status' => Debtor::STATUS_APPROVED]);
         }
     }
 

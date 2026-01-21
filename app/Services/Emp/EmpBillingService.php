@@ -364,8 +364,9 @@ class EmpBillingService
     private function updateDebtorStatus(Debtor $debtor, BillingAttempt $billingAttempt): void
     {
         $newStatus = match ($billingAttempt->status) {
-            BillingAttempt::STATUS_APPROVED => Debtor::STATUS_RECOVERED,
+            BillingAttempt::STATUS_APPROVED => Debtor::STATUS_APPROVED,
             BillingAttempt::STATUS_PENDING => Debtor::STATUS_PENDING,
+            BillingAttempt::STATUS_CHARGEBACKED => Debtor::STATUS_CHARGEBACKED,
             BillingAttempt::STATUS_DECLINED,
             BillingAttempt::STATUS_ERROR => Debtor::STATUS_PENDING,
             default => $debtor->status,

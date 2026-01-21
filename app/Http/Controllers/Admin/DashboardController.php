@@ -88,6 +88,8 @@ class DashboardController extends Controller
             'by_status' => [
                 'pending' => Debtor::where('status', Debtor::STATUS_PENDING)->count(),
                 'processing' => Debtor::where('status', Debtor::STATUS_PROCESSING)->count(),
+                'approved' => Debtor::where('status', Debtor::STATUS_APPROVED)->count(),
+                'chargebacked' => Debtor::where('status', Debtor::STATUS_CHARGEBACKED)->count(),
                 'recovered' => Debtor::where('status', Debtor::STATUS_RECOVERED)->count(),
                 'failed' => Debtor::where('status', Debtor::STATUS_FAILED)->count(),
             ],
