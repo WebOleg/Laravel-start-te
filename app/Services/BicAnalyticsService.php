@@ -208,17 +208,19 @@ class BicAnalyticsService
      */
     private function processBicRow(object $row, float $threshold): array
     {
+        $totalTxCount = (int) $row->total_transactions;
+        $totalTxVolume = (int) $row->total_volume;
         $approvedCount = (int) $row->approved_count;
         $chargebackCount = (int) $row->chargeback_count;
         $approvedVolume = (float) ($row->approved_volume ?? 0);
         $chargebackVolume = (float) $row->chargeback_volume;
 
-        $cbRateCount = $approvedCount > 0
-            ? round(($chargebackCount / $approvedCount) * 100, 2)
+        $cbRateCount = $chargebackCount > 0
+            ? round(($chargebackCount / $totalTxCount) * 100, 2)
             : 0;
 
-        $cbRateVolume = $approvedVolume > 0
-            ? round(($chargebackVolume / $approvedVolume) * 100, 2)
+        $cbRateVolume = $chargebackVolume > 0
+            ? round(($chargebackVolume / $totalTxVolume) * 100, 2)
             : 0;
 
         $country = $this->extractCountryFromBic($row->bic);
@@ -302,12 +304,12 @@ class BicAnalyticsService
         $totals['approved_volume'] = round($totals['approved_volume'], 2);
         $totals['chargeback_volume'] = round($totals['chargeback_volume'], 2);
 
-        $totals['cb_rate_count'] = $totals['approved_count'] > 0
-            ? round(($totals['chargeback_count'] / $totals['approved_count']) * 100, 2)
+        $totals['cb_rate_count'] = $totals['chargeback_count'] > 0
+            ? round(($totals['chargeback_count'] / $totals['total_transactions']) * 100, 2)
             : 0;
 
-        $totals['cb_rate_volume'] = $totals['approved_volume'] > 0
-            ? round(($totals['chargeback_volume'] / $totals['approved_volume']) * 100, 2)
+        $totals['cb_rate_volume'] = $totals['chargeback_volume'] > 0
+            ? round(($totals['chargeback_volume'] / $totals['total_volume']) * 100, 2)
             : 0;
 
         $totals['is_high_risk'] = $totals['cb_rate_count'] >= $threshold || $totals['cb_rate_volume'] >= $threshold;

@@ -416,7 +416,6 @@ class BicAnalyticsControllerTest extends TestCase
             'debtor_id' => $recoveryDebtor->id,
             'debtor_profile_id' => $recoveryProfile->id,
             'billing_model' => DebtorProfile::MODEL_RECOVERY,
-            // CHANGED: Match the debtor BIC
             'bic' => 'RECOVERY_XX',
             'status' => BillingAttempt::STATUS_APPROVED,
             'amount' => 100,
@@ -430,7 +429,6 @@ class BicAnalyticsControllerTest extends TestCase
             'debtor_id' => $flywheelDebtor->id,
             'debtor_profile_id' => $flywheelProfile->id,
             'billing_model' => DebtorProfile::MODEL_FLYWHEEL,
-            // CHANGED: Match the debtor BIC
             'bic' => 'FLYWHEEL_XX',
             'status' => BillingAttempt::STATUS_APPROVED,
             'amount' => 200,
