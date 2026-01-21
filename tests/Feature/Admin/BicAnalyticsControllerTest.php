@@ -125,8 +125,8 @@ class BicAnalyticsControllerTest extends TestCase
             ->assertJsonPath('data.bics.0.chargeback_count', 1);
 
         $data = $response->json('data.bics.0');
-        // Formula: chargebacks / approved = 1/9 × 100 = 11.11%
-        $this->assertEquals(11.11, $data['cb_rate_count']);
+        // Formula: chargebacks / total = 1/10 × 100 = 10%
+        $this->assertEquals(10, $data['cb_rate_count']);
     }
 
     public function test_bic_analytics_flags_high_risk_bics(): void
@@ -161,8 +161,8 @@ class BicAnalyticsControllerTest extends TestCase
             ->assertJsonPath('data.high_risk_count', 1);
 
         $data = $response->json('data.bics.0');
-        // Formula: chargebacks / approved = 5/5 × 100 = 100%
-        $this->assertEquals(100, $data['cb_rate_count']);
+        // Formula: chargebacks / total = 5/10 × 100 = 50%
+        $this->assertEquals(50, $data['cb_rate_count']);
     }
 
     public function test_bic_analytics_supports_period_filter(): void
