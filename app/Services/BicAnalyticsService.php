@@ -199,7 +199,7 @@ class BicAnalyticsService
     private function processBicRow(object $row, float $threshold): array
     {
         $totalTxCount = (int) $row->total_transactions;
-        $totalTxVolume = (int) $row->total_volume;
+        $totalTxVolume = (float) $row->total_volume;
         $approvedCount = (int) $row->approved_count;
         $chargebackCount = (int) $row->chargeback_count;
         $approvedVolume = (float) ($row->approved_volume ?? 0);
