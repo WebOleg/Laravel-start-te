@@ -28,7 +28,6 @@ class EmpRefreshController extends Controller
             'to' => 'required|date|date_format:Y-m-d|after_or_equal:from',
         ]);
 
-        // Validate date range (max 90 days)
         $from = \Carbon\Carbon::parse($validated['from']);
         $to = \Carbon\Carbon::parse($validated['to']);
         
@@ -39,23 +38,25 @@ class EmpRefreshController extends Controller
             ], 422);
         }
 
-        // Check if refresh is already in progress
         $existingJob = Cache::get('emp_refresh_active');
         if ($existingJob && $existingJob['status'] === 'processing') {
-            return response()->json([
-                'message' => 'Refresh already in progress',
-                'data' => [
-                    'job_id' => $existingJob['job_id'],
-                    'started_at' => $existingJob['started_at'],
-                    'queued' => false,
-                    'duplicate' => true,
-                ],
-            ], 409);
+            $jobStatus = Cache::get("emp_refresh_{$existingJob['job_id']}");
+            if ($jobStatus) {
+                return response()->json([
+                    'message' => 'Refresh already in progress',
+                    'data' => [
+                        'job_id' => $existingJob['job_id'],
+                        'started_at' => $existingJob['started_at'],
+                        'queued' => false,
+                        'duplicate' => true,
+                    ],
+                ], 409);
+            }
+            Cache::forget('emp_refresh_active');
         }
 
         $jobId = Str::uuid()->toString();
 
-        // Mark as active
         Cache::put('emp_refresh_active', [
             'job_id' => $jobId,
             'status' => 'processing',
@@ -64,7 +65,6 @@ class EmpRefreshController extends Controller
             'to' => $validated['to'],
         ], 7200);
 
-        // Dispatch job to emp-refresh queue
         EmpRefreshByDateJob::dispatch(
             $validated['from'],
             $validated['to'],
@@ -94,9 +94,16 @@ class EmpRefreshController extends Controller
 
         if (!$status) {
             return response()->json([
-                'message' => 'Job not found',
-                'data' => null,
-            ], 404);
+                'message' => 'Job completed or expired',
+                'data' => [
+                    'job_id' => $jobId,
+                    'status' => 'completed',
+                    'progress' => 100,
+                    'stats' => null,
+                    'started_at' => null,
+                    'completed_at' => null,
+                ],
+            ]);
         }
 
         return response()->json([
@@ -137,11 +144,21 @@ class EmpRefreshController extends Controller
             ]);
         }
 
-        // Get detailed status
         $jobStatus = Cache::get("emp_refresh_{$active['job_id']}");
 
-        // Check if completed/failed
-        if ($jobStatus && in_array($jobStatus['status'] ?? '', ['completed', 'completed_with_errors', 'failed'])) {
+        if (!$jobStatus) {
+            Cache::forget('emp_refresh_active');
+            return response()->json([
+                'data' => [
+                    'is_processing' => false,
+                    'job_id' => $active['job_id'],
+                    'progress' => 100,
+                    'stats' => null,
+                ],
+            ]);
+        }
+
+        if (in_array($jobStatus['status'] ?? '', ['completed', 'completed_with_errors', 'failed'])) {
             Cache::forget('emp_refresh_active');
             return response()->json([
                 'data' => [
