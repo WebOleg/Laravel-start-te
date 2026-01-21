@@ -175,13 +175,23 @@ class FileUploadService
 
     private function storeFile(UploadedFile $file): string
     {
+        $originalFilename = $file->getClientOriginalName();
         $filename = Str::uuid() . '.' . $file->getClientOriginalExtension();
 
-        $path = $file->storeAs('uploads', $filename, 's3');
+        $path = $file->storeAs(
+            'uploads',
+            $filename,
+            [
+                'Metadata' => [
+                    'original-filename' => $originalFilename,
+                ],
+            ],
+            's3'
+        );
 
         if ($path === false) {
             Log::error('Failed to store file in S3', [
-                'original_filename' => $file->getClientOriginalName(),
+                'original_filename' => $originalFilename,
                 'size' => $file->getSize(),
                 'mime_type' => $file->getMimeType(),
             ]);
