@@ -79,6 +79,18 @@ class EmpClient
     }
 
     /**
+     * Get chargebacks by import date (for chargeback sync).
+     * Uses import_date instead of start_date/end_date for SDD transactions.
+     */
+    public function getChargebacksByImportDate(string $importDate, int $page = 1, int $perPage = 100): array
+    {
+        $this->initialize();
+        $xml = $this->buildChargebacksByDateXml($importDate, $page, $perPage);
+        
+        return $this->sendRequest('/chargebacks/by_date', $xml);
+    }
+
+    /**
      * Build XML for get transactions by date request.
      */
     private function buildGetByDateXml(string $startDate, string $endDate, int $page): string
@@ -87,6 +99,19 @@ class EmpClient
         $xml->addChild('start_date', $startDate);
         $xml->addChild('end_date', $endDate);
         $xml->addChild('page', (string) $page);
+        
+        return $xml->asXML();
+    }
+
+    /**
+     * Build XML for chargebacks by date request.
+     */
+    private function buildChargebacksByDateXml(string $importDate, int $page, int $perPage): string
+    {
+        $xml = new \SimpleXMLElement('<?xml version="1.0" encoding="UTF-8"?><chargeback_request/>');
+        $xml->addChild('import_date', $importDate);
+        $xml->addChild('page', (string) $page);
+        $xml->addChild('per_page', (string) $perPage);
         
         return $xml->asXML();
     }
