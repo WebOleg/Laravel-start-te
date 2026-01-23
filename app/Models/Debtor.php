@@ -123,14 +123,21 @@ class Debtor extends Model
         return $this->hasOne(BillingAttempt::class)->latestOfMany();
     }
 
+    public function chargebacks(): HasMany
+    {
+        return $this->hasMany(Chargeback::class);
+    }
+
+    public function debtorProfile(): BelongsTo
+    {
+        return $this->belongsTo(DebtorProfile::class);
+    }
+
     public function getFullNameAttribute(): string
     {
         return trim("{$this->first_name} {$this->last_name}");
     }
 
-    /**
-     * Get full name for BAV API verification.
-     */
     public function getNameForBav(): string
     {
         if (!empty($this->meta['account_holder'])) {
@@ -235,10 +242,5 @@ class Debtor extends Model
     {
         $this->bav_selected = true;
         $this->save();
-    }
-
-    public function debtorProfile(): BelongsTo
-    {
-        return $this->belongsTo(DebtorProfile::class);
     }
 }

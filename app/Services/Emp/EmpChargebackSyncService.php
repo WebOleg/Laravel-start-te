@@ -10,6 +10,7 @@ namespace App\Services\Emp;
 use App\Models\BillingAttempt;
 use App\Models\Debtor;
 use App\Services\BlacklistService;
+use App\Services\ChargebackService;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
@@ -18,21 +19,23 @@ class EmpChargebackSyncService
 {
     private EmpClient $client;
     private BlacklistService $blacklistService;
+    private ChargebackService $chargebackService;
 
     public const PER_PAGE = 100;
     public const RATE_LIMIT_DELAY_MS = 500;
 
     public const AUTO_BLACKLIST_CODES = ['AC04', 'AC06', 'AG01', 'MD01'];
 
-    public function __construct(EmpClient $client, BlacklistService $blacklistService)
-    {
+    public function __construct(
+        EmpClient $client,
+        BlacklistService $blacklistService,
+        ChargebackService $chargebackService
+    ) {
         $this->client = $client;
         $this->blacklistService = $blacklistService;
+        $this->chargebackService = $chargebackService;
     }
 
-    /**
-     * Sync chargebacks for a specific import date.
-     */
     public function syncByDate(string $date, bool $dryRun = false): array
     {
         $stats = [
@@ -45,6 +48,7 @@ class EmpChargebackSyncService
             'errors' => 0,
             'blacklisted' => 0,
             'pages_processed' => 0,
+            'chargebacks_created' => 0,
         ];
 
         Log::info('EMP Chargeback Sync: Starting', ['date' => $date, 'dry_run' => $dryRun]);
@@ -66,7 +70,6 @@ class EmpChargebackSyncService
             }
 
             $chargebacks = $this->extractChargebacks($response);
-            $totalCount = (int) ($response['@total_count'] ?? 0);
             $pagesCount = (int) ($response['@pages_count'] ?? 1);
 
             $stats['total_fetched'] += count($chargebacks);
@@ -97,9 +100,6 @@ class EmpChargebackSyncService
         return $stats;
     }
 
-    /**
-     * Sync chargebacks for a date range.
-     */
     public function syncByDateRange(string $startDate, string $endDate, bool $dryRun = false): array
     {
         $results = [];
@@ -119,9 +119,6 @@ class EmpChargebackSyncService
         return $results;
     }
 
-    /**
-     * Extract chargebacks array from API response.
-     */
     private function extractChargebacks(array $response): array
     {
         if (!isset($response['chargeback_response'])) {
@@ -137,9 +134,6 @@ class EmpChargebackSyncService
         return $chargebacks;
     }
 
-    /**
-     * Process a single chargeback from API response.
-     */
     private function processChargeback(array $chargeback, bool $dryRun, array &$stats): string
     {
         $originalUniqueId = $chargeback['original_transaction_unique_id'] ?? null;
@@ -163,6 +157,7 @@ class EmpChargebackSyncService
         }
 
         if ($billingAttempt->status === BillingAttempt::STATUS_CHARGEBACKED) {
+            $this->ensureChargebackRecord($billingAttempt, $chargeback, $stats);
             return 'already_processed';
         }
 
@@ -178,9 +173,18 @@ class EmpChargebackSyncService
         return $this->applyChargeback($billingAttempt, $chargeback, $stats);
     }
 
-    /**
-     * Apply chargeback to billing attempt.
-     */
+    private function ensureChargebackRecord(BillingAttempt $billingAttempt, array $chargeback, array &$stats): void
+    {
+        $existing = $billingAttempt->chargeback;
+
+        if (!$existing) {
+            $created = $this->chargebackService->createFromApiSync($billingAttempt, $chargeback);
+            if ($created) {
+                $stats['chargebacks_created']++;
+            }
+        }
+    }
+
     private function applyChargeback(BillingAttempt $billingAttempt, array $chargeback, array &$stats): string
     {
         try {
@@ -205,6 +209,11 @@ class EmpChargebackSyncService
                         ],
                     ]),
                 ]);
+
+                $created = $this->chargebackService->createFromApiSync($billingAttempt, $chargeback);
+                if ($created) {
+                    $stats['chargebacks_created']++;
+                }
 
                 $debtor = $billingAttempt->debtor;
                 if ($debtor && $debtor->status !== Debtor::STATUS_CHARGEBACKED) {
@@ -233,9 +242,6 @@ class EmpChargebackSyncService
         }
     }
 
-    /**
-     * Add debtor to blacklist.
-     */
     private function blacklistDebtor(Debtor $debtor, string $reasonCode, ?string $reasonDescription, array &$stats): void
     {
         try {

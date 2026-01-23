@@ -21,6 +21,12 @@ class EmpWebhookService
         $status = $data['status'] ?? null;
         $signature = $data['signature'] ?? null;
 
+        Log::info('EMP webhook received', [
+            'unique_id' => $uniqueId,
+            'type' => $transactionType,
+            'status' => $status,
+        ]);
+
         $signatureValid = $this->verifySignature($uniqueId, $signature);
         $processingType = $this->determineProcessingType($event, $transactionType, $status);
 
@@ -37,7 +43,7 @@ class EmpWebhookService
             'ip_address' => $request->ip(),
             'user_agent' => $request->userAgent(),
             'payload_size' => strlen($request->getContent()),
-            'payload' => $this->sanitizePayload($data),
+            'payload' => $data,
             'headers' => $this->extractHeaders($request),
         ]);
 
@@ -116,6 +122,9 @@ class EmpWebhookService
         }
 
         if (in_array($transactionType, self::PROCESSABLE_TRANSACTION_TYPES, true)) {
+            if ($status === 'chargebacked') {
+                return 'chargeback';
+            }
             return 'sdd_status_update';
         }
 
@@ -124,17 +133,6 @@ class EmpWebhookService
         }
 
         return null;
-    }
-
-    private function sanitizePayload(array $data): array
-    {
-        $sensitive = ['card_number', 'cvv', 'expiration_month', 'expiration_year'];
-        foreach ($sensitive as $key) {
-            if (isset($data[$key])) {
-                $data[$key] = '***REDACTED***';
-            }
-        }
-        return $data;
     }
 
     private function extractHeaders(Request $request): array

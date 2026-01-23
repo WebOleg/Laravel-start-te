@@ -6,6 +6,7 @@ use App\Models\BillingAttempt;
 use App\Models\Debtor;
 use App\Models\Upload;
 use App\Services\BlacklistService;
+use App\Services\ChargebackService;
 use App\Services\Emp\EmpChargebackSyncService;
 use App\Services\Emp\EmpClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -19,6 +20,7 @@ class EmpChargebackSyncServiceTest extends TestCase
     private EmpChargebackSyncService $service;
     private $mockClient;
     private $mockBlacklistService;
+    private $mockChargebackService;
 
     protected function setUp(): void
     {
@@ -26,10 +28,13 @@ class EmpChargebackSyncServiceTest extends TestCase
         
         $this->mockClient = Mockery::mock(EmpClient::class);
         $this->mockBlacklistService = Mockery::mock(BlacklistService::class);
+        $this->mockChargebackService = Mockery::mock(ChargebackService::class);
+        $this->mockChargebackService->shouldReceive('createFromApiSync')->andReturnNull();
         
         $this->service = new EmpChargebackSyncService(
             $this->mockClient,
-            $this->mockBlacklistService
+            $this->mockBlacklistService,
+            $this->mockChargebackService
         );
     }
 
