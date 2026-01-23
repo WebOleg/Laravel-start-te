@@ -28,7 +28,7 @@ class User extends Authenticatable
     protected $hidden = [
         'password',
         'remember_token',
-        'two_factor_backup_codes', // Security: Never expose backup codes in API responses
+        'two_factor_backup_codes',
     ];
 
     /**
@@ -43,7 +43,7 @@ class User extends Authenticatable
             'password' => 'hashed',
             'two_factor_enabled' => 'boolean',
             'two_factor_setup_required' => 'boolean',
-            'two_factor_backup_codes' => 'array', // Cast JSON column to array automatically
+            'two_factor_backup_codes' => 'array',
         ];
     }
 
