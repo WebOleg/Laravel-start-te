@@ -202,7 +202,6 @@ class EmpChargebackSyncService
                         'chargeback_sync' => [
                             'synced_at' => now()->toIso8601String(),
                             'source' => 'api_sync',
-                            'arn' => $chargeback['arn'] ?? null,
                             'type' => $chargeback['type'] ?? null,
                             'chargeback_amount' => $chargeback['chargeback_amount'] ?? null,
                             'chargeback_currency' => $chargeback['chargeback_currency'] ?? null,

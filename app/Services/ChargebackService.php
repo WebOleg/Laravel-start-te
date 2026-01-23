@@ -96,7 +96,6 @@ class ChargebackService
                         'reason_description' => $data['reason_description'] ?? $existing->reason_description,
                         'chargeback_amount' => $data['chargeback_amount'] ?? $existing->chargeback_amount,
                         'chargeback_currency' => $data['chargeback_currency'] ?? $existing->chargeback_currency,
-                        'arn' => $data['arn'] ?? $existing->arn,
                         'post_date' => $data['post_date'] ?? $existing->post_date,
                         'import_date' => $data['import_date'] ?? $existing->import_date,
                         'api_response' => $source === Chargeback::SOURCE_API_SYNC
@@ -116,7 +115,6 @@ class ChargebackService
                     'reason_description' => $data['reason_description'] ?? null,
                     'chargeback_amount' => $data['chargeback_amount'] ?? null,
                     'chargeback_currency' => $data['chargeback_currency'] ?? 'EUR',
-                    'arn' => $data['arn'] ?? null,
                     'post_date' => $data['post_date'] ?? null,
                     'import_date' => $data['import_date'] ?? null,
                     'source' => $source,
@@ -158,7 +156,6 @@ class ChargebackService
                 ? $this->normalizeAmount($data['amount'])
                 : null,
             'chargeback_currency' => $data['currency'] ?? 'EUR',
-            'arn' => $data['arn'] ?? null,
             'post_date' => $this->parseDate($data['post_date'] ?? null),
             'import_date' => null,
             'api_response' => $data,
@@ -175,7 +172,6 @@ class ChargebackService
                 ? (float) $data['chargeback_amount']
                 : null,
             'chargeback_currency' => $data['chargeback_currency'] ?? 'EUR',
-            'arn' => $data['arn'] ?? null,
             'post_date' => $this->parseDate($data['post_date'] ?? null),
             'import_date' => $this->parseDate($data['import_date'] ?? null),
             'api_response' => $data,

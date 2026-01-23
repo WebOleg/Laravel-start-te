@@ -68,10 +68,9 @@ class EmpChargebackSyncServiceTest extends TestCase
                     'reason_code' => 'MD06',
                     'reason_description' => 'Refund request by customer',
                     'post_date' => '2026-01-22',
-                    'type' => '1st Chargeback',
+                    'type' => '1st chargeback',
                     'chargeback_amount' => '100.00',
                     'chargeback_currency' => 'EUR',
-                    'arn' => '74537604221431003881865',
                 ],
             ]);
 

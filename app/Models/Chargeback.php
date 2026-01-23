@@ -1,7 +1,7 @@
 <?php
 
 /**
- * Chargeback model for tracking EMP chargeback events.
+ * Chargeback model for tracking EMP SDD chargeback events.
  * For SDD: one chargeback per transaction (unique by original_transaction_unique_id).
  */
 
@@ -18,12 +18,7 @@ class Chargeback extends Model
     public const SOURCE_WEBHOOK = 'webhook';
     public const SOURCE_API_SYNC = 'api_sync';
 
-    public const TYPE_FIRST_CHARGEBACK = '1st Chargeback';
-    public const TYPE_SECOND_CHARGEBACK = '2nd Chargeback';
-    public const TYPE_FIRST_REVERSAL = '1st Chargeback Reversal';
-    public const TYPE_SECOND_REVERSAL = '2nd Chargeback Reversal';
-    public const TYPE_TRANSFER_REVERSAL = 'Transfer Reversal';
-    public const TYPE_REPRESENTMENT = 'Re-presentment';
+    public const TYPE_FIRST_CHARGEBACK = '1st chargeback';
 
     protected $fillable = [
         'billing_attempt_id',
@@ -34,7 +29,6 @@ class Chargeback extends Model
         'reason_description',
         'chargeback_amount',
         'chargeback_currency',
-        'arn',
         'post_date',
         'import_date',
         'source',
@@ -60,15 +54,6 @@ class Chargeback extends Model
 
     public function isFirstChargeback(): bool
     {
-        return $this->type === self::TYPE_FIRST_CHARGEBACK;
-    }
-
-    public function isReversal(): bool
-    {
-        return in_array($this->type, [
-            self::TYPE_FIRST_REVERSAL,
-            self::TYPE_SECOND_REVERSAL,
-            self::TYPE_TRANSFER_REVERSAL,
-        ]);
+        return strtolower($this->type) === self::TYPE_FIRST_CHARGEBACK;
     }
 }

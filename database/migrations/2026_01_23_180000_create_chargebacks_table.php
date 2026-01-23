@@ -24,7 +24,6 @@ return new class extends Migration
             $table->string('reason_description', 500)->nullable();
             $table->decimal('chargeback_amount', 12, 2)->nullable();
             $table->string('chargeback_currency', 3)->default('EUR');
-            $table->string('arn', 50)->nullable()->index();
             $table->date('post_date')->nullable()->index();
             $table->date('import_date')->nullable();
             $table->string('source', 20)->index();

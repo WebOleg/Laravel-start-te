@@ -37,7 +37,6 @@ class ChargebackServiceTest extends TestCase
             'reason' => 'Customer requested refund',
             'amount' => 10000,
             'currency' => 'EUR',
-            'arn' => '74537604221431003881865',
             'post_date' => '2026-01-22',
         ];
 
@@ -61,12 +60,11 @@ class ChargebackServiceTest extends TestCase
         ]);
 
         $apiResponse = [
-            'type' => '1st Chargeback',
+            'type' => '1st chargeback',
             'reason_code' => 'AC04',
             'reason_description' => 'Account closed',
             'chargeback_amount' => 75.50,
             'chargeback_currency' => 'EUR',
-            'arn' => '74537604221431003881865',
             'post_date' => '2026-01-20',
             'import_date' => '2026-01-21',
         ];
@@ -76,7 +74,7 @@ class ChargebackServiceTest extends TestCase
         $this->assertNotNull($chargeback);
         $this->assertEquals('api_sync_test_456', $chargeback->original_transaction_unique_id);
         $this->assertEquals('AC04', $chargeback->reason_code);
-        $this->assertEquals('1st Chargeback', $chargeback->type);
+        $this->assertEquals('1st chargeback', $chargeback->type);
         $this->assertEquals(Chargeback::SOURCE_API_SYNC, $chargeback->source);
         $this->assertEquals(75.50, $chargeback->chargeback_amount);
     }
@@ -102,13 +100,11 @@ class ChargebackServiceTest extends TestCase
         $webhookData = [
             'reason_code' => 'MD06',
             'reason' => 'Updated reason',
-            'arn' => 'new_arn_123',
         ];
 
         $chargeback = $this->service->createFromWebhook($billingAttempt, $webhookData);
 
         $this->assertNotNull($chargeback);
-        $this->assertEquals('new_arn_123', $chargeback->arn);
         $this->assertEquals(1, Chargeback::where('original_transaction_unique_id', 'update_test_789')->count());
     }
 

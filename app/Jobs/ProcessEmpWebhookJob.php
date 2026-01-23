@@ -161,7 +161,6 @@ class ProcessEmpWebhookJob implements ShouldQueue
 
         $chargebackMeta = [
             'event' => $this->webhookData['event'] ?? 'chargeback',
-            'arn' => $this->webhookData['arn'] ?? null,
             'amount' => $this->webhookData['amount'] ?? null,
             'currency' => $this->webhookData['currency'] ?? null,
             'reason' => $this->webhookData['reason']
@@ -229,7 +228,6 @@ class ProcessEmpWebhookJob implements ShouldQueue
         $currentMeta = $billingAttempt->meta ?? [];
         $currentMeta['retrieval_requests'] = $currentMeta['retrieval_requests'] ?? [];
         $currentMeta['retrieval_requests'][] = [
-            'arn' => $this->webhookData['arn'] ?? null,
             'reason_code' => $this->webhookData['reason_code'] ?? null,
             'reason_description' => $this->webhookData['reason_description'] ?? null,
             'post_date' => $this->webhookData['post_date'] ?? null,
