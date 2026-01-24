@@ -51,6 +51,7 @@ class OtpService
 
         return [
             'success' => true,
+            'code' => $plaintextCode,
             'message' => __('otp.sent'),
         ];
     }

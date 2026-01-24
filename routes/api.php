@@ -21,6 +21,13 @@ use App\Http\Middleware\EmpWebhookSecurity;
 
 Route::post('/login', [AuthController::class, 'login']);
 
+Route::prefix('auth')->group(function () {
+    Route::post('/setup-2fa', [AuthController::class, 'setup2fa']);
+    Route::post('/verify-otp', [AuthController::class, 'verifyOtp']);
+    Route::post('/resend-otp', [AuthController::class, 'resendOtp']);
+    Route::post('/verify-backup-code', [AuthController::class, 'verifyBackupCode']);
+});
+
 Route::middleware('auth:sanctum')->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/user', [AuthController::class, 'user']);
