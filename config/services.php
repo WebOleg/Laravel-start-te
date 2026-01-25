@@ -3,9 +3,6 @@ return [
     'postmark' => [
         'key' => env('POSTMARK_API_KEY'),
     ],
-    'resend' => [
-        'key' => env('RESEND_API_KEY'),
-    ],
     'ses' => [
         'key' => env('AWS_ACCESS_KEY_ID'),
         'secret' => env('AWS_SECRET_ACCESS_KEY'),
@@ -39,5 +36,8 @@ return [
         'bav_enabled' => env('BAV_ENABLED', false),
         'bav_sampling_percentage' => env('BAV_SAMPLING_PERCENTAGE', 10),
         'bav_daily_limit' => env('BAV_DAILY_LIMIT', 100),
+    ],
+    'resend' => [
+        'key' => env('RESEND_API_KEY'),
     ],
 ];

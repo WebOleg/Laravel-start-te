@@ -15,7 +15,6 @@ class OtpService
 
     protected OtpSenderInterface $sender;
 
-    // Inject the Interface here
     public function __construct(OtpSenderInterface $sender)
     {
         $this->sender = $sender;
@@ -26,7 +25,7 @@ class OtpService
         if ($this->isRateLimited($user->id)) {
             return [
                 'success' => false,
-                'message' => __('otp.rate_limited'),
+                'message' => 'Too many OTP requests. Please try again later.',
             ];
         }
 
@@ -52,7 +51,7 @@ class OtpService
         return [
             'success' => true,
             'code' => $plaintextCode,
-            'message' => __('otp.sent'),
+            'message' => 'OTP sent successfully.',
         ];
     }
 
@@ -64,21 +63,33 @@ class OtpService
             ->first();
 
         if (!$otpRecord) {
-            return ['success' => false, 'message' => __('otp.invalid_or_expired')];
+            return [
+                'success' => false,
+                'message' => 'Code invalid or expired.'
+            ];
         }
 
         if ($otpRecord->hasExceededAttempts()) {
-            return ['success' => false, 'message' => __('otp.max_attempts')];
+            return [
+                'success' => false,
+                'message' => 'Maximum verification attempts exceeded.'
+            ];
         }
 
         if (! Hash::check($code, $otpRecord->code)) {
             $otpRecord->incrementAttempts();
-            return ['success' => false, 'message' => __('otp.invalid_code')];
+            return [
+                'success' => false,
+                'message' => 'Invalid code.'
+            ];
         }
 
         $otpRecord->delete();
 
-        return ['success' => true, 'message' => __('otp.verified')];
+        return [
+            'success' => true,
+            'message' => 'Verification successful.'
+        ];
     }
 
     protected function invalidateExisting(int $userId, string $purpose): void

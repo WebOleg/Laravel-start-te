@@ -18,12 +18,14 @@ class EmailOtpSender implements OtpSenderInterface
     public function send(User $user, string $code, int $expiryMinutes): void
     {
         // Render the Blade View
-        $htmlBody = $this->emailService->renderOtpTemplate($code, $expiryMinutes);
+        $htmlBody = $this->emailService->renderOtpTemplate($code, $expiryMinutes, [
+            'appName' => config('app.name')
+        ]);
 
         // Send via API
         $this->emailService->send(
             $user->email,
-            __('emails.otp_subject'),
+            'Your Tether 2FA Code',
             $htmlBody
         );
     }
