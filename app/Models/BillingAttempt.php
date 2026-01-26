@@ -9,6 +9,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class BillingAttempt extends Model
 {
@@ -99,6 +100,16 @@ class BillingAttempt extends Model
     public function upload(): BelongsTo
     {
         return $this->belongsTo(Upload::class);
+    }
+
+    public function debtorProfile(): BelongsTo
+    {
+        return $this->belongsTo(DebtorProfile::class);
+    }
+
+    public function chargeback(): HasOne
+    {
+        return $this->hasOne(Chargeback::class);
     }
 
     public function isPending(): bool
@@ -201,10 +212,5 @@ class BillingAttempt extends Model
         return $query
             ->where('status', self::STATUS_PENDING)
             ->where('created_at', '<', now()->subHours($hours));
-    }
-
-    public function debtorProfile(): BelongsTo
-    {
-        return $this->belongsTo(DebtorProfile::class);
     }
 }

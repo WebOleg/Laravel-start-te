@@ -101,7 +101,6 @@ class EmpWebhookTest extends TestCase
             'amount' => 10000,
             'currency' => 'EUR',
             'reason_code' => 'MD06',
-            'arn' => '74537604221431003881865',
             'signature' => $this->generateSignature($originalUniqueId),
         ]);
 
@@ -136,7 +135,6 @@ class EmpWebhookTest extends TestCase
             'event' => 'chargeback',
             'status' => 'chargebacked',
             'reason_code' => 'MD06',
-            'arn' => '74537604221431003881865',
             'signature' => $this->generateSignature($originalUniqueId),
         ]);
 
@@ -275,7 +273,6 @@ class EmpWebhookTest extends TestCase
             'status' => 'chargebacked',
             'reason_code' => '10',
             'reason_description' => 'Dispute Transaction',
-            'arn' => '17b4646c093b025',
             'signature' => $this->generateSignature($uniqueId),
         ]);
 

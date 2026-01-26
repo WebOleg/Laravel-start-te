@@ -1,5 +1,10 @@
 <?php
 
+/**
+ * Job for processing EMP webhook notifications asynchronously.
+ * Handles chargebacks, retrieval requests, and SDD status updates.
+ */
+
 namespace App\Jobs;
 
 use App\Models\BillingAttempt;
@@ -7,6 +12,7 @@ use App\Models\Debtor;
 use App\Models\DebtorProfile;
 use App\Models\WebhookEvent;
 use App\Services\BlacklistService;
+use App\Services\ChargebackService;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Foundation\Queue\Queueable;
@@ -48,7 +54,7 @@ class ProcessEmpWebhookJob implements ShouldQueue
         return 3600;
     }
 
-    public function handle(BlacklistService $blacklistService): void
+    public function handle(BlacklistService $blacklistService, ChargebackService $chargebackService): void
     {
         $uniqueId = $this->webhookData['unique_id'] ?? null;
 
@@ -62,7 +68,7 @@ class ProcessEmpWebhookJob implements ShouldQueue
 
         try {
             match ($this->processingType) {
-                'chargeback' => $this->handleChargeback($blacklistService),
+                'chargeback' => $this->handleChargeback($blacklistService, $chargebackService),
                 'retrieval_request' => $this->handleRetrievalRequest(),
                 'sdd_status_update' => $this->handleSddStatusUpdate(),
                 default => $this->handleUnknown(),
@@ -122,7 +128,7 @@ class ProcessEmpWebhookJob implements ShouldQueue
         }
     }
 
-    private function handleChargeback(BlacklistService $blacklistService): void
+    private function handleChargeback(BlacklistService $blacklistService, ChargebackService $chargebackService): void
     {
         $originalUniqueId = $this->webhookData['unique_id'] ?? null;
 
@@ -155,7 +161,6 @@ class ProcessEmpWebhookJob implements ShouldQueue
 
         $chargebackMeta = [
             'event' => $this->webhookData['event'] ?? 'chargeback',
-            'arn' => $this->webhookData['arn'] ?? null,
             'amount' => $this->webhookData['amount'] ?? null,
             'currency' => $this->webhookData['currency'] ?? null,
             'reason' => $this->webhookData['reason']
@@ -178,6 +183,8 @@ class ProcessEmpWebhookJob implements ShouldQueue
             'error_message' => $chargebackMeta['reason'],
             'meta' => $currentMeta,
         ]);
+
+        $chargebackService->createFromWebhook($billingAttempt, $this->webhookData);
 
         $debtor = $billingAttempt->debtor;
         if ($debtor && $debtor->status !== Debtor::STATUS_CHARGEBACKED) {
@@ -221,7 +228,6 @@ class ProcessEmpWebhookJob implements ShouldQueue
         $currentMeta = $billingAttempt->meta ?? [];
         $currentMeta['retrieval_requests'] = $currentMeta['retrieval_requests'] ?? [];
         $currentMeta['retrieval_requests'][] = [
-            'arn' => $this->webhookData['arn'] ?? null,
             'reason_code' => $this->webhookData['reason_code'] ?? null,
             'reason_description' => $this->webhookData['reason_description'] ?? null,
             'post_date' => $this->webhookData['post_date'] ?? null,
