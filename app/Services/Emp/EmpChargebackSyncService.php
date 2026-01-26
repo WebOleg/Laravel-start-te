@@ -1,8 +1,11 @@
 <?php
 
 /**
- * Service for syncing chargebacks from EMP via /chargebacks/by_date API.
+ * Service for syncing SDD chargebacks from EMP via /chargebacks/by_date API.
  * Backup mechanism for missed webhooks - runs daily to catch any missed chargeback events.
+ * 
+ * Note: For SDD, the API does NOT return post_date (bank registration date).
+ * We use import_date as the chargeback discovery date instead.
  */
 
 namespace App\Services\Emp;
@@ -76,7 +79,7 @@ class EmpChargebackSyncService
             $stats['pages_processed']++;
 
             foreach ($chargebacks as $chargeback) {
-                $result = $this->processChargeback($chargeback, $dryRun, $stats);
+                $result = $this->processChargeback($chargeback, $dryRun, $stats, $date);
                 $stats[$result]++;
             }
 
@@ -134,7 +137,7 @@ class EmpChargebackSyncService
         return $chargebacks;
     }
 
-    private function processChargeback(array $chargeback, bool $dryRun, array &$stats): string
+    private function processChargeback(array $chargeback, bool $dryRun, array &$stats, string $importDate): string
     {
         $originalUniqueId = $chargeback['original_transaction_unique_id'] ?? null;
 
@@ -151,13 +154,12 @@ class EmpChargebackSyncService
             Log::warning('EMP Chargeback Sync: Unmatched chargeback', [
                 'original_unique_id' => $originalUniqueId,
                 'reason_code' => $chargeback['reason_code'] ?? null,
-                'post_date' => $chargeback['post_date'] ?? null,
             ]);
             return 'unmatched';
         }
 
         if ($billingAttempt->status === BillingAttempt::STATUS_CHARGEBACKED) {
-            $this->ensureChargebackRecord($billingAttempt, $chargeback, $stats);
+            $this->ensureChargebackRecord($billingAttempt, $chargeback, $stats, $importDate);
             return 'already_processed';
         }
 
@@ -170,14 +172,15 @@ class EmpChargebackSyncService
             return 'matched';
         }
 
-        return $this->applyChargeback($billingAttempt, $chargeback, $stats);
+        return $this->applyChargeback($billingAttempt, $chargeback, $stats, $importDate);
     }
 
-    private function ensureChargebackRecord(BillingAttempt $billingAttempt, array $chargeback, array &$stats): void
+    private function ensureChargebackRecord(BillingAttempt $billingAttempt, array $chargeback, array &$stats, string $importDate): void
     {
         $existing = $billingAttempt->chargeback;
 
         if (!$existing) {
+            $chargeback['import_date'] = $importDate;
             $created = $this->chargebackService->createFromApiSync($billingAttempt, $chargeback);
             if ($created) {
                 $stats['chargebacks_created']++;
@@ -185,30 +188,30 @@ class EmpChargebackSyncService
         }
     }
 
-    private function applyChargeback(BillingAttempt $billingAttempt, array $chargeback, array &$stats): string
+    private function applyChargeback(BillingAttempt $billingAttempt, array $chargeback, array &$stats, string $importDate): string
     {
         try {
-            DB::transaction(function () use ($billingAttempt, $chargeback, &$stats) {
+            DB::transaction(function () use ($billingAttempt, $chargeback, &$stats, $importDate) {
                 $reasonCode = $chargeback['reason_code'] ?? null;
                 $reasonDescription = $chargeback['reason_description'] ?? null;
-                $postDate = $chargeback['post_date'] ?? null;
 
                 $billingAttempt->update([
                     'status' => BillingAttempt::STATUS_CHARGEBACKED,
                     'chargeback_reason_code' => $reasonCode,
                     'chargeback_reason_description' => $reasonDescription,
-                    'chargebacked_at' => $postDate ? Carbon::parse($postDate) : now(),
+                    'chargebacked_at' => Carbon::parse($importDate),
                     'meta' => array_merge($billingAttempt->meta ?? [], [
                         'chargeback_sync' => [
                             'synced_at' => now()->toIso8601String(),
                             'source' => 'api_sync',
+                            'import_date' => $importDate,
                             'type' => $chargeback['type'] ?? null,
                             'chargeback_amount' => $chargeback['chargeback_amount'] ?? null,
-                            'chargeback_currency' => $chargeback['chargeback_currency'] ?? null,
                         ],
                     ]),
                 ]);
 
+                $chargeback['import_date'] = $importDate;
                 $created = $this->chargebackService->createFromApiSync($billingAttempt, $chargeback);
                 if ($created) {
                     $stats['chargebacks_created']++;

@@ -1,8 +1,8 @@
 <?php
 
 /**
- * Service for handling chargeback transactions from emerchantpay.
- * Fetches chargeback details and updates billing attempts with reason codes, description.
+ * Service for fetching SDD chargeback details from EMP.
+ * Note: For SDD, post_date is NOT available from API - we use import_date instead.
  */
 
 namespace App\Services\Emp;
@@ -29,52 +29,38 @@ class EmpChargebackService
         try {
             $billingAttempt = BillingAttempt::where('unique_id', $uniqueId)->first();
             if (!$billingAttempt) {
-                return ['success' => false, 'error' => 'Request not sent, Chargeback not found'];
+                return ['success' => false, 'error' => 'Billing attempt not found'];
             }
 
             $xml = $this->client->buildChargebackDetailXml($uniqueId);
             $response = $this->client->sendRequest('/chargebacks', $xml);
             
             if (empty($response)) {
-                Log::warning('EMP Chargeback: empty response received: ', [
-                    'unique_id' => $uniqueId
-                ]);
+                Log::warning('EMP Chargeback: empty response', ['unique_id' => $uniqueId]);
                 return ['success' => false, 'error' => 'Empty response from EMP API'];
             }
             
-            // Check if the response indicates an error
             if (isset($response['status']) && $response['status'] === 'error') {
                 $errorCode = $response['code'] ?? 'unknown';
                 $errorMessage = $response['message'] ?? 'Unknown error';
-                $technicalMessage = $response['technical_message'] ?? '';
                 
-                Log::error('EMP Chargeback: Error response from API', [
+                Log::error('EMP Chargeback: API error', [
                     'unique_id' => $uniqueId,
                     'error_code' => $errorCode,
                     'message' => $errorMessage,
-                    'technical_message' => $technicalMessage
                 ]);
                 
                 return ['success' => false, 'error' => $errorMessage, 'code' => $errorCode];
             }
             
-            // Process successful response
             $updated = $this->updateChargebackDetails($uniqueId, $response);
-            
-            if (!$updated) {
-                Log::error('Failed to update chargeback details', [
-                    'unique_id' => $uniqueId,
-                    'response' => $response
-                ]);
-            }
             
             return ['success' => $updated, 'data' => $response];
             
         } catch (\Exception $e) {
-            Log::error('Exception while processing chargeback detail', [
+            Log::error('EMP Chargeback: Exception', [
                 'unique_id' => $uniqueId,
                 'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
             ]);
             return ['success' => false, 'error' => $e->getMessage()];
         }
@@ -87,7 +73,6 @@ class EmpChargebackService
             $query = $query->whereNull('chargeback_reason_code');
         }
         
-        // Apply limit if specified
         if ($limit !== null && $limit > 0) {
             $query = $query->limit($limit);
         }
@@ -106,27 +91,22 @@ class EmpChargebackService
         
         foreach ($batches as $batchIndex => $batch) {
             foreach ($batch as $uniqueId) {
-                // In dry-run mode, simulate processing without API calls
                 if ($dryRun) {
                     $results['processed']++;
                     $results['successful']++;
                     
-                    $detailEntry = [
-                        'unique_id' => $uniqueId,
-                        'success' => true,
-                        'code' => '[DRY RUN]',
-                        'message' => 'Would fetch and update chargeback details'
-                    ];
-                    
                     if ($progressCallback) {
-                        $progressCallback($detailEntry);
+                        $progressCallback([
+                            'unique_id' => $uniqueId,
+                            'success' => true,
+                            'code' => '[DRY RUN]',
+                            'message' => 'Would fetch chargeback details'
+                        ]);
                     }
                 } else {
-                    // Normal processing
                     $result = $this->processChargebackDetail($uniqueId);
                     $results['processed']++;
                     
-                    // Prepare detail entry for callback
                     $detailEntry = [
                         'unique_id' => $uniqueId,
                         'success' => $result['success']
@@ -143,12 +123,10 @@ class EmpChargebackService
                         $detailEntry['message'] = $result['error'] ?? 'Unknown error';
                     }
                     
-                    // Call progress callback immediately after processing each item
                     if ($progressCallback) {
                         $progressCallback($detailEntry);
                     }
                     
-                    // Rate limiting: sleep between requests
                     usleep(self::RATE_LIMIT_DELAY_MS * 1000);
                 }
             }
@@ -158,8 +136,6 @@ class EmpChargebackService
                     'batch' => $batchIndex + 1,
                     'total_batches' => count($batches),
                     'processed' => $results['processed'],
-                    'successful' => $results['successful'],
-                    'failed' => $results['failed']
                 ]);
             }
         }
@@ -184,17 +160,15 @@ class EmpChargebackService
                     'chargeback_reason_description' => $responseData['reason_description'] ?? null,
                 ];
                 
-                // Set chargebacked_at from EMP post_date (actual chargeback date) or fallback to now()
                 if (!$billingAttempt->chargebacked_at) {
-                    $postDate = $responseData['post_date'] ?? null;
-                    $updateData['chargebacked_at'] = $postDate ? Carbon::parse($postDate) : now();
+                    $updateData['chargebacked_at'] = now();
                 }
                 
                 $billingAttempt->update($updateData);
                 return true;
             });
         } catch (\Exception $e) {
-            Log::error('Failed to update chargeback details in transaction', [
+            Log::error('EMP Chargeback: Failed to update details', [
                 'unique_id' => $uniqueId,
                 'error' => $e->getMessage()
             ]);

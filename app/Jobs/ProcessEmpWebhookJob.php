@@ -2,7 +2,8 @@
 
 /**
  * Job for processing EMP webhook notifications asynchronously.
- * Handles chargebacks, retrieval requests, and SDD status updates.
+ * Handles SDD chargebacks and status updates.
+ * Note: SDD-only - no card-specific features (retrieval requests, ARN, etc.)
  */
 
 namespace App\Jobs;
@@ -69,7 +70,6 @@ class ProcessEmpWebhookJob implements ShouldQueue
         try {
             match ($this->processingType) {
                 'chargeback' => $this->handleChargeback($blacklistService, $chargebackService),
-                'retrieval_request' => $this->handleRetrievalRequest(),
                 'sdd_status_update' => $this->handleSddStatusUpdate(),
                 default => $this->handleUnknown(),
             };
@@ -154,21 +154,22 @@ class ProcessEmpWebhookJob implements ShouldQueue
             return;
         }
 
-        $errorCode = $this->webhookData['reason_code']
+        $reasonCode = $this->webhookData['reason_code']
             ?? $this->webhookData['rc_code']
             ?? $this->webhookData['error_code']
             ?? null;
 
+        $reasonDescription = $this->webhookData['reason']
+            ?? $this->webhookData['rc_description']
+            ?? $this->webhookData['reason_description']
+            ?? null;
+
         $chargebackMeta = [
-            'event' => $this->webhookData['event'] ?? 'chargeback',
+            'event' => 'chargeback',
             'amount' => $this->webhookData['amount'] ?? null,
-            'currency' => $this->webhookData['currency'] ?? null,
-            'reason' => $this->webhookData['reason']
-                ?? $this->webhookData['rc_description']
-                ?? $this->webhookData['reason_description']
-                ?? null,
-            'reason_code' => $errorCode,
-            'post_date' => $this->webhookData['post_date'] ?? null,
+            'currency' => $this->webhookData['currency'] ?? 'EUR',
+            'reason_code' => $reasonCode,
+            'reason_description' => $reasonDescription,
             'received_at' => $this->receivedAt,
             'webhook_event_id' => $this->webhookEventId,
         ];
@@ -178,9 +179,11 @@ class ProcessEmpWebhookJob implements ShouldQueue
 
         $billingAttempt->update([
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'chargeback_reason_code' => $reasonCode,
+            'chargeback_reason_description' => $reasonDescription,
             'chargebacked_at' => now(),
-            'error_code' => $errorCode,
-            'error_message' => $chargebackMeta['reason'],
+            'error_code' => $reasonCode,
+            'error_message' => $reasonDescription,
             'meta' => $currentMeta,
         ]);
 
@@ -192,9 +195,9 @@ class ProcessEmpWebhookJob implements ShouldQueue
         }
 
         $blacklisted = false;
-        if ($errorCode && $this->shouldBlacklistCode($errorCode)) {
+        if ($reasonCode && $this->shouldBlacklistCode($reasonCode)) {
             if ($debtor && $debtor->iban) {
-                $blacklistService->addDebtor($debtor, 'chargeback', "Auto-blacklisted: {$errorCode}");
+                $blacklistService->addDebtor($debtor, 'chargeback', "Auto-blacklisted: {$reasonCode}");
                 $blacklisted = true;
             }
         }
@@ -204,42 +207,8 @@ class ProcessEmpWebhookJob implements ShouldQueue
         Log::info('Chargeback processed', [
             'billing_attempt_id' => $billingAttempt->id,
             'unique_id' => $originalUniqueId,
-            'error_code' => $errorCode,
+            'reason_code' => $reasonCode,
             'blacklisted' => $blacklisted,
-        ]);
-    }
-
-    private function handleRetrievalRequest(): void
-    {
-        $uniqueId = $this->webhookData['unique_id'] ?? null;
-
-        if (!$uniqueId) {
-            Log::warning('Retrieval request missing unique_id');
-            return;
-        }
-
-        $billingAttempt = BillingAttempt::where('unique_id', $uniqueId)->first();
-
-        if (!$billingAttempt) {
-            Log::info('Retrieval request for unknown transaction', ['unique_id' => $uniqueId]);
-            return;
-        }
-
-        $currentMeta = $billingAttempt->meta ?? [];
-        $currentMeta['retrieval_requests'] = $currentMeta['retrieval_requests'] ?? [];
-        $currentMeta['retrieval_requests'][] = [
-            'reason_code' => $this->webhookData['reason_code'] ?? null,
-            'reason_description' => $this->webhookData['reason_description'] ?? null,
-            'post_date' => $this->webhookData['post_date'] ?? null,
-            'received_at' => $this->receivedAt,
-            'webhook_event_id' => $this->webhookEventId,
-        ];
-
-        $billingAttempt->update(['meta' => $currentMeta]);
-
-        Log::info('Retrieval request logged', [
-            'billing_attempt_id' => $billingAttempt->id,
-            'unique_id' => $uniqueId,
         ]);
     }
 

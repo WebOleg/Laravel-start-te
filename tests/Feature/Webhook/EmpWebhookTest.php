@@ -251,38 +251,6 @@ class EmpWebhookTest extends TestCase
         $this->assertEquals(BillingAttempt::STATUS_DECLINED, $billingAttempt->status);
     }
 
-    public function test_retrieval_request_logged(): void
-    {
-        $upload = Upload::factory()->create();
-        $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
-
-        $uniqueId = 'emp_retrieval_' . uniqid();
-        $billingAttempt = BillingAttempt::create([
-            'debtor_id' => $debtor->id,
-            'upload_id' => $upload->id,
-            'transaction_id' => 'tx_retrieval_123',
-            'unique_id' => $uniqueId,
-            'amount' => 100,
-            'status' => BillingAttempt::STATUS_APPROVED,
-        ]);
-
-        $response = $this->postWebhook([
-            'unique_id' => $uniqueId,
-            'transaction_type' => 'sdd_sale',
-            'event' => 'retrieval_request',
-            'status' => 'chargebacked',
-            'reason_code' => '10',
-            'reason_description' => 'Dispute Transaction',
-            'signature' => $this->generateSignature($uniqueId),
-        ]);
-
-        $this->assertXmlEchoResponse($response, $uniqueId);
-
-        $billingAttempt->refresh();
-        $this->assertEquals(BillingAttempt::STATUS_APPROVED, $billingAttempt->status);
-        $this->assertArrayHasKey('retrieval_requests', $billingAttempt->meta);
-    }
-
     public function test_webhook_logs_invalid_signature_but_returns_xml(): void
     {
         Queue::fake();
