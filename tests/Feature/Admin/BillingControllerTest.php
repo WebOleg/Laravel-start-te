@@ -71,16 +71,14 @@ class BillingControllerTest extends TestCase
             'upload_id' => $upload->id,
             'validation_status' => Debtor::VALIDATION_VALID,
             'iban_valid' => true,
-            // CRITICAL: Controller strictly filters for STATUS_UPLOADED
             'status' => Debtor::STATUS_UPLOADED,
         ]);
 
-        // Controller requires VOP to be completed for ALL valid debtors before allowing sync
+        // Controller requires VOP to be completed with PASSED result
         foreach ($debtors as $debtor) {
-            VopLog::factory()->create([
+            VopLog::factory()->verified()->create([
                 'upload_id' => $upload->id,
                 'debtor_id' => $debtor->id,
-                'name_match' => 'yes',
             ]);
         }
 
@@ -110,10 +108,9 @@ class BillingControllerTest extends TestCase
             'status' => Debtor::STATUS_UPLOADED,
         ]);
 
-        VopLog::factory()->create([
+        VopLog::factory()->verified()->create([
             'upload_id' => $upload->id,
             'debtor_id' => $validDebtor->id,
-            'name_match' => 'yes',
         ]);
 
         // 2. Ineligible Debtor (Invalid status)
@@ -145,10 +142,9 @@ class BillingControllerTest extends TestCase
             'status' => Debtor::STATUS_UPLOADED,
         ]);
 
-        VopLog::factory()->create([
+        VopLog::factory()->verified()->create([
             'upload_id' => $upload->id,
             'debtor_id' => $debtor->id,
-            'name_match' => 'yes',
         ]);
 
         // BUT: Has a pending billing attempt (Controller: Legacy logic blocks this)
@@ -213,7 +209,7 @@ class BillingControllerTest extends TestCase
         Bus::assertNotDispatched(ProcessBillingJob::class);
     }
 
-    public function test_sync_skips_debtors_with_vop_name_mismatch(): void
+    public function test_sync_skips_debtors_with_vop_mismatch_result(): void
     {
         Bus::fake();
 
@@ -225,20 +221,105 @@ class BillingControllerTest extends TestCase
             'status' => Debtor::STATUS_UPLOADED,
         ]);
 
-        // Create a VOP Log with 'no' match
-        // The checkVopCompleted passes (because log exists), but the main query filters it out
+        // Create a VOP Log with mismatch result (score 20-39)
         VopLog::factory()->create([
             'upload_id' => $upload->id,
             'debtor_id' => $debtor->id,
-            'name_match' => 'no',
+            'result' => VopLog::RESULT_MISMATCH,
+            'vop_score' => 35,
         ]);
 
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
             ->postJson("/api/admin/uploads/{$upload->id}/sync");
 
-        // Should return 200 (No eligible)
+        // Should return 200 (No eligible) - mismatch results are excluded
         $response->assertStatus(200)
             ->assertJsonPath('data.eligible', 0);
+    }
+
+    public function test_sync_skips_debtors_with_vop_rejected_result(): void
+    {
+        Bus::fake();
+
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'validation_status' => Debtor::VALIDATION_VALID,
+            'iban_valid' => true,
+            'status' => Debtor::STATUS_UPLOADED,
+        ]);
+
+        // Create a VOP Log with rejected result
+        VopLog::factory()->rejected()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->postJson("/api/admin/uploads/{$upload->id}/sync");
+
+        // Should return 200 (No eligible) - rejected results are excluded
+        $response->assertStatus(200)
+            ->assertJsonPath('data.eligible', 0);
+    }
+
+    public function test_sync_skips_debtors_with_vop_inconclusive_result(): void
+    {
+        Bus::fake();
+
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'validation_status' => Debtor::VALIDATION_VALID,
+            'iban_valid' => true,
+            'status' => Debtor::STATUS_UPLOADED,
+        ]);
+
+        // Create a VOP Log with inconclusive result
+        VopLog::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'result' => VopLog::RESULT_INCONCLUSIVE,
+            'vop_score' => 45,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->postJson("/api/admin/uploads/{$upload->id}/sync");
+
+        // Should return 200 (No eligible) - inconclusive results are excluded
+        $response->assertStatus(200)
+            ->assertJsonPath('data.eligible', 0);
+    }
+
+    public function test_sync_allows_likely_verified_result(): void
+    {
+        Bus::fake();
+
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'validation_status' => Debtor::VALIDATION_VALID,
+            'iban_valid' => true,
+            'status' => Debtor::STATUS_UPLOADED,
+        ]);
+
+        // Create a VOP Log with likely_verified result (score 60-79)
+        VopLog::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'result' => VopLog::RESULT_LIKELY_VERIFIED,
+            'vop_score' => 65,
+            'iban_valid' => true,
+            'bank_identified' => true,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->postJson("/api/admin/uploads/{$upload->id}/sync");
+
+        // Should return 202 - likely_verified is allowed
+        $response->assertStatus(202)
+            ->assertJsonPath('data.eligible', 1)
+            ->assertJsonPath('data.queued', true);
     }
 
     public function test_sync_filters_by_specific_billing_model(): void
@@ -255,7 +336,10 @@ class BillingControllerTest extends TestCase
             'iban_valid' => true,
             'status' => Debtor::STATUS_UPLOADED,
         ]);
-        VopLog::factory()->create(['upload_id' => $upload->id, 'debtor_id' => $flywheelDebtor->id, 'name_match' => 'yes']);
+        VopLog::factory()->verified()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $flywheelDebtor->id,
+        ]);
 
         // 2. Legacy Debtor (Should be excluded)
         $legacyProfile = DebtorProfile::factory()->create(['billing_model' => DebtorProfile::MODEL_LEGACY]);
@@ -266,7 +350,10 @@ class BillingControllerTest extends TestCase
             'iban_valid' => true,
             'status' => Debtor::STATUS_UPLOADED,
         ]);
-        VopLog::factory()->create(['upload_id' => $upload->id, 'debtor_id' => $legacyDebtor->id, 'name_match' => 'yes']);
+        VopLog::factory()->verified()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $legacyDebtor->id,
+        ]);
 
         // Request ONLY Flywheel
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)

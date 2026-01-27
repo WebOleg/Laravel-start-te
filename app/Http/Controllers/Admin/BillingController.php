@@ -101,11 +101,16 @@ class BillingController extends Controller
                 });
         });
 
-        // Exclude BAV mismatches (matching the Job logic)
+        // Exclude VOP failed results (mismatch, rejected, inconclusive)
+        // Only allow debtors with no VOP check OR passed VOP check
         $query->where(function ($q) {
-            $q->whereDoesntHave('vopLogs', function ($vopQuery) {
-                $vopQuery->where('name_match', 'no');
-            });
+            $q->whereDoesntHave('vopLogs')
+              ->orWhereHas('vopLogs', function ($vopQuery) {
+                  $vopQuery->whereIn('result', [
+                      VopLog::RESULT_VERIFIED,
+                      VopLog::RESULT_LIKELY_VERIFIED,
+                  ]);
+              });
         });
 
         // Apply strict cross-contamination check
