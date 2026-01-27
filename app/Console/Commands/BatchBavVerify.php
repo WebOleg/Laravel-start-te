@@ -29,7 +29,6 @@ class BatchBavVerify extends Command
         
         $this->info("Input columns: " . implode(', ', $header));
         
-        // Find IBAN and name columns
         $ibanCol = $this->findColumn($header, ['iban', 'Iban', 'IBAN']);
         $firstNameCol = $this->findColumn($header, ['first_name', 'FirstName', 'firstname']);
         $lastNameCol = $this->findColumn($header, ['last_name', 'LastName', 'lastname']);
@@ -41,7 +40,6 @@ class BatchBavVerify extends Command
 
         $this->info("IBAN column: {$ibanCol}, First name: {$firstNameCol}, Last name: {$lastNameCol}");
 
-        // Prepare output
         $output = fopen($outputPath, 'w');
         fputcsv($output, array_merge($header, [
             'bav_success',
@@ -108,7 +106,6 @@ class BatchBavVerify extends Command
             $processed++;
             $bar->advance();
 
-            // Rate limiting
             if ($delayMs > 0) {
                 usleep($delayMs * 1000);
             }
