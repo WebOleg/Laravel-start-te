@@ -162,10 +162,24 @@ class Debtor extends Model
         return $query->where('validation_status', self::VALIDATION_PENDING);
     }
 
+    /**
+     * Scope for debtors ready to be synced to payment gateway.
+     * Excludes VOP failed results (mismatch, rejected, inconclusive).
+     */
     public function scopeReadyForSync($query)
     {
         return $query->where('validation_status', self::VALIDATION_VALID)
-            ->where('status', self::STATUS_UPLOADED);
+            ->where('status', self::STATUS_UPLOADED)
+            // Only allow debtors with no VOP check OR passed VOP check
+            ->where(function ($q) {
+                $q->whereDoesntHave('vopLogs')
+                  ->orWhereHas('vopLogs', function ($vopQuery) {
+                      $vopQuery->whereIn('result', [
+                          VopLog::RESULT_VERIFIED,
+                          VopLog::RESULT_LIKELY_VERIFIED,
+                      ]);
+                  });
+            });
     }
 
     public function scopeReadyForVop($query)
