@@ -23,6 +23,8 @@ class EmpBillingServiceTest extends TestCase
         parent::setUp();
         
         $this->mockClient = Mockery::mock(EmpClient::class);
+        $this->mockClient->shouldReceive('getTerminalToken')
+            ->andReturn('test_terminal_token_123');
         $this->service = new EmpBillingService($this->mockClient);
     }
 
@@ -52,6 +54,7 @@ class EmpBillingServiceTest extends TestCase
         $this->assertEquals('emp_unique_123', $result->unique_id);
         $this->assertEquals(99.99, $result->amount);
         $this->assertEquals($debtor->id, $result->debtor_id);
+        $this->assertEquals('test_terminal_token_123', $result->mid_reference);
     }
 
     public function test_bill_debtor_handles_pending_async(): void
@@ -282,7 +285,6 @@ class EmpBillingServiceTest extends TestCase
         $billingAttempt->refresh();
         $this->assertEquals(BillingAttempt::STATUS_APPROVED, $billingAttempt->status);
     }
-
 
     public function test_can_bill_amount_exactly_one_euro(): void
     {

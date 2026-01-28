@@ -28,11 +28,6 @@ class EmpRefreshService
 
     /**
      * Fetch a page of transactions from EMP API.
-     *
-     * @param string $startDate
-     * @param string $endDate
-     * @param int $page
-     * @return array{transactions: array, has_more: bool, error: bool, pagination: array|null}
      */
     public function fetchPage(string $startDate, string $endDate, int $page): array
     {
@@ -67,9 +62,6 @@ class EmpRefreshService
 
     /**
      * Process array of transactions and upsert to database.
-     *
-     * @param array $transactions
-     * @return array{inserted: int, updated: int, unchanged: int, errors: int}
      */
     public function processTransactions(array $transactions): array
     {
@@ -92,9 +84,6 @@ class EmpRefreshService
 
     /**
      * Process a batch of transactions using upsert.
-     *
-     * @param array $transactions
-     * @return array{inserted: int, updated: int, unchanged: int, errors: int}
      */
     private function processBatch(array $transactions): array
     {
@@ -102,6 +91,7 @@ class EmpRefreshService
         $uniqueIds = [];
         $newDataByUniqueId = [];
         $now = now();
+        $terminalToken = $this->client->getTerminalToken();
         
         foreach ($transactions as $tx) {
             $uniqueId = $tx['unique_id'] ?? null;
@@ -126,6 +116,7 @@ class EmpRefreshService
                 'amount' => $amount,
                 'currency' => $tx['currency'] ?? 'EUR',
                 'bic' => null,
+                'mid_reference' => $terminalToken,
                 'error_code' => $tx['code'] ?? $tx['reason_code'] ?? null,
                 'error_message' => $tx['message'] ?? null,
                 'technical_message' => $tx['technical_message'] ?? null,
@@ -169,7 +160,7 @@ class EmpRefreshService
             BillingAttempt::upsert(
                 $rows,
                 ['unique_id'],
-                ['status', 'amount', 'currency', 'error_code', 'error_message', 'technical_message', 'emp_created_at', 'processed_at', 'response_payload', 'updated_at', 'last_reconciled_at']
+                ['status', 'amount', 'currency', 'error_code', 'error_message', 'technical_message', 'emp_created_at', 'processed_at', 'response_payload', 'updated_at', 'last_reconciled_at', 'mid_reference']
             );
             
             Log::debug('EMP Refresh: batch upserted', [
@@ -193,9 +184,6 @@ class EmpRefreshService
 
     /**
      * Fallback: process transactions one by one.
-     *
-     * @param array $transactions
-     * @return array{inserted: int, updated: int, unchanged: int, errors: int}
      */
     private function processIndividually(array $transactions): array
     {
@@ -219,9 +207,6 @@ class EmpRefreshService
 
     /**
      * Upsert a single transaction.
-     *
-     * @param array $tx
-     * @return string Result type: inserted|updated|unchanged|errors
      */
     private function upsertTransaction(array $tx): string
     {
@@ -254,10 +239,6 @@ class EmpRefreshService
 
     /**
      * Estimate total pages for a date range.
-     *
-     * @param string $startDate
-     * @param string $endDate
-     * @return array{first_page_count: int, has_more: bool, error: bool, pagination: array|null}
      */
     public function estimatePages(string $startDate, string $endDate): array
     {
@@ -273,9 +254,6 @@ class EmpRefreshService
 
     /**
      * Extract pagination info from API response.
-     *
-     * @param array $response
-     * @return array|null
      */
     private function extractPagination(array $response): ?array
     {
@@ -293,9 +271,6 @@ class EmpRefreshService
 
     /**
      * Extract transactions array from API response.
-     *
-     * @param array $response
-     * @return array
      */
     private function extractTransactions(array $response): array
     {
@@ -336,9 +311,6 @@ class EmpRefreshService
 
     /**
      * Map transaction data to BillingAttempt fields.
-     *
-     * @param array $tx
-     * @return array
      */
     private function mapTransactionData(array $tx): array
     {
@@ -351,6 +323,7 @@ class EmpRefreshService
             'amount' => $amount,
             'currency' => $tx['currency'] ?? 'EUR',
             'bic' => null,
+            'mid_reference' => $this->client->getTerminalToken(),
             'error_code' => $tx['code'] ?? $tx['reason_code'] ?? null,
             'error_message' => $tx['message'] ?? null,
             'technical_message' => $tx['technical_message'] ?? null,
@@ -363,9 +336,6 @@ class EmpRefreshService
 
     /**
      * Map EMP status to BillingAttempt status constant.
-     *
-     * @param string $empStatus
-     * @return string
      */
     private function mapStatus(string $empStatus): string
     {
