@@ -169,8 +169,216 @@ class ReconciliationControllerTest extends TestCase
             ]);
     }
 
-    public function test_get_upload_reconciliation_stats(): void
+    public function test_get_reconciliation_stats_with_data(): void
     {
+        // Create pending attempts across multiple uploads
+        $upload1 = Upload::factory()->create();
+        $upload2 = Upload::factory()->create();
+
+        $debtor1 = Debtor::factory()->create(['upload_id' => $upload1->id]);
+        $debtor2 = Debtor::factory()->create(['upload_id' => $upload2->id]);
+
+        // Pending attempts (recent - less than 24 hours)
+        BillingAttempt::factory()->count(3)->sequence(
+            ['unique_id' => 'emp_recent_1'],
+            ['unique_id' => 'emp_recent_2'],
+            ['unique_id' => 'emp_recent_3'],
+        )->create([
+            'upload_id' => $upload1->id,
+            'debtor_id' => $debtor1->id,
+            'status' => BillingAttempt::STATUS_PENDING,
+            'created_at' => now()->subHours(6),
+            'reconciliation_attempts' => 0,
+        ]);
+
+        // Pending attempts (stale - more than 24 hours)
+        BillingAttempt::factory()->count(2)->sequence(
+            ['unique_id' => 'emp_stale_1'],
+            ['unique_id' => 'emp_stale_2'],
+        )->create([
+            'upload_id' => $upload2->id,
+            'debtor_id' => $debtor2->id,
+            'status' => BillingAttempt::STATUS_PENDING,
+            'created_at' => now()->subHours(48),
+            'reconciliation_attempts' => 0,
+        ]);
+
+        // Never reconciled attempts (old, but never attempted)
+        BillingAttempt::factory()->create([
+            'upload_id' => $upload1->id,
+            'debtor_id' => $debtor1->id,
+            'status' => BillingAttempt::STATUS_PENDING,
+            'unique_id' => 'emp_never_reconciled',
+            'created_at' => now()->subDays(5),
+            'reconciliation_attempts' => 0,
+        ]);
+
+        // Maxed out attempts
+        BillingAttempt::factory()->create([
+            'upload_id' => $upload2->id,
+            'debtor_id' => $debtor2->id,
+            'status' => BillingAttempt::STATUS_PENDING,
+            'unique_id' => 'emp_maxed_out',
+            'created_at' => now()->subHours(72),
+            'reconciliation_attempts' => 10,
+        ]);
+
+        $response = $this->actingAs($this->user)
+            ->getJson('/api/admin/reconciliation/stats');
+
+        $response->assertStatus(200)
+            ->assertJsonStructure([
+                'data' => [
+                    'pending_total',
+                    'pending_stale',
+                    'never_reconciled',
+                    'maxed_out_attempts',
+                    'eligible',
+                ],
+            ])
+            ->assertJsonPath('data.pending_total', 7)
+            ->assertJsonPath('data.pending_stale', 2);
+    }
+
+    public function test_get_upload_reconciliation_stats_with_data(): void
+    {
+        $debtor = Debtor::factory()->create(['upload_id' => $this->upload->id]);
+
+        // Create pending attempts
+        BillingAttempt::factory()->count(3)->sequence(
+            ['unique_id' => 'pending_1'],
+            ['unique_id' => 'pending_2'],
+            ['unique_id' => 'pending_3'],
+        )->create([
+            'upload_id' => $this->upload->id,
+            'debtor_id' => $debtor->id,
+            'status' => BillingAttempt::STATUS_PENDING,
+            'created_at' => now()->subHours(6),
+            'reconciliation_attempts' => 0,
+        ]);
+
+        // Create reconciled attempts (from today)
+        BillingAttempt::factory()->count(2)->sequence(
+            ['unique_id' => 'reconciled_1'],
+            ['unique_id' => 'reconciled_2'],
+        )->create([
+            'upload_id' => $this->upload->id,
+            'debtor_id' => $debtor->id,
+            'status' => BillingAttempt::STATUS_APPROVED,
+            'created_at' => now()->subDays(5),
+            'reconciliation_attempts' => 1,
+            'last_reconciled_at' => now(),
+        ]);
+
+        // Create other attempts
+        BillingAttempt::factory()->create([
+            'upload_id' => $this->upload->id,
+            'debtor_id' => $debtor->id,
+            'status' => BillingAttempt::STATUS_APPROVED,
+            'unique_id' => 'other_attempt',
+            'created_at' => now()->subDays(10),
+            'reconciliation_attempts' => 0,
+        ]);
+
+        $response = $this->actingAs($this->user)
+            ->getJson("/api/admin/uploads/{$this->upload->id}/reconciliation-stats");
+
+        $response->assertStatus(200)
+            ->assertJsonPath('data.upload_id', $this->upload->id)
+            ->assertJsonPath('data.total', 6)
+            ->assertJsonPath('data.pending', 3)
+            ->assertJsonPath('data.reconciled_today', 2);
+    }
+
+    public function test_get_upload_reconciliation_stats_with_no_attempts(): void
+    {
+        $response = $this->actingAs($this->user)
+            ->getJson("/api/admin/uploads/{$this->upload->id}/reconciliation-stats");
+
+        $response->assertStatus(200)
+            ->assertJsonPath('data.upload_id', $this->upload->id)
+            ->assertJsonPath('data.total', 0)
+            ->assertJsonPath('data.pending', 0)
+            ->assertJsonPath('data.eligible', 0)
+            ->assertJsonPath('data.reconciled_today', 0);
+    }
+
+    public function test_get_upload_reconciliation_stats_requires_authentication(): void
+    {
+        $response = $this->getJson("/api/admin/uploads/{$this->upload->id}/reconciliation-stats");
+
+        $response->assertStatus(401);
+    }
+
+    public function test_get_upload_reconciliation_stats_returns_404_for_nonexistent(): void
+    {
+        $response = $this->actingAs($this->user)
+            ->getJson('/api/admin/uploads/99999/reconciliation-stats');
+
+        $response->assertStatus(404);
+    }
+
+    public function test_get_upload_reconciliation_stats_detects_processing(): void
+    {
+        $this->upload->update([
+            'reconciliation_status' => Upload::JOB_PROCESSING,
+            'reconciliation_batch_id' => 'batch-123',
+            'reconciliation_started_at' => now(),
+        ]);
+
+        $response = $this->actingAs($this->user)
+            ->getJson("/api/admin/uploads/{$this->upload->id}/reconciliation-stats");
+
+        $response->assertStatus(200)
+            ->assertJsonPath('data.is_processing', true)
+            ->assertJsonPath('data.reconciliation_status', Upload::JOB_PROCESSING);
+    }
+
+    public function test_get_global_reconciliation_stats_excludes_maxed_out(): void
+    {
+        $debtor1 = Debtor::factory()->create(['upload_id' => $this->upload->id]);
+        $debtor2 = Debtor::factory()->create(['upload_id' => $this->upload->id]);
+
+        // Eligible attempt
+        BillingAttempt::factory()->create([
+            'upload_id' => $this->upload->id,
+            'debtor_id' => $debtor1->id,
+            'status' => BillingAttempt::STATUS_PENDING,
+            'unique_id' => 'eligible_attempt',
+            'created_at' => now()->subHours(6),
+            'reconciliation_attempts' => 5,
+        ]);
+
+        // Maxed out attempt (should not be in eligible count)
+        BillingAttempt::factory()->create([
+            'upload_id' => $this->upload->id,
+            'debtor_id' => $debtor2->id,
+            'status' => BillingAttempt::STATUS_PENDING,
+            'unique_id' => 'maxed_out_attempt',
+            'created_at' => now()->subHours(6),
+            'reconciliation_attempts' => 10,
+        ]);
+
+        $response = $this->actingAs($this->user)
+            ->getJson('/api/admin/reconciliation/stats');
+
+        $response->assertStatus(200)
+            ->assertJsonPath('data.pending_total', 2)
+            ->assertJsonPath('data.maxed_out_attempts', 1)
+            ->assertJsonPath('data.eligible', 1);
+    }
+
+    public function test_get_upload_reconciliation_stats_includes_timestamps(): void
+    {
+        $startTime = now();
+        $endTime = now()->addHours(1);
+
+        $this->upload->update([
+            'reconciliation_status' => Upload::JOB_COMPLETED,
+            'reconciliation_started_at' => $startTime,
+            'reconciliation_completed_at' => $endTime,
+        ]);
+
         $response = $this->actingAs($this->user)
             ->getJson("/api/admin/uploads/{$this->upload->id}/reconciliation-stats");
 

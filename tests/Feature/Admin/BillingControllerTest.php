@@ -399,4 +399,201 @@ class BillingControllerTest extends TestCase
             ->assertJsonPath('data.approved', 3)
             ->assertJsonPath('data.declined', 2);
     }
+
+    public function test_billing_stats_requires_authentication(): void
+    {
+        $upload = Upload::factory()->create();
+
+        $response = $this->getJson("/api/admin/uploads/{$upload->id}/billing-stats");
+
+        $response->assertStatus(401);
+    }
+
+    public function test_billing_stats_returns_404_for_nonexistent_upload(): void
+    {
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/uploads/99999/billing-stats');
+
+        $response->assertStatus(404);
+    }
+
+    public function test_billing_stats_with_all_statuses(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
+
+        BillingAttempt::factory()->count(3)->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'status' => BillingAttempt::STATUS_APPROVED,
+            'amount' => 100.00,
+        ]);
+
+        BillingAttempt::factory()->count(2)->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'status' => BillingAttempt::STATUS_PENDING,
+            'amount' => 75.50,
+        ]);
+
+        BillingAttempt::factory()->count(1)->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'status' => BillingAttempt::STATUS_DECLINED,
+            'amount' => 50.00,
+        ]);
+
+        BillingAttempt::factory()->count(2)->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'status' => BillingAttempt::STATUS_ERROR,
+            'amount' => 25.00,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson("/api/admin/uploads/{$upload->id}/billing-stats");
+
+        $response->assertStatus(200)
+            ->assertJsonPath('data.upload_id', $upload->id)
+            ->assertJsonPath('data.total_attempts', 8)
+            ->assertJsonPath('data.approved', 3)
+            ->assertJsonPath('data.approved_amount', 300)
+            ->assertJsonPath('data.pending', 2)
+            ->assertJsonPath('data.pending_amount', 151)
+            ->assertJsonPath('data.declined', 1)
+            ->assertJsonPath('data.declined_amount', 50)
+            ->assertJsonPath('data.error', 2)
+            ->assertJsonPath('data.error_amount', 50);
+    }
+
+    public function test_billing_stats_with_empty_attempts(): void
+    {
+        $upload = Upload::factory()->create();
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson("/api/admin/uploads/{$upload->id}/billing-stats");
+
+        $response->assertStatus(200)
+            ->assertJsonPath('data.upload_id', $upload->id)
+            ->assertJsonPath('data.total_attempts', 0)
+            ->assertJsonPath('data.approved', 0)
+            ->assertJsonPath('data.approved_amount', 0)
+            ->assertJsonPath('data.pending', 0)
+            ->assertJsonPath('data.pending_amount', 0)
+            ->assertJsonPath('data.declined', 0)
+            ->assertJsonPath('data.declined_amount', 0)
+            ->assertJsonPath('data.error', 0)
+            ->assertJsonPath('data.error_amount', 0);
+    }
+
+    public function test_billing_stats_filters_by_debtor_type(): void
+    {
+        $upload = Upload::factory()->create();
+
+        // Create Flywheel debtor with attempts
+        $flywheelProfile = DebtorProfile::factory()->create(['billing_model' => DebtorProfile::MODEL_FLYWHEEL]);
+        $flywheelDebtor = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_profile_id' => $flywheelProfile->id,
+        ]);
+
+        BillingAttempt::factory()->count(5)->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $flywheelDebtor->id,
+            'status' => BillingAttempt::STATUS_APPROVED,
+            'billing_model' => DebtorProfile::MODEL_FLYWHEEL,
+            'amount' => 100.00,
+        ]);
+
+        // Create Recovery debtor with attempts
+        $recoveryProfile = DebtorProfile::factory()->create(['billing_model' => DebtorProfile::MODEL_RECOVERY]);
+        $recoveryDebtor = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_profile_id' => $recoveryProfile->id,
+        ]);
+
+        BillingAttempt::factory()->count(3)->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $recoveryDebtor->id,
+            'status' => BillingAttempt::STATUS_APPROVED,
+            'billing_model' => DebtorProfile::MODEL_RECOVERY,
+            'amount' => 100.00,
+        ]);
+
+        // Request Flywheel only
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson("/api/admin/uploads/{$upload->id}/billing-stats?debtor_type=" . DebtorProfile::MODEL_FLYWHEEL);
+
+        $response->assertStatus(200)
+            ->assertJsonPath('data.filter_type', DebtorProfile::MODEL_FLYWHEEL)
+            ->assertJsonPath('data.total_attempts', 5)
+            ->assertJsonPath('data.approved', 5)
+            ->assertJsonPath('data.approved_amount', 500);
+    }
+
+    public function test_billing_stats_detects_processing_state(): void
+    {
+        $upload = Upload::factory()->create();
+
+        // Manually set the cache key to simulate ongoing billing
+        Cache::put("billing_sync_{$upload->id}_" . DebtorProfile::ALL, true, 300);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson("/api/admin/uploads/{$upload->id}/billing-stats");
+
+        $response->assertStatus(200)
+            ->assertJsonPath('data.is_processing', true);
+    }
+
+    public function test_billing_stats_no_processing_when_cache_expired(): void
+    {
+        $upload = Upload::factory()->create();
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson("/api/admin/uploads/{$upload->id}/billing-stats");
+
+        $response->assertStatus(200)
+            ->assertJsonPath('data.is_processing', false);
+    }
+
+    public function test_billing_stats_includes_billing_status_timestamps(): void
+    {
+        $startTime = now();
+        $endTime = now()->addHours(2);
+
+        $upload = Upload::factory()->create([
+            'billing_status' => Upload::JOB_COMPLETED,
+            'billing_started_at' => $startTime,
+            'billing_completed_at' => $endTime,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson("/api/admin/uploads/{$upload->id}/billing-stats");
+
+        $response->assertStatus(200)
+            ->assertJsonPath('data.billing_status', Upload::JOB_COMPLETED)
+            ->assertJsonPath('data.billing_started_at', $startTime->toIso8601String())
+            ->assertJsonPath('data.billing_completed_at', $endTime->toIso8601String());
+    }
+
+    public function test_billing_stats_default_debtor_type_is_all(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
+
+        BillingAttempt::factory()->count(5)->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'status' => BillingAttempt::STATUS_APPROVED,
+            'amount' => 100.00,
+        ]);
+
+        // Request without debtor_type parameter
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson("/api/admin/uploads/{$upload->id}/billing-stats");
+
+        $response->assertStatus(200)
+            ->assertJsonPath('data.filter_type', DebtorProfile::ALL)
+            ->assertJsonPath('data.total_attempts', 5);
+    }
 }
