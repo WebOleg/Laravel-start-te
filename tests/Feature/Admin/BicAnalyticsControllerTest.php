@@ -488,4 +488,162 @@ class BicAnalyticsControllerTest extends TestCase
         $response->assertJsonPath('data.total_transactions', 1)
             ->assertJsonPath('data.total_volume', 50);
     }
+
+    public function test_bic_analytics_validates_date_range(): void
+    {
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/analytics/bic?start_date=invalid&end_date=2026-01-28');
+
+        $response->assertStatus(422);
+    }
+
+    public function test_bic_analytics_validates_end_date_after_start_date(): void
+    {
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/analytics/bic?start_date=2026-01-28&end_date=2026-01-01');
+
+        $response->assertStatus(422);
+    }
+
+    public function test_bic_analytics_handles_null_bic(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'bic' => null,
+        ]);
+
+        BillingAttempt::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'bic' => null,
+            'status' => BillingAttempt::STATUS_APPROVED,
+        ]);
+
+        // Create a valid BIC to compare
+        $debtor2 = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'bic' => 'RABONL2UXXX',
+        ]);
+
+        BillingAttempt::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor2->id,
+            'bic' => 'RABONL2UXXX',
+            'status' => BillingAttempt::STATUS_APPROVED,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/analytics/bic');
+
+        $response->assertStatus(200);
+        // Null BIC should not appear in results, only valid BICs
+        $bics = $response->json('data.bics');
+        $this->assertEquals(1, count($bics));
+        $this->assertEquals('RABONL2UXXX', $bics[0]['bic']);
+    }
+
+    public function test_bic_analytics_filters_high_risk_bics(): void
+    {
+        $upload = Upload::factory()->create();
+
+        // High risk BIC (60% chargeback)
+        $debtorHigh = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'bic' => 'BICHIGH60',
+        ]);
+        BillingAttempt::factory()->count(4)->create([
+            'debtor_id' => $debtorHigh->id,
+            'bic' => 'BICHIGH60',
+            'status' => BillingAttempt::STATUS_APPROVED,
+        ]);
+        BillingAttempt::factory()->count(6)->create([
+            'debtor_id' => $debtorHigh->id,
+            'bic' => 'BICHIGH60',
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+        ]);
+
+        // Low risk BIC (10% chargeback)
+        $debtorLow = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'bic' => 'BICLOW10',
+        ]);
+        BillingAttempt::factory()->count(9)->create([
+            'debtor_id' => $debtorLow->id,
+            'bic' => 'BICLOW10',
+            'status' => BillingAttempt::STATUS_APPROVED,
+        ]);
+        BillingAttempt::factory()->count(1)->create([
+            'debtor_id' => $debtorLow->id,
+            'bic' => 'BICLOW10',
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/analytics/bic');
+
+        $response->assertStatus(200);
+        $bics = $response->json('data.bics');
+        
+        // Find the high-risk BIC
+        $highRiskBic = collect($bics)->firstWhere('bic', 'BICHIGH60');
+        $this->assertTrue($highRiskBic['is_high_risk']);
+    }
+
+    public function test_bic_analytics_export_returns_csv_file(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'bic' => 'RABONL2UXXX',
+        ]);
+
+        BillingAttempt::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'bic' => 'RABONL2UXXX',
+            'status' => BillingAttempt::STATUS_APPROVED,
+            'amount' => 100,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->get('/api/admin/analytics/bic/export');
+
+        $response->assertStatus(200);
+        $this->assertStringContainsString('text/csv', $response->headers->get('content-type'));
+        $this->assertStringContainsString('bic_analytics', $response->headers->get('content-disposition'));
+    }
+
+    public function test_bic_analytics_export_respects_period_filter(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'bic' => 'RABONL2UXXX',
+        ]);
+
+        BillingAttempt::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'bic' => 'RABONL2UXXX',
+            'status' => BillingAttempt::STATUS_APPROVED,
+            'created_at' => now()->subDays(5),
+        ]);
+
+        BillingAttempt::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'bic' => 'RABONL2UXXX',
+            'status' => BillingAttempt::STATUS_APPROVED,
+            'created_at' => now()->subDays(15),
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->get('/api/admin/analytics/bic/export?period=7d');
+
+        $response->assertStatus(200);
+        $this->assertStringContainsString('text/csv', $response->headers->get('content-type'));
+        // Verify the filename includes the period
+        $this->assertStringContainsString('7d', $response->headers->get('content-disposition'));
+    }
 }
