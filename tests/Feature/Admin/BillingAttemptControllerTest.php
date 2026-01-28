@@ -236,4 +236,164 @@ class BillingAttemptControllerTest extends TestCase
         $response->assertStatus(200);
         $this->assertCount(1, $response->json('data'));
     }
+
+    public function test_retry_returns_422_if_not_retryable(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'iban' => 'DE89370400440532013000',
+            'iban_hash' => hash('sha256', 'DE89370400440532013000'),
+        ]);
+
+        $attempt = BillingAttempt::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'status' => BillingAttempt::STATUS_APPROVED,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->postJson('/api/admin/billing-attempts/' . $attempt->id . '/retry');
+
+        $response->assertStatus(422)
+            ->assertJsonPath('message', 'This billing attempt cannot be retried');
+    }
+
+    public function test_retry_requires_authentication(): void
+    {
+        $attempt = BillingAttempt::factory()->create([
+            'status' => BillingAttempt::STATUS_DECLINED,
+        ]);
+
+        $response = $this->postJson('/api/admin/billing-attempts/' . $attempt->id . '/retry');
+
+        $response->assertStatus(401);
+    }
+
+    public function test_index_pagination(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
+        BillingAttempt::factory()->count(35)->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/billing-attempts?per_page=20');
+
+        $response->assertStatus(200)
+            ->assertJsonPath('meta.current_page', 1)
+            ->assertJsonPath('meta.total', 35);
+
+        $data = $response->json('data');
+        $this->assertCount(20, $data);
+    }
+
+    public function test_index_pagination_second_page(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
+        BillingAttempt::factory()->count(35)->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/billing-attempts?per_page=20&page=2');
+
+        $response->assertStatus(200)
+            ->assertJsonPath('meta.current_page', 2);
+
+        $data = $response->json('data');
+        $this->assertCount(15, $data);
+    }
+
+    public function test_index_filters_by_combined_status_and_debtor(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor1 = Debtor::factory()->create(['upload_id' => $upload->id]);
+        $debtor2 = Debtor::factory()->create(['upload_id' => $upload->id]);
+
+        BillingAttempt::factory()->count(2)->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor1->id,
+            'status' => BillingAttempt::STATUS_APPROVED,
+        ]);
+        BillingAttempt::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor1->id,
+            'status' => BillingAttempt::STATUS_DECLINED,
+        ]);
+        BillingAttempt::factory()->count(2)->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor2->id,
+            'status' => BillingAttempt::STATUS_APPROVED,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/billing-attempts?debtor_id=' . $debtor1->id . '&status=approved');
+
+        $response->assertStatus(200);
+        $data = $response->json('data');
+        $this->assertCount(2, $data);
+        $this->assertTrue(collect($data)->every(fn($item) => $item['status'] === 'approved'));
+    }
+
+    public function test_index_search_finds_by_unique_id(): void
+    {
+        BillingAttempt::factory()->create(['unique_id' => 'UNIQUE_SEARCH_123']);
+        BillingAttempt::factory()->create(['unique_id' => 'OTHER_UNIQUE_456']);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/billing-attempts?search=SEARCH_123');
+
+        $response->assertStatus(200);
+        $data = $response->json('data');
+
+        $this->assertCount(1, $data);
+        $this->assertEquals('UNIQUE_SEARCH_123', $data[0]['unique_id']);
+    }
+
+    public function test_index_search_finds_by_debtor_email(): void
+    {
+        $debtor = Debtor::factory()->create(['email' => 'findme@example.com']);
+        BillingAttempt::factory()->create(['debtor_id' => $debtor->id]);
+
+        BillingAttempt::factory()->create(); // Random other
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/billing-attempts?search=findme@example.com');
+
+        $response->assertStatus(200);
+        $this->assertCount(1, $response->json('data'));
+    }
+
+    public function test_show_loads_relationships(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
+        $attempt = BillingAttempt::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/billing-attempts/' . $attempt->id);
+
+        $response->assertStatus(200)
+            ->assertJsonStructure([
+                'data' => [
+                    'id',
+                    'debtor_id',
+                    'upload_id',
+                    'debtor',
+                    'transaction_id',
+                    'amount',
+                    'status',
+                    'can_retry',
+                    'is_approved',
+                ]
+            ]);
+    }
 }

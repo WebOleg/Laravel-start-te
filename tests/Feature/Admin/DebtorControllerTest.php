@@ -509,4 +509,213 @@ class DebtorControllerTest extends TestCase
         // Should be NULL (Bill Immediately), because calculated date (Last Success + 6mo) is in the past
         $this->assertNull($debtor->debtorProfile->next_bill_at);
     }
+
+    public function test_index_search_finds_by_debtor_name(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'first_name' => 'Markus',
+            'last_name' => 'Weber',
+        ]);
+        Debtor::factory()->create(['upload_id' => $upload->id]); // Random other
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/debtors?search=Markus');
+
+        $response->assertStatus(200);
+        $data = $response->json('data');
+        $this->assertCount(1, $data);
+        $this->assertEquals('Markus', $data[0]['first_name']);
+    }
+
+    public function test_index_search_finds_by_email(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'email' => 'testuser@example.com',
+        ]);
+        Debtor::factory()->create(['upload_id' => $upload->id]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/debtors?search=testuser@example.com');
+
+        $response->assertStatus(200);
+        $data = $response->json('data');
+        $this->assertCount(1, $data);
+        $this->assertEquals('testuser@example.com', $data[0]['email']);
+    }
+
+    public function test_index_search_finds_by_iban(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'iban' => 'AT611904300234573201',
+        ]);
+        Debtor::factory()->create(['upload_id' => $upload->id]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/debtors?search=AT611904300234573201');
+
+        $response->assertStatus(200);
+        $data = $response->json('data');
+        $this->assertCount(1, $data);
+    }
+
+    public function test_index_pagination(): void
+    {
+        $upload = Upload::factory()->create();
+        Debtor::factory()->count(75)->create(['upload_id' => $upload->id]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/debtors?per_page=50');
+
+        $response->assertStatus(200)
+            ->assertJsonPath('meta.current_page', 1)
+            ->assertJsonPath('meta.total', 75);
+
+        $data = $response->json('data');
+        $this->assertCount(50, $data);
+    }
+
+    public function test_index_pagination_second_page(): void
+    {
+        $upload = Upload::factory()->create();
+        Debtor::factory()->count(75)->create(['upload_id' => $upload->id]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/debtors?per_page=50&page=2');
+
+        $response->assertStatus(200)
+            ->assertJsonPath('meta.current_page', 2);
+
+        $data = $response->json('data');
+        $this->assertCount(25, $data);
+    }
+
+    public function test_index_filters_by_risk_class(): void
+    {
+        $upload = Upload::factory()->create();
+        Debtor::factory()->create(['upload_id' => $upload->id, 'risk_class' => 'high']);
+        Debtor::factory()->create(['upload_id' => $upload->id, 'risk_class' => 'low']);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/debtors?risk_class=high');
+
+        $response->assertStatus(200);
+        $data = $response->json('data');
+        $this->assertCount(1, $data);
+        $this->assertEquals('high', $data[0]['risk_class']);
+    }
+
+    public function test_index_filters_by_combined_status_and_country(): void
+    {
+        $upload = Upload::factory()->create();
+        Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'status' => Debtor::STATUS_PENDING,
+            'country' => 'DE',
+        ]);
+        Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'status' => Debtor::STATUS_RECOVERED,
+            'country' => 'DE',
+        ]);
+        Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'status' => Debtor::STATUS_PENDING,
+            'country' => 'AT',
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/debtors?status=pending&country=DE');
+
+        $response->assertStatus(200);
+        $data = $response->json('data');
+        $this->assertCount(1, $data);
+        $this->assertEquals('DE', $data[0]['country']);
+        $this->assertEquals('pending', $data[0]['status']);
+    }
+
+    public function test_update_requires_authentication(): void
+    {
+        $debtor = Debtor::factory()->create();
+
+        $response = $this->putJson('/api/admin/debtors/' . $debtor->id, [
+            'raw_data' => ['first_name' => 'Updated'],
+        ]);
+
+        $response->assertStatus(401);
+    }
+
+    public function test_validate_requires_authentication(): void
+    {
+        $debtor = Debtor::factory()->create();
+
+        $response = $this->postJson('/api/admin/debtors/' . $debtor->id . '/validate');
+
+        $response->assertStatus(401);
+    }
+
+    public function test_destroy_requires_authentication(): void
+    {
+        $debtor = Debtor::factory()->create();
+
+        $response = $this->deleteJson('/api/admin/debtors/' . $debtor->id);
+
+        $response->assertStatus(401);
+    }
+
+    public function test_update_modifies_email(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'email' => 'old@example.com',
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->putJson('/api/admin/debtors/' . $debtor->id, [
+                'email' => 'new@example.com',
+            ]);
+
+        $response->assertStatus(200)
+            ->assertJsonPath('data.email', 'new@example.com');
+    }
+
+    public function test_update_modifies_status(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'status' => Debtor::STATUS_PENDING,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->putJson('/api/admin/debtors/' . $debtor->id, [
+                'status' => Debtor::STATUS_RECOVERED,
+            ]);
+
+        $response->assertStatus(200)
+            ->assertJsonPath('data.status', 'recovered');
+    }
+
+    public function test_update_modifies_risk_class(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'risk_class' => 'low',
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->putJson('/api/admin/debtors/' . $debtor->id, [
+                'risk_class' => 'high',
+            ]);
+
+        $response->assertStatus(200)
+            ->assertJsonPath('data.risk_class', 'high');
+    }
 }
