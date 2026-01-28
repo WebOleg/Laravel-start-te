@@ -10,6 +10,8 @@ use App\Models\Debtor;
 use App\Models\Upload;
 use App\Models\User;
 use App\Jobs\ProcessValidationJob;
+use App\Models\BillingAttempt;
+use App\Models\DebtorProfile;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
@@ -203,5 +205,200 @@ class UploadValidationTest extends TestCase
         $response = $this->getJson('/api/admin/uploads/' . $upload->id . '/validation-stats');
 
         $response->assertStatus(401);
+    }
+
+    public function test_debtors_endpoint_filters_by_debtor_type_legacy(): void
+    {
+        $upload = Upload::factory()->create();
+        
+        // Legacy debtor (no profile)
+        Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'first_name' => 'Legacy',
+            'debtor_profile_id' => null,
+        ]);
+        
+        // Flywheel debtor
+        $flywheelProfile = DebtorProfile::factory()->create(['billing_model' => DebtorProfile::MODEL_FLYWHEEL]);
+        Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'first_name' => 'Flywheel',
+            'debtor_profile_id' => $flywheelProfile->id,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/uploads/' . $upload->id . '/debtors?debtor_type=legacy');
+
+        $response->assertStatus(200)
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.first_name', 'Legacy');
+    }
+
+    public function test_debtors_endpoint_filters_by_debtor_type_flywheel(): void
+    {
+        $upload = Upload::factory()->create();
+        
+        $flywheelProfile = DebtorProfile::factory()->create(['billing_model' => DebtorProfile::MODEL_FLYWHEEL]);
+        Debtor::factory()->count(2)->create([
+            'upload_id' => $upload->id,
+            'debtor_profile_id' => $flywheelProfile->id,
+        ]);
+        
+        $recoveryProfile = DebtorProfile::factory()->create(['billing_model' => DebtorProfile::MODEL_RECOVERY]);
+        Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_profile_id' => $recoveryProfile->id,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/uploads/' . $upload->id . '/debtors?debtor_type=flywheel');
+
+        $response->assertStatus(200)
+            ->assertJsonCount(2, 'data');
+    }
+
+    public function test_debtors_endpoint_filters_by_debtor_type_recovery(): void
+    {
+        $upload = Upload::factory()->create();
+        
+        $recoveryProfile = DebtorProfile::factory()->create(['billing_model' => DebtorProfile::MODEL_RECOVERY]);
+        Debtor::factory()->count(3)->create([
+            'upload_id' => $upload->id,
+            'debtor_profile_id' => $recoveryProfile->id,
+        ]);
+        
+        $flywheelProfile = DebtorProfile::factory()->create(['billing_model' => DebtorProfile::MODEL_FLYWHEEL]);
+        Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_profile_id' => $flywheelProfile->id,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/uploads/' . $upload->id . '/debtors?debtor_type=recovery');
+
+        $response->assertStatus(200)
+            ->assertJsonCount(3, 'data');
+    }
+
+    public function test_debtors_endpoint_exclude_chargebacked(): void
+    {
+        $upload = Upload::factory()->create();
+        
+        $debtor1 = Debtor::factory()->create(['upload_id' => $upload->id, 'first_name' => 'Chargebacked']);
+        $debtor2 = Debtor::factory()->create(['upload_id' => $upload->id, 'first_name' => 'Clean']);
+        
+        $debtor1->billingAttempts()->create([
+            'upload_id' => $upload->id,
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'amount' => 100,
+            'currency' => 'EUR',
+            'transaction_id' => 'TXN1',
+            'reference' => 'REF1',
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/uploads/' . $upload->id . '/debtors?exclude_chargebacked=true');
+
+        $response->assertStatus(200)
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.first_name', 'Clean');
+    }
+
+    public function test_debtors_endpoint_search_by_first_name(): void
+    {
+        $upload = Upload::factory()->create();
+        Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'first_name' => 'Alexander',
+            'last_name' => 'Schmidt',
+        ]);
+        Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'first_name' => 'Benjamin',
+            'last_name' => 'Mueller',
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/uploads/' . $upload->id . '/debtors?search=Alexander');
+
+        $response->assertStatus(200)
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.first_name', 'Alexander');
+    }
+
+    public function test_debtors_endpoint_search_by_iban(): void
+    {
+        $upload = Upload::factory()->create();
+        Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'iban' => 'DE89370400440532013000',
+            'first_name' => 'John',
+        ]);
+        Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'iban' => 'FR7630006000011234567890189',
+            'first_name' => 'Jane',
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/uploads/' . $upload->id . '/debtors?search=DE89');
+
+        $response->assertStatus(200)
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.first_name', 'John');
+    }
+
+    public function test_debtors_endpoint_multiple_filters(): void
+    {
+        $upload = Upload::factory()->create();
+        
+        $flywheelProfile = DebtorProfile::factory()->create(['billing_model' => DebtorProfile::MODEL_FLYWHEEL]);
+        Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'first_name' => 'Valid Flywheel',
+            'debtor_profile_id' => $flywheelProfile->id,
+            'validation_status' => Debtor::VALIDATION_VALID,
+        ]);
+        Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'first_name' => 'Invalid Flywheel',
+            'debtor_profile_id' => $flywheelProfile->id,
+            'validation_status' => Debtor::VALIDATION_INVALID,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/uploads/' . $upload->id . '/debtors?debtor_type=flywheel&validation_status=valid');
+
+        $response->assertStatus(200)
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.first_name', 'Valid Flywheel');
+    }
+
+    public function test_debtors_endpoint_pagination(): void
+    {
+        $upload = Upload::factory()->create();
+        Debtor::factory()->count(60)->create(['upload_id' => $upload->id]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/uploads/' . $upload->id . '/debtors?per_page=30');
+
+        $response->assertStatus(200)
+            ->assertJsonCount(30, 'data')
+            ->assertJsonPath('meta.total', 60)
+            ->assertJsonPath('meta.current_page', 1);
+    }
+
+    public function test_validate_endpoint_already_processing_returns_200(): void
+    {
+        $upload = Upload::factory()->create(['status' => Upload::STATUS_COMPLETED]);
+        $upload->validation_status = Upload::JOB_PROCESSING;
+        $upload->validation_batch_id = 'batch-123';
+        $upload->save();
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->postJson('/api/admin/uploads/' . $upload->id . '/validate');
+
+        $response->assertStatus(200)
+            ->assertJsonPath('status', 'processing');
     }
 }
