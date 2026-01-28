@@ -5,10 +5,18 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\StoreDescriptorRequest;
 use App\Models\TransactionDescriptor;
+use App\Services\DescriptorService;
 use Illuminate\Http\JsonResponse;
 
 class DescriptorController extends Controller
 {
+    protected DescriptorService $service;
+
+    public function __construct(DescriptorService $service)
+    {
+        $this->service = $service;
+    }
+
     /**
      * @return JsonResponse
      */
@@ -16,9 +24,9 @@ class DescriptorController extends Controller
     {
         // Default first, then by date ascending
         $descriptors = TransactionDescriptor::orderByDesc('is_default')
-            ->orderBy('year')
-            ->orderBy('month')
-            ->get();
+                                            ->orderBy('year')
+                                            ->orderBy('month')
+                                            ->get();
 
         return response()->json($descriptors);
     }
@@ -29,7 +37,8 @@ class DescriptorController extends Controller
      */
     public function store(StoreDescriptorRequest $request): JsonResponse
     {
-        $this->handleDefaultToggle($request->is_default);
+        // 2. Use the Service for business logic
+        $this->service->ensureSingleDefault($request->is_default);
 
         $descriptor = TransactionDescriptor::create($request->validated());
 
@@ -43,7 +52,8 @@ class DescriptorController extends Controller
      */
     public function update(StoreDescriptorRequest $request, TransactionDescriptor $descriptor): JsonResponse
     {
-        $this->handleDefaultToggle($request->is_default, $descriptor->id);
+        // 2. Use the Service (passing the ID to ignore self)
+        $this->service->ensureSingleDefault($request->is_default, $descriptor->id);
 
         $descriptor->update($request->validated());
 
@@ -58,21 +68,5 @@ class DescriptorController extends Controller
     {
         $descriptor->delete();
         return response()->json(['message' => 'Deleted successfully']);
-    }
-
-    /**
-     * If setting a new default, un-set any existing default.
-     *
-     * @param bool $isNewDefault
-     * @param int|null $ignoreId
-     * @return void
-     */
-    private function handleDefaultToggle(bool $isNewDefault, ?int $ignoreId = null): void
-    {
-        if ($isNewDefault) {
-            TransactionDescriptor::where('is_default', true)
-                                 ->when($ignoreId, fn($q) => $q->where('id', '!=', $ignoreId))
-                                 ->update(['is_default' => false]);
-        }
     }
 }
