@@ -28,21 +28,20 @@ class DescriptorControllerTest extends TestCase
 
     public function test_descriptors_require_authentication(): void
     {
-        $this->getJson('/api/admin/descriptors')->assertStatus(401);
+        $this->getJson('/api/admin/billing/descriptors')->assertStatus(401);
     }
 
     public function test_index_returns_ordered_descriptors(): void
     {
-        // One non-default for 2024
         TransactionDescriptor::factory()->create(['year' => 2024, 'month' => 1, 'is_default' => false]);
-        // One default (should come first)
         TransactionDescriptor::factory()->create(['year' => 2025, 'month' => 1, 'is_default' => true]);
 
-        $response = $this->withHeaders($this->authHeaders())->getJson('/api/admin/descriptors');
+        $response = $this->withHeaders($this->authHeaders())->getJson('/api/admin/billing/descriptors');
 
         $response->assertStatus(200);
-        $this->assertTrue((bool) $response->json('0.is_default'));
-        $this->assertFalse((bool) $response->json('1.is_default'));
+
+        $this->assertTrue((bool) $response->json('data.0.is_default'));
+        $this->assertFalse((bool) $response->json('data.1.is_default'));
     }
 
     public function test_store_creates_descriptor_and_handles_default_toggle(): void
@@ -59,13 +58,12 @@ class DescriptorControllerTest extends TestCase
         ];
 
         $response = $this->withHeaders($this->authHeaders())
-            ->postJson('/api/admin/descriptors', $payload);
+            ->postJson('/api/admin/billing/descriptors', $payload);
 
         $response->assertStatus(201)
-            ->assertJsonPath('descriptor_name', 'TETHER TEST')
-            ->assertJsonPath('is_default', true);
+            ->assertJsonPath('data.descriptor_name', 'TETHER TEST')
+            ->assertJsonPath('data.is_default', true);
 
-        // Verify the old one is no longer default
         $this->assertDatabaseHas('transaction_descriptors', [
             'id' => $existingDefault->id,
             'is_default' => false,
@@ -85,7 +83,7 @@ class DescriptorControllerTest extends TestCase
         ];
 
         $response = $this->withHeaders($this->authHeaders())
-            ->putJson("/api/admin/descriptors/{$target->id}", $payload);
+            ->putJson("/api/admin/billing/descriptors/{$target->id}", $payload);
 
         $response->assertStatus(200);
 
@@ -100,7 +98,7 @@ class DescriptorControllerTest extends TestCase
         $descriptor = TransactionDescriptor::factory()->create();
 
         $this->withHeaders($this->authHeaders())
-            ->deleteJson("/api/admin/descriptors/{$descriptor->id}")
+            ->deleteJson("/api/admin/billing/descriptors/{$descriptor->id}")
             ->assertStatus(200);
 
         $this->assertDatabaseMissing('transaction_descriptors', ['id' => $descriptor->id]);

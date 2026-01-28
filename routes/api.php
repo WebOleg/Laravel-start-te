@@ -78,7 +78,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::apiResource('vop-logs', AdminVopLogController::class)->only(['index', 'show']);
         Route::apiResource('billing-attempts', AdminBillingAttemptController::class)->only(['index', 'show']);
 
-        Route::apiResource('descriptors', DescriptorController::class);
+        Route::apiResource('billing/descriptors', DescriptorController::class);
     });
 });
 
