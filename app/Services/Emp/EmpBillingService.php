@@ -10,6 +10,7 @@ use App\Models\BillingAttempt;
 use App\Models\Debtor;
 use App\Models\DebtorProfile;
 use App\Models\Upload;
+use App\Services\DescriptorService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -18,13 +19,15 @@ use Carbon\Carbon;
 class EmpBillingService
 {
     private EmpClient $client;
+    private DescriptorService $descriptorService;
     private int $requestsPerSecond;
     private int $maxRetries;
     private int $retryDelayMs;
 
-    public function __construct(EmpClient $client)
+    public function __construct(EmpClient $client, DescriptorService $descriptorService)
     {
         $this->client = $client;
+        $this->descriptorService = $descriptorService;
         $this->requestsPerSecond = config('services.emp.rate_limit.requests_per_second', 50);
         $this->maxRetries = config('services.emp.rate_limit.max_retries', 3);
         $this->retryDelayMs = config('services.emp.rate_limit.retry_delay_ms', 1000);
@@ -313,7 +316,7 @@ class EmpBillingService
      */
     private function buildRequestPayload(Debtor $debtor, string $transactionId, ?string $notificationUrl, float $amount): array
     {
-        return [
+        $payload = [
             'transaction_id' => $transactionId,
             'amount' => $amount,
             'currency' => 'EUR',
@@ -324,6 +327,28 @@ class EmpBillingService
             'usage' => "Debt recovery - {$debtor->id}",
             'notification_url' => $notificationUrl ?? config('app.url') . '/api/webhooks/emp',
         ];
+
+        $descriptor = $this->descriptorService->getActiveDescriptor(now());
+
+        if ($descriptor) {
+            // filter removes nulls (e.g. if city/country are not set)
+            $params = array_filter([
+                'merchant_name'    => $descriptor->descriptor_name,
+                'merchant_city'    => $descriptor->descriptor_city,
+                'merchant_country' => $descriptor->descriptor_country,
+            ]);
+
+            if (!empty($params)) {
+                $payload['dynamic_descriptor_params'] = $params;
+
+                Log::info('Injecting dynamic descriptor', [
+                    'transaction_id' => $transactionId,
+                    'descriptor' => $params['merchant_name']
+                ]);
+            }
+        }
+
+        return $payload;
     }
 
     private function updateBillingAttempt(BillingAttempt $billingAttempt, array $response): void
