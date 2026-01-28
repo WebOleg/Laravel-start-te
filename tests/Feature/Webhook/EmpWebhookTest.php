@@ -333,4 +333,358 @@ class EmpWebhookTest extends TestCase
         $this->assertNotNull($event->ip_address);
         $this->assertIsArray($event->payload);
     }
+
+    // Edge Case Tests
+    
+    public function test_missing_unique_id_still_returns_xml(): void
+    {
+        $response = $this->post(
+            $this->webhookUrl(),
+            ['event' => 'chargeback', 'status' => 'chargebacked'],
+            ['Content-Type' => 'application/x-www-form-urlencoded']
+        );
+
+        $response->assertOk();
+        $response->assertHeader('Content-Type', 'application/xml');
+        $content = $response->getContent();
+        $this->assertStringContainsString('<notification_echo>', $content);
+    }
+
+    public function test_empty_unique_id_still_returns_xml(): void
+    {
+        $response = $this->postWebhook(['unique_id' => '']);
+
+        $response->assertOk();
+        $response->assertHeader('Content-Type', 'application/xml');
+    }
+
+    public function test_null_signature_rejected(): void
+    {
+        $uniqueId = 'no_sig_' . uniqid();
+
+        $response = $this->post(
+            $this->webhookUrl(),
+            [
+                'unique_id' => $uniqueId,
+                'event' => 'chargeback',
+                'status' => 'chargebacked',
+            ],
+            ['Content-Type' => 'application/x-www-form-urlencoded']
+        );
+
+        $response->assertOk();
+        $this->assertDatabaseHas('webhook_events', [
+            'unique_id' => $uniqueId,
+            'signature_valid' => false,
+        ]);
+    }
+
+    public function test_retrieval_request_event_queued(): void
+    {
+        Queue::fake();
+
+        $uniqueId = 'retrieval_' . uniqid();
+
+        $response = $this->postWebhook([
+            'unique_id' => $uniqueId,
+            'transaction_type' => 'sdd_sale',
+            'event' => 'retrieval_request',
+            'status' => 'retrieval_requested',
+            'signature' => $this->generateSignature($uniqueId),
+        ]);
+
+        $this->assertXmlEchoResponse($response, $uniqueId);
+        Queue::assertPushed(ProcessEmpWebhookJob::class);
+
+        $this->assertDatabaseHas('webhook_events', [
+            'unique_id' => $uniqueId,
+            'event_type' => 'retrieval_request',
+            'processing_status' => WebhookEvent::QUEUED,
+        ]);
+    }
+
+    public function test_sdd_init_recurring_sale_status_update(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
+
+        $uniqueId = 'sdd_init_' . uniqid();
+        $billingAttempt = BillingAttempt::create([
+            'debtor_id' => $debtor->id,
+            'upload_id' => $upload->id,
+            'transaction_id' => 'tx_init_recurring_123',
+            'unique_id' => $uniqueId,
+            'amount' => 100,
+            'status' => BillingAttempt::STATUS_PENDING,
+        ]);
+
+        $response = $this->postWebhook([
+            'unique_id' => $uniqueId,
+            'transaction_type' => 'sdd_init_recurring_sale',
+            'status' => 'approved',
+            'signature' => $this->generateSignature($uniqueId),
+        ]);
+
+        $this->assertXmlEchoResponse($response, $uniqueId);
+        $billingAttempt->refresh();
+        $this->assertEquals(BillingAttempt::STATUS_APPROVED, $billingAttempt->status);
+    }
+
+    public function test_sdd_recurring_sale_status_update(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
+
+        $uniqueId = 'sdd_recurring_' . uniqid();
+        $billingAttempt = BillingAttempt::create([
+            'debtor_id' => $debtor->id,
+            'upload_id' => $upload->id,
+            'transaction_id' => 'tx_recurring_123',
+            'unique_id' => $uniqueId,
+            'amount' => 100,
+            'status' => BillingAttempt::STATUS_PENDING,
+        ]);
+
+        $response = $this->postWebhook([
+            'unique_id' => $uniqueId,
+            'transaction_type' => 'sdd_recurring_sale',
+            'status' => 'declined',
+            'signature' => $this->generateSignature($uniqueId),
+        ]);
+
+        $this->assertXmlEchoResponse($response, $uniqueId);
+        $billingAttempt->refresh();
+        $this->assertEquals(BillingAttempt::STATUS_DECLINED, $billingAttempt->status);
+    }
+
+    public function test_webhook_with_extra_fields_handled_gracefully(): void
+    {
+        Queue::fake();
+
+        $uniqueId = 'extra_fields_' . uniqid();
+
+        $response = $this->postWebhook([
+            'unique_id' => $uniqueId,
+            'transaction_type' => 'sdd_sale',
+            'event' => 'chargeback',
+            'status' => 'chargebacked',
+            'signature' => $this->generateSignature($uniqueId),
+            'extra_field_1' => 'should be ignored',
+            'extra_field_2' => 'also ignored',
+            'custom_data' => json_encode(['nested' => 'data']),
+        ]);
+
+        $this->assertXmlEchoResponse($response, $uniqueId);
+        Queue::assertPushed(ProcessEmpWebhookJob::class);
+
+        $event = WebhookEvent::where('unique_id', $uniqueId)->first();
+        $this->assertIsArray($event->payload);
+        $this->assertArrayHasKey('extra_field_1', $event->payload);
+    }
+
+    public function test_chargeback_with_multiple_reason_codes(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
+
+        $reasonCodes = ['MD06', 'C05', 'R02', 'PIND'];
+        
+        foreach ($reasonCodes as $reasonCode) {
+            $uniqueId = 'chargeback_' . $reasonCode . '_' . uniqid();
+            $billingAttempt = BillingAttempt::create([
+                'debtor_id' => $debtor->id,
+                'upload_id' => $upload->id,
+                'transaction_id' => 'tx_' . $reasonCode,
+                'unique_id' => $uniqueId,
+                'amount' => 100,
+                'status' => BillingAttempt::STATUS_APPROVED,
+            ]);
+
+            $response = $this->postWebhook([
+                'unique_id' => $uniqueId,
+                'transaction_type' => 'sdd_sale',
+                'event' => 'chargeback',
+                'status' => 'chargebacked',
+                'reason_code' => $reasonCode,
+                'signature' => $this->generateSignature($uniqueId),
+            ]);
+
+            $this->assertXmlEchoResponse($response, $uniqueId);
+            
+            $billingAttempt->refresh();
+            $this->assertEquals($reasonCode, $billingAttempt->meta['chargeback']['reason_code']);
+        }
+    }
+
+    public function test_webhook_with_special_characters_in_unique_id(): void
+    {
+        Queue::fake();
+
+        $uniqueId = 'special_chars_' . uniqid() . '_!@#$%';
+
+        $response = $this->postWebhook([
+            'unique_id' => $uniqueId,
+            'transaction_type' => 'sdd_sale',
+            'event' => 'chargeback',
+            'status' => 'chargebacked',
+            'signature' => $this->generateSignature($uniqueId),
+        ]);
+
+        $this->assertXmlEchoResponse($response, $uniqueId);
+        Queue::assertPushed(ProcessEmpWebhookJob::class);
+    }
+
+    public function test_webhook_stores_ip_address(): void
+    {
+        Queue::fake();
+
+        $uniqueId = 'ip_test_' . uniqid();
+
+        $response = $this->postWebhook([
+            'unique_id' => $uniqueId,
+            'transaction_type' => 'sdd_sale',
+            'event' => 'chargeback',
+            'status' => 'chargebacked',
+            'signature' => $this->generateSignature($uniqueId),
+        ]);
+
+        $event = WebhookEvent::where('unique_id', $uniqueId)->first();
+        $this->assertNotNull($event->ip_address);
+        $this->assertIsString($event->ip_address);
+    }
+
+    public function test_webhook_stores_user_agent(): void
+    {
+        Queue::fake();
+
+        $uniqueId = 'ua_test_' . uniqid();
+
+        $response = $this->postWebhook([
+            'unique_id' => $uniqueId,
+            'transaction_type' => 'sdd_sale',
+            'event' => 'chargeback',
+            'status' => 'chargebacked',
+            'signature' => $this->generateSignature($uniqueId),
+        ]);
+
+        $event = WebhookEvent::where('unique_id', $uniqueId)->first();
+        $this->assertNotNull($event->user_agent);
+    }
+
+    public function test_chargebacked_status_with_declined_transaction_type(): void
+    {
+        Queue::fake();
+
+        $uniqueId = 'decline_chargeback_' . uniqid();
+
+        $response = $this->postWebhook([
+            'unique_id' => $uniqueId,
+            'transaction_type' => 'card_sale', // Non-SDD type
+            'status' => 'chargebacked',
+            'signature' => $this->generateSignature($uniqueId),
+        ]);
+
+        $this->assertXmlEchoResponse($response, $uniqueId);
+        // Chargebacked status should still queue due to fallback logic
+        Queue::assertPushed(ProcessEmpWebhookJob::class);
+    }
+
+    public function test_webhook_with_very_long_unique_id(): void
+    {
+        Queue::fake();
+
+        $uniqueId = 'long_id_' . str_repeat('x', 500) . '_' . uniqid();
+
+        $response = $this->postWebhook([
+            'unique_id' => $uniqueId,
+            'transaction_type' => 'sdd_sale',
+            'event' => 'chargeback',
+            'status' => 'chargebacked',
+            'signature' => $this->generateSignature($uniqueId),
+        ]);
+
+        $this->assertXmlEchoResponse($response, $uniqueId);
+        Queue::assertPushed(ProcessEmpWebhookJob::class);
+
+        $event = WebhookEvent::where('unique_id', $uniqueId)->first();
+        $this->assertNotNull($event);
+    }
+
+    public function test_missing_status_field_handled(): void
+    {
+        Queue::fake();
+
+        $uniqueId = 'no_status_' . uniqid();
+
+        $response = $this->postWebhook([
+            'unique_id' => $uniqueId,
+            'transaction_type' => 'sdd_sale',
+            'signature' => $this->generateSignature($uniqueId),
+            // status field is missing
+        ]);
+
+        $this->assertXmlEchoResponse($response, $uniqueId);
+        
+        $event = WebhookEvent::where('unique_id', $uniqueId)->first();
+        $this->assertNull($event->status);
+    }
+
+    public function test_webhook_event_creation_idempotent(): void
+    {
+        Queue::fake();
+
+        $uniqueId = 'idempotent_' . uniqid();
+
+        // Send same webhook 3 times
+        for ($i = 0; $i < 3; $i++) {
+            $response = $this->postWebhook([
+                'unique_id' => $uniqueId,
+                'transaction_type' => 'sdd_sale',
+                'event' => 'chargeback',
+                'status' => 'chargebacked',
+                'signature' => $this->generateSignature($uniqueId),
+            ]);
+
+            $this->assertXmlEchoResponse($response, $uniqueId);
+        }
+
+        // Only 1 job should be queued (from first webhook)
+        Queue::assertPushed(ProcessEmpWebhookJob::class, 1);
+        
+        // Only 1 event should exist in database
+        $this->assertDatabaseCount('webhook_events', 1);
+    }
+
+    public function test_chargeback_with_currency_field(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
+
+        $uniqueId = 'currency_test_' . uniqid();
+        $billingAttempt = BillingAttempt::create([
+            'debtor_id' => $debtor->id,
+            'upload_id' => $upload->id,
+            'transaction_id' => 'tx_currency_123',
+            'unique_id' => $uniqueId,
+            'amount' => 100,
+            'status' => BillingAttempt::STATUS_APPROVED,
+        ]);
+
+        $response = $this->postWebhook([
+            'unique_id' => $uniqueId,
+            'transaction_type' => 'sdd_sale',
+            'event' => 'chargeback',
+            'status' => 'chargebacked',
+            'reason_code' => 'MD06',
+            'currency' => 'EUR',
+            'amount' => 15000,
+            'signature' => $this->generateSignature($uniqueId),
+        ]);
+
+        $this->assertXmlEchoResponse($response, $uniqueId);
+
+        $billingAttempt->refresh();
+        $this->assertEquals(BillingAttempt::STATUS_CHARGEBACKED, $billingAttempt->status);
+        $this->assertArrayHasKey('chargeback', $billingAttempt->meta);
+    }
 }
