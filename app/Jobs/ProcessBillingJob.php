@@ -48,7 +48,7 @@ class ProcessBillingJob implements ShouldQueue, ShouldBeUnique
 
         $query = Debtor::where('upload_id', $uploadId)
             ->where('validation_status', Debtor::VALIDATION_VALID)
-            ->where('status', Debtor::STATUS_PENDING);
+            ->where('status', Debtor::STATUS_UPLOADED);
 
         // 1. Filter by Target Billing Model
         // Match debtors that have the requested Profile Model OR have No Profile at all.
@@ -87,12 +87,12 @@ class ProcessBillingJob implements ShouldQueue, ShouldBeUnique
 
         // Calculate exclusions for logging (Logic from main, adapted to HEAD status)
         $excludedCount = Debtor::where('upload_id', $uploadId)
-            ->where('validation_status', Debtor::VALIDATION_VALID)
-            ->where('status', Debtor::STATUS_PENDING)
-            ->whereHas('vopLogs', function ($q) {
-                $q->where('name_match', 'no');
-            })
-            ->count();
+                                ->where('validation_status', Debtor::VALIDATION_VALID)
+                                ->where('status', Debtor::STATUS_UPLOADED)
+                                ->whereHas('vopLogs', function ($q) {
+                                    $q->where('name_match', 'no');
+                                })
+                                ->count();
 
         if (empty($debtorIds)) {
             Log::info('ProcessBillingJob: no debtors to bill', [

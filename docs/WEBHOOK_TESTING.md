@@ -33,7 +33,7 @@ NEXT_PUBLIC_EMP_MERCHANT_PORTAL_URL=https://emp.staging.merchant.emerchantpay.ne
 #### Merchant Portal (Recommended)
 1. **Login URL:** https://emp.staging.merchant.emerchantpay.net
 2. **Username:** `admin-elariossodigitalltd-georgi`
-3. **Password:** `F6YJYydQfk!3Yvw`
+3. **Password:** `F6YJYydQfk!3Yvw1`
 
 #### Genesis Gateway API Portal
 1. **Login URL:** https://staging.gate.emerchantpay.net

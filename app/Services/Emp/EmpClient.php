@@ -52,7 +52,7 @@ class EmpClient
     {
         $this->initialize();
         $xml = $this->buildSddSaleXml($data);
-        
+
         return $this->sendRequest('/process/' . $this->terminalToken, $xml);
     }
 
@@ -63,7 +63,7 @@ class EmpClient
     {
         $this->initialize();
         $xml = $this->buildReconcileXml($uniqueId);
-        
+
         return $this->sendRequest('/reconcile/' . $this->terminalToken, $xml);
     }
 
@@ -74,7 +74,7 @@ class EmpClient
     {
         $this->initialize();
         $xml = $this->buildGetByDateXml($startDate, $endDate, $page);
-        
+
         return $this->sendRequest('/reconcile/by_date/' . $this->terminalToken, $xml);
     }
 
@@ -86,7 +86,7 @@ class EmpClient
     {
         $this->initialize();
         $xml = $this->buildChargebacksByDateXml($importDate, $page, $perPage);
-        
+
         return $this->sendRequest('/chargebacks/by_date', $xml);
     }
 
@@ -99,7 +99,7 @@ class EmpClient
         $xml->addChild('start_date', $startDate);
         $xml->addChild('end_date', $endDate);
         $xml->addChild('page', (string) $page);
-        
+
         return $xml->asXML();
     }
 
@@ -112,7 +112,7 @@ class EmpClient
         $xml->addChild('import_date', $importDate);
         $xml->addChild('page', (string) $page);
         $xml->addChild('per_page', (string) $perPage);
-        
+
         return $xml->asXML();
     }
 
@@ -123,9 +123,9 @@ class EmpClient
     private function buildSddSaleXml(array $data): string
     {
         $amount = (int) round($data['amount'] * 100);
-        
+
         $xml = new \SimpleXMLElement('<?xml version="1.0" encoding="UTF-8"?><payment_transaction/>');
-        
+
         $xml->addChild('transaction_type', 'sdd_sale');
         $xml->addChild('transaction_id', $data['transaction_id']);
         $xml->addChild('usage', $data['usage'] ?? 'Payment');
@@ -133,25 +133,49 @@ class EmpClient
         $xml->addChild('amount', (string) $amount);
         $xml->addChild('currency', $data['currency'] ?? 'EUR');
         $xml->addChild('iban', $data['iban']);
-        
+
         if (!empty($data['bic'])) {
             $xml->addChild('bic', $data['bic']);
         }
-        
+
         if (!empty($data['notification_url'])) {
             $xml->addChild('notification_url', $data['notification_url']);
         }
-        
+
         if (!empty($data['return_success_url'])) {
             $xml->addChild('return_success_url', $data['return_success_url']);
             $xml->addChild('return_failure_url', $data['return_failure_url'] ?? $data['return_success_url']);
             $xml->addChild('return_cancel_url', $data['return_cancel_url'] ?? $data['return_success_url']);
         }
-        
+
+
+        // dynamic descriptor params
+        if (!empty($data['dynamic_descriptor_params']) && is_array($data['dynamic_descriptor_params'])) {
+
+            $ddXml  = $xml->addChild('dynamic_descriptor_params');
+            $ddData = $data['dynamic_descriptor_params'];
+
+            // Map of allowed fields and their max length
+            $allowedFields = [
+                'merchant_name'    => 25,
+                'merchant_city'    => 13,
+                'merchant_country' => 3,
+                'merchant_url'     => 60,
+                'merchant_phone'   => 16,
+            ];
+
+            foreach ($allowedFields as $field => $maxLength) {
+                if (!empty($ddData[$field])) {
+                    $value = substr(trim($ddData[$field]), 0, $maxLength);
+                    $ddXml->addChild($field, $value);
+                }
+            }
+        }
+
         $billing = $xml->addChild('billing_address');
         $billing->addChild('first_name', $this->sanitizeName($data['first_name'] ?? ''));
         $billing->addChild('last_name', $this->sanitizeName($data['last_name'] ?? ''));
-        
+
         if (!empty($data['address'])) {
             $billing->addChild('address1', substr($data['address'], 0, 255));
         }
@@ -161,7 +185,7 @@ class EmpClient
         if (!empty($data['city'])) {
             $billing->addChild('city', $data['city']);
         }
-        
+
         $country = strtoupper(substr($data['iban'], 0, 2));
         $billing->addChild('country', $country);
 
@@ -175,7 +199,7 @@ class EmpClient
     {
         $xml = new \SimpleXMLElement('<?xml version="1.0" encoding="UTF-8"?><reconcile/>');
         $xml->addChild('unique_id', $uniqueId);
-        
+
         return $xml->asXML();
     }
 
@@ -251,7 +275,7 @@ class EmpClient
         }
 
         $body = $response->body();
-        
+
         try {
             $xml = new \SimpleXMLElement($body);
             return $this->xmlToArray($xml);
@@ -270,16 +294,16 @@ class EmpClient
     private function xmlToArray(\SimpleXMLElement $xml): array
     {
         $result = [];
-        
+
         foreach ($xml->attributes() as $attrName => $attrValue) {
             $result['@' . $attrName] = (string) $attrValue;
         }
-        
+
         $children = [];
         foreach ($xml->children() as $key => $value) {
             $children[$key][] = $value;
         }
-        
+
         foreach ($children as $key => $items) {
             if (count($items) === 1) {
                 $child = $items[0];
@@ -299,7 +323,7 @@ class EmpClient
                 }
             }
         }
-        
+
         return $result;
     }
 
@@ -309,7 +333,7 @@ class EmpClient
     private function sanitizeName(string $name): string
     {
         $name = preg_replace('/[^\p{L}\p{N}\s\-\'\.]/u', '', $name);
-        
+
         return substr(trim($name), 0, 35);
     }
 
@@ -320,7 +344,7 @@ class EmpClient
     {
         $this->initialize();
         $expected = hash('sha1', $uniqueId . $this->password);
-        
+
         return hash_equals($expected, $signature);
     }
 
