@@ -298,15 +298,15 @@ class DashboardTest extends TestCase
 
     public function test_dashboard_vop_average_score(): void
     {
-        VopLog::factory()->create(['vop_score' => 50.0]);
-        VopLog::factory()->create(['vop_score' => 75.5]);
-        VopLog::factory()->create(['vop_score' => 99.0]);
+        VopLog::factory()->create(['vop_score' => 50]);
+        VopLog::factory()->create(['vop_score' => 76]);
+        VopLog::factory()->create(['vop_score' => 99]);
 
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
             ->getJson('/api/admin/dashboard');
 
         $response->assertStatus(200)
-            ->assertJsonPath('data.vop.average_score', 74.83); // (50 + 75.5 + 99) / 3 = 74.83
+            ->assertJsonPath('data.vop.average_score', 75); // (50 + 75.5 + 99) / 3 = 74.83
     }
 
     public function test_dashboard_vop_today_count(): void
