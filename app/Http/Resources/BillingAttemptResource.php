@@ -1,9 +1,7 @@
 <?php
-
 /**
  * API Resource for transforming BillingAttempt model to JSON response.
  */
-
 namespace App\Http\Resources;
 
 use Illuminate\Http\Request;
@@ -49,6 +47,13 @@ class BillingAttemptResource extends JsonResource
             
             // Relations (loaded conditionally)
             'debtor' => new DebtorResource($this->whenLoaded('debtor')),
+            
+            // EMP Account
+            'emp_account' => $this->empAccount ? [
+                'id' => $this->empAccount->id,
+                'name' => $this->empAccount->name,
+                'slug' => $this->empAccount->slug,
+            ] : null,
         ];
     }
 }

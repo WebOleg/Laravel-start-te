@@ -1,5 +1,4 @@
 <?php
-
 namespace App\Http\Resources;
 
 use App\Services\IbanValidator;
@@ -34,6 +33,11 @@ class ChargebackResource extends JsonResource
                 'last_name' => $this->debtor->last_name,
                 'email' => $this->debtor->email,
                 'iban' => $this->debtor->iban ? $ibanValidator->mask($this->debtor->iban) : null,
+            ] : null,
+            'emp_account' => $this->empAccount ? [
+                'id' => $this->empAccount->id,
+                'name' => $this->empAccount->name,
+                'slug' => $this->empAccount->slug,
             ] : null,
         ];
     }
