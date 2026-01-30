@@ -24,14 +24,16 @@ class BicAnalyticsController extends Controller
             'start_date' => 'nullable|date',
             'end_date' => 'nullable|date|after_or_equal:start_date',
             'model' => 'nullable|string|in:' . implode(',', DebtorProfile::BILLING_MODELS),
+            'emp_account_id' => 'nullable|integer|exists:emp_accounts,id',
         ]);
 
         $period = $request->input('period', BicAnalyticsService::DEFAULT_PERIOD);
         $startDate = $request->input('start_date');
         $endDate = $request->input('end_date');
         $billingModel = $request->input('model');
+        $empAccountId = $request->input('emp_account_id');
 
-        $data = $this->bicAnalyticsService->getAnalytics($period, $startDate, $endDate, $billingModel);
+        $data = $this->bicAnalyticsService->getAnalytics($period, $startDate, $endDate, $billingModel, $empAccountId);
 
         return response()->json(['data' => $data]);
     }
@@ -44,12 +46,14 @@ class BicAnalyticsController extends Controller
         $request->validate([
             'period' => 'nullable|in:7d,30d,60d,90d',
             'model' => 'nullable|string|in:' . implode(',', DebtorProfile::BILLING_MODELS),
+            'emp_account_id' => 'nullable|integer|exists:emp_accounts,id',
         ]);
 
         $period = $request->input('period', BicAnalyticsService::DEFAULT_PERIOD);
         $billingModel = $request->input('model');
+        $empAccountId = $request->input('emp_account_id');
 
-        $data = $this->bicAnalyticsService->getBicSummary($bic, $period, $billingModel);
+        $data = $this->bicAnalyticsService->getBicSummary($bic, $period, $billingModel, $empAccountId);
 
         if (!$data) {
             return response()->json(['error' => 'BIC not found or no data'], 404);
@@ -78,17 +82,23 @@ class BicAnalyticsController extends Controller
             'start_date' => 'nullable|date',
             'end_date' => 'nullable|date|after_or_equal:start_date',
             'model' => 'nullable|string|in:' . implode(',', DebtorProfile::BILLING_MODELS),
+            'emp_account_id' => 'nullable|integer|exists:emp_accounts,id',
         ]);
 
         $period = $request->input('period', BicAnalyticsService::DEFAULT_PERIOD);
         $startDate = $request->input('start_date');
         $endDate = $request->input('end_date');
         $billingModel = $request->input('model');
+        $empAccountId = $request->input('emp_account_id');
 
-        $data = $this->bicAnalyticsService->getAnalytics($period, $startDate, $endDate, $billingModel);
+        $data = $this->bicAnalyticsService->getAnalytics($period, $startDate, $endDate, $billingModel, $empAccountId);
 
-        // Include model in filename if present
-        $prefix = $billingModel ? "bic_analytics_{$billingModel}_{$period}" : "bic_analytics_{$period}";
+        // Include model and account in filename if present
+        $parts = ['bic_analytics'];
+        if ($billingModel) $parts[] = $billingModel;
+        if ($empAccountId) $parts[] = "acc{$empAccountId}";
+        $parts[] = $period;
+        $prefix = implode('_', $parts);
         $filename = $prefix . '_' . now()->format('Ymd_His') . '.csv';
 
         return response()->streamDownload(function () use ($data) {
@@ -114,7 +124,7 @@ class BicAnalyticsController extends Controller
             foreach ($data['bics'] as $bic) {
                 fputcsv($handle, [
                     $bic['bic'],
-                    $bic['country'],
+                    $bic['bank_country'],
                     $bic['total_transactions'],
                     $bic['approved_count'],
                     $bic['declined_count'],

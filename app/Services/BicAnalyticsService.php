@@ -27,13 +27,14 @@ class BicAnalyticsService
         string $period = self::DEFAULT_PERIOD,
         ?string $startDate = null,
         ?string $endDate = null,
-        ?string $billingModel = null
+        ?string $billingModel = null,
+        ?int $empAccountId = null
     ): array
     {
-        $cacheKey = $this->buildCacheKey($period, $startDate, $endDate, $billingModel);
+        $cacheKey = $this->buildCacheKey($period, $startDate, $endDate, $billingModel, $empAccountId);
 
-        return Cache::remember($cacheKey, self::CACHE_TTL, function () use ($period, $startDate, $endDate, $billingModel) {
-            return $this->calculateAnalytics($period, $startDate, $endDate, $billingModel);
+        return Cache::remember($cacheKey, self::CACHE_TTL, function () use ($period, $startDate, $endDate, $billingModel, $empAccountId) {
+            return $this->calculateAnalytics($period, $startDate, $endDate, $billingModel, $empAccountId);
         });
     }
 
@@ -44,7 +45,8 @@ class BicAnalyticsService
         string $period,
         ?string $startDate = null,
         ?string $endDate = null,
-        ?string $billingModel = null
+        ?string $billingModel = null,
+        ?int $empAccountId = null
     ): array
     {
         [$start, $end] = $this->resolveDateRange($period, $startDate, $endDate);
@@ -57,6 +59,10 @@ class BicAnalyticsService
 
         if ($billingModel) {
             $query->where('billing_model', $billingModel);
+        }
+
+        if ($empAccountId) {
+            $query->where('emp_account_id', $empAccountId);
         }
 
         $query->groupBy('bic')
@@ -97,6 +103,7 @@ class BicAnalyticsService
         return [
             'period' => $period,
             'model' => $billingModel ?? 'all',
+            'emp_account_id' => $empAccountId,
             'start_date' => $start->toIso8601String(),
             'end_date' => $end->toIso8601String(),
             'threshold' => $threshold,
@@ -109,7 +116,7 @@ class BicAnalyticsService
     /**
      * Get summary for a specific BIC.
      */
-    public function getBicSummary(string $bic, string $period = self::DEFAULT_PERIOD, ?string $billingModel = null): ?array
+    public function getBicSummary(string $bic, string $period = self::DEFAULT_PERIOD, ?string $billingModel = null, ?int $empAccountId = null): ?array
     {
         [$start, $end] = $this->resolveDateRange($period, null, null);
 
@@ -119,6 +126,10 @@ class BicAnalyticsService
 
         if ($billingModel) {
             $query->where('billing_model', $billingModel);
+        }
+
+        if ($empAccountId) {
+            $query->where('emp_account_id', $empAccountId);
         }
 
         $result = $query->select([
@@ -150,7 +161,7 @@ class BicAnalyticsService
 
         foreach (self::PERIODS as $period) {
             foreach ($models as $model) {
-                $key = $this->buildCacheKey($period, null, null, $model);
+                $key = $this->buildCacheKey($period, null, null, $model, null);
                 Cache::forget($key);
             }
         }
@@ -160,15 +171,17 @@ class BicAnalyticsService
         string $period,
         ?string $startDate,
         ?string $endDate,
-        ?string $billingModel
+        ?string $billingModel,
+        ?int $empAccountId = null
     ): string
     {
         $suffix = $billingModel ? "_{$billingModel}" : "";
+        $accountSuffix = $empAccountId ? "_acc{$empAccountId}" : "";
 
         if ($startDate && $endDate) {
-            return "bic_analytics_custom_{$startDate}_{$endDate}{$suffix}";
+            return "bic_analytics_custom_{$startDate}_{$endDate}{$suffix}{$accountSuffix}";
         }
-        return "bic_analytics_{$period}{$suffix}";
+        return "bic_analytics_{$period}{$suffix}{$accountSuffix}";
     }
 
     private function resolveDateRange(string $period, ?string $startDate, ?string $endDate): array

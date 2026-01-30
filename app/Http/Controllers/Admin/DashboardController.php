@@ -23,41 +23,50 @@ class DashboardController extends Controller
         $request->validate([
             'month' => 'nullable|integer|min:1|max:12',
             'year' => 'nullable|integer|min:2020|max:2100',
+            'emp_account_id' => 'nullable|integer|exists:emp_accounts,id',
         ]);
 
         $month = $request->input('month');
         $year = $request->input('year');
+        $empAccountId = $request->input('emp_account_id');
 
         return response()->json([
             'data' => [
-                'uploads' => $this->getUploadStats(),
-                'debtors' => $this->getDebtorStats($month, $year),
+                'uploads' => $this->getUploadStats($empAccountId),
+                'debtors' => $this->getDebtorStats($month, $year, $empAccountId),
                 'vop' => $this->getVopStats(),
-                'billing' => $this->getBillingStats($month, $year),
-                'recent_activity' => $this->getRecentActivity(),
-                'trends' => $this->getTrends(),
+                'billing' => $this->getBillingStats($month, $year, $empAccountId),
+                'recent_activity' => $this->getRecentActivity($empAccountId),
+                'trends' => $this->getTrends($empAccountId),
                 'filters' => [
                     'month' => $month,
                     'year' => $year,
+                    'emp_account_id' => $empAccountId,
                 ],
             ],
         ]);
     }
 
-    private function getUploadStats(): array
+    private function getUploadStats(?int $empAccountId = null): array
     {
+        $query = Upload::query();
+        
+        if ($empAccountId) {
+            $query->where('emp_account_id', $empAccountId);
+        }
+
         return [
-            'total' => Upload::count(),
-            'pending' => Upload::where('status', Upload::STATUS_PENDING)->count(),
-            'processing' => Upload::where('status', Upload::STATUS_PROCESSING)->count(),
-            'completed' => Upload::where('status', Upload::STATUS_COMPLETED)->count(),
-            'failed' => Upload::where('status', Upload::STATUS_FAILED)->count(),
-            'today' => Upload::whereDate('created_at', today())->count(),
-            'this_week' => Upload::whereBetween('created_at', [now()->startOfWeek(), now()])->count(),
+            'total' => (clone $query)->count(),
+            'pending' => (clone $query)->where('status', Upload::STATUS_PENDING)->count(),
+            'processing' => (clone $query)->where('status', Upload::STATUS_PROCESSING)->count(),
+            'completed' => (clone $query)->where('status', Upload::STATUS_COMPLETED)->count(),
+            'failed' => (clone $query)->where('status', Upload::STATUS_FAILED)->count(),
+            'today' => (clone $query)->whereDate('created_at', today())->count(),
+            'this_week' => (clone $query)->whereBetween('created_at', [now()->startOfWeek(), now()])->count(),
         ];
     }
 
-    private function getDebtorStats(?int $month = null, ?int $year = null): array
+    private function getDebtorStats(?int $month = null, ?int $year = null, ?int $empAccountId = null): array
     {
         $startDate = null;
         $endDate = null;
@@ -70,6 +79,12 @@ class DashboardController extends Controller
         $billedQuery = BillingAttempt::query();
         $approvedQuery = BillingAttempt::where('status', BillingAttempt::STATUS_APPROVED);
         $chargebackedQuery = BillingAttempt::where('status', BillingAttempt::STATUS_CHARGEBACKED);
+
+        if ($empAccountId) {
+            $billedQuery->where('emp_account_id', $empAccountId);
+            $approvedQuery->where('emp_account_id', $empAccountId);
+            $chargebackedQuery->where('emp_account_id', $empAccountId);
+        }
 
         if ($startDate && $endDate) {
             // Use emp_created_at (real EMP transaction date) with fallback to created_at
@@ -133,7 +148,7 @@ class DashboardController extends Controller
         ];
     }
 
-    private function getBillingStats(?int $month = null, ?int $year = null): array
+    private function getBillingStats(?int $month = null, ?int $year = null, ?int $empAccountId = null): array
     {
         $startDate = null;
         $endDate = null;
@@ -145,6 +160,11 @@ class DashboardController extends Controller
 
         // Base queries with date filter using emp_created_at
         $baseQuery = BillingAttempt::query();
+        
+        if ($empAccountId) {
+            $baseQuery->where('emp_account_id', $empAccountId);
+        }
+        
         if ($startDate && $endDate) {
             $baseQuery->whereRaw('COALESCE(emp_created_at, created_at) BETWEEN ? AND ?', [$startDate, $endDate]);
         }
@@ -160,6 +180,12 @@ class DashboardController extends Controller
         $error = (clone $baseQuery)->where('status', BillingAttempt::STATUS_ERROR)->count();
         $voided = (clone $baseQuery)->where('status', BillingAttempt::STATUS_VOIDED)->count();
 
+        // Today query with emp_account filter
+        $todayQuery = BillingAttempt::whereRaw('DATE(COALESCE(emp_created_at, created_at)) = ?', [today()->toDateString()]);
+        if ($empAccountId) {
+            $todayQuery->where('emp_account_id', $empAccountId);
+        }
+
         return [
             'total_attempts' => $total,
             'by_status' => [
@@ -174,7 +200,7 @@ class DashboardController extends Controller
             'chargeback_rate' => $this->calculateRate($chargebacked, $successful + $chargebacked),
             'total_approved_amount' => round($totalAmount, 2),
             'total_chargeback_amount' => round($chargebackAmount, 2),
-            'today' => BillingAttempt::whereRaw('DATE(COALESCE(emp_created_at, created_at)) = ?', [today()->toDateString()])->count(),
+            'today' => $todayQuery->count(),
             'average_attempts_per_debtor' => round(
                 $total / max(Debtor::count(), 1),
                 2
@@ -182,39 +208,58 @@ class DashboardController extends Controller
         ];
     }
 
-    private function getRecentActivity(): array
+    private function getRecentActivity(?int $empAccountId = null): array
     {
+        $uploadsQuery = Upload::select('id', 'original_filename', 'status', 'total_records', 'created_at');
+        $billingQuery = BillingAttempt::select('id', 'debtor_id', 'status', 'amount', 'emp_created_at', 'created_at')
+            ->with('debtor:id,first_name,last_name');
+
+        if ($empAccountId) {
+            $uploadsQuery->where('emp_account_id', $empAccountId);
+            $billingQuery->where('emp_account_id', $empAccountId);
+        }
+
         return [
-            'recent_uploads' => Upload::select('id', 'original_filename', 'status', 'total_records', 'created_at')
+            'recent_uploads' => $uploadsQuery
                 ->latest()
                 ->limit(5)
                 ->get(),
-            'recent_billing' => BillingAttempt::select('id', 'debtor_id', 'status', 'amount', 'emp_created_at', 'created_at')
-                ->with('debtor:id,first_name,last_name')
+            'recent_billing' => $billingQuery
                 ->orderByRaw('COALESCE(emp_created_at, created_at) DESC')
                 ->limit(5)
                 ->get(),
         ];
     }
 
-    private function getTrends(): array
+    private function getTrends(?int $empAccountId = null): array
     {
         $days = 7;
         $trends = [];
 
         for ($i = $days - 1; $i >= 0; $i--) {
             $date = now()->subDays($i)->format('Y-m-d');
+            
+            $uploadsQuery = Upload::whereDate('created_at', $date);
+            $billingQuery = BillingAttempt::whereRaw('DATE(COALESCE(emp_created_at, created_at)) = ?', [$date]);
+            $successQuery = BillingAttempt::whereRaw('DATE(COALESCE(emp_created_at, created_at)) = ?', [$date])
+                ->where('status', BillingAttempt::STATUS_APPROVED);
+            $cbQuery = BillingAttempt::whereRaw('DATE(COALESCE(emp_created_at, created_at)) = ?', [$date])
+                ->where('status', BillingAttempt::STATUS_CHARGEBACKED);
+
+            if ($empAccountId) {
+                $uploadsQuery->where('emp_account_id', $empAccountId);
+                $billingQuery->where('emp_account_id', $empAccountId);
+                $successQuery->where('emp_account_id', $empAccountId);
+                $cbQuery->where('emp_account_id', $empAccountId);
+            }
+
             $trends[] = [
                 'date' => $date,
-                'uploads' => Upload::whereDate('created_at', $date)->count(),
+                'uploads' => $uploadsQuery->count(),
                 'debtors' => Debtor::whereDate('created_at', $date)->count(),
-                'billing_attempts' => BillingAttempt::whereRaw('DATE(COALESCE(emp_created_at, created_at)) = ?', [$date])->count(),
-                'successful_payments' => BillingAttempt::whereRaw('DATE(COALESCE(emp_created_at, created_at)) = ?', [$date])
-                    ->where('status', BillingAttempt::STATUS_APPROVED)
-                    ->count(),
-                'chargebacks' => BillingAttempt::whereRaw('DATE(COALESCE(emp_created_at, created_at)) = ?', [$date])
-                    ->where('status', BillingAttempt::STATUS_CHARGEBACKED)
-                    ->count(),
+                'billing_attempts' => $billingQuery->count(),
+                'successful_payments' => $successQuery->count(),
+                'chargebacks' => $cbQuery->count(),
             ];
         }
 
