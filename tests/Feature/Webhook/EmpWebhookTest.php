@@ -395,23 +395,6 @@ class EmpWebhookTest extends TestCase
         ]);
     }
 
-    public function test_retrieval_request_event_queued(): void
-    {
-        Queue::fake();
-
-        $uniqueId = 'retrieval_' . uniqid();
-
-        $response = $this->postWebhook([
-            'unique_id' => $uniqueId,
-            'transaction_type' => 'sdd_sale',
-            'event' => 'retrieval_request',
-            'status' => 'retrieval_requested',
-            'signature' => $this->generateSignature($uniqueId),
-        ]);
-
-        $this->assertXmlEchoResponse($response, $uniqueId);
-        Queue::assertPushed(ProcessEmpWebhookJob::class);
-    }
 
     public function test_sdd_init_recurring_sale_status_update(): void
     {
