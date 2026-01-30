@@ -27,6 +27,33 @@ class EmpClient
     private bool $initialized = false;
 
     /**
+     * Create client, optionally with a specific account.
+     */
+    public function __construct(?EmpAccount $account = null)
+    {
+        if ($account) {
+            $this->initializeWithAccount($account);
+        }
+    }
+
+    /**
+     * Initialize with a specific EmpAccount.
+     */
+    public function initializeWithAccount(EmpAccount $account): void
+    {
+        $this->timeout = config('services.emp.timeout', 30);
+        $this->connectTimeout = config('services.emp.connect_timeout', 10);
+
+        $this->endpoint = $account->endpoint;
+        $this->username = $account->username;
+        $this->password = $account->password;
+        $this->terminalToken = $account->terminal_token;
+        $this->empAccountId = $account->id;
+        $this->empAccountName = $account->name;
+        $this->initialized = true;
+    }
+
+    /**
      * Lazy load configuration on first use.
      * Prioritizes active EmpAccount, falls back to .env config.
      */

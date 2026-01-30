@@ -9,6 +9,7 @@ namespace App\Services\Emp;
 use App\Models\BillingAttempt;
 use App\Models\Debtor;
 use App\Models\DebtorProfile;
+use App\Models\EmpAccount;
 use App\Models\Upload;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -17,17 +18,49 @@ use Carbon\Carbon;
 
 class EmpBillingService
 {
-    private EmpClient $client;
+    private EmpClient $defaultClient;
     private int $requestsPerSecond;
     private int $maxRetries;
     private int $retryDelayMs;
 
     public function __construct(EmpClient $client)
     {
-        $this->client = $client;
+        $this->defaultClient = $client;
         $this->requestsPerSecond = config('services.emp.rate_limit.requests_per_second', 50);
         $this->maxRetries = config('services.emp.rate_limit.max_retries', 3);
         $this->retryDelayMs = config('services.emp.rate_limit.retry_delay_ms', 1000);
+    }
+
+    /**
+     * Get EmpClient for a debtor (uses upload's account if set).
+     */
+    private function getClientForDebtor(Debtor $debtor): EmpClient
+    {
+        $upload = $debtor->upload;
+        
+        if ($upload && $upload->emp_account_id) {
+            $account = $upload->empAccount;
+            if ($account) {
+                return new EmpClient($account);
+            }
+        }
+        
+        return $this->defaultClient;
+    }
+
+    /**
+     * Get EmpClient for an upload.
+     */
+    private function getClientForUpload(Upload $upload): EmpClient
+    {
+        if ($upload->emp_account_id) {
+            $account = $upload->empAccount;
+            if ($account) {
+                return new EmpClient($account);
+            }
+        }
+        
+        return $this->defaultClient;
     }
 
     /**
@@ -45,6 +78,9 @@ class EmpBillingService
         if (!$this->canBill($debtor, $billableAmount)) {
             throw new \InvalidArgumentException("Debtor {$debtor->id} cannot be billed");
         }
+
+        // Get the appropriate client for this debtor's upload
+        $client = $this->getClientForDebtor($debtor);
 
         $transactionId = $this->generateTransactionId($debtor);
 
@@ -66,14 +102,14 @@ class EmpBillingService
             'source' => $source,
             'attempt_number' => $this->getNextAttemptNumber($debtor),
             'bic' => $debtor->bic,
-            'mid_reference' => $this->client->getTerminalToken(),
-            'emp_account_id' => $this->client->getEmpAccountId(),
+            'mid_reference' => $client->getTerminalToken(),
+            'emp_account_id' => $client->getEmpAccountId(),
             'request_payload' => $payload,
         ]);
 
         $debtor->update(['status' => Debtor::STATUS_PENDING]);
 
-        $response = $this->client->sddSale($billingAttempt->request_payload);
+        $response = $client->sddSale($billingAttempt->request_payload);
 
         $this->updateBillingAttempt($billingAttempt, $response);
 
@@ -169,7 +205,16 @@ class EmpBillingService
             throw new \InvalidArgumentException('Billing attempt has no unique_id');
         }
 
-        $response = $this->client->reconcile($billingAttempt->unique_id);
+        // Use the account that was used for this billing attempt
+        $client = $this->defaultClient;
+        if ($billingAttempt->emp_account_id) {
+            $account = EmpAccount::find($billingAttempt->emp_account_id);
+            if ($account) {
+                $client = new EmpClient($account);
+            }
+        }
+
+        $response = $client->reconcile($billingAttempt->unique_id);
 
         if (isset($response['status'])) {
             $this->updateBillingAttempt($billingAttempt, $response);
