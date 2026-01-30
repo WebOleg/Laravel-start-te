@@ -331,6 +331,9 @@ class EmpBillingService
 
     private function buildRequestPayload(Debtor $debtor, string $transactionId, ?string $notificationUrl, float $amount): array
     {
+        $webhookToken = config('services.emp.webhook_token');
+        $defaultNotificationUrl = config('app.url') . '/api/webhooks/emp' . ($webhookToken ? '/' . $webhookToken : '');
+
         return [
             'transaction_id' => $transactionId,
             'amount' => $amount,
@@ -340,7 +343,7 @@ class EmpBillingService
             'last_name' => $debtor->last_name,
             'email' => $debtor->email ?? null,
             'usage' => "Debt recovery - {$debtor->id}",
-            'notification_url' => $notificationUrl ?? config('app.url') . '/api/webhooks/emp',
+            'notification_url' => $notificationUrl ?? $defaultNotificationUrl,
         ];
     }
 
