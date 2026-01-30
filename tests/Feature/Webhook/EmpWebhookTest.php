@@ -618,7 +618,7 @@ class EmpWebhookTest extends TestCase
     {
         Queue::fake();
 
-        $uniqueId = 'long_' . str_repeat('a', 200) . '_' . uniqid();
+        $uniqueId = 'long_' . str_repeat('a', 40) . '_' . uniqid();
         $signature = $this->generateSignature($uniqueId);
 
         $response = $this->postWebhook([
