@@ -8,6 +8,7 @@ namespace App\Services;
 
 use App\Enums\BillingModel;
 use App\Jobs\ProcessUploadJob;
+use App\Models\EmpAccount;
 use App\Models\Upload;
 use App\Traits\ParsesDebtorData;
 use Illuminate\Http\UploadedFile;
@@ -104,7 +105,8 @@ class FileUploadService
     public function processAsync(
         UploadedFile $file,
         ?int $userId = null,
-        BillingModel $billingModel = BillingModel::Legacy
+        BillingModel $billingModel = BillingModel::Legacy,
+        ?int $empAccountId = null
     ): array {
         $parsed = $this->parser->parse($file);
         $storedPath = $this->storeFile($file);
@@ -113,7 +115,8 @@ class FileUploadService
             $storedPath,
             $parsed['total_rows'],
             $userId,
-            $billingModel
+            $billingModel,
+            $empAccountId
         );
 
         $columnMapping = $this->buildColumnMapping($parsed['headers']);
@@ -138,7 +141,8 @@ class FileUploadService
     public function process(
         UploadedFile $file,
         ?int $userId = null,
-        BillingModel $billingModel = BillingModel::Legacy
+        BillingModel $billingModel = BillingModel::Legacy,
+        ?int $empAccountId = null
     ): array {
         $parsed = $this->parser->parse($file);
         $storedPath = $this->storeFile($file);
@@ -147,7 +151,8 @@ class FileUploadService
             $storedPath,
             $parsed['total_rows'],
             $userId,
-            $billingModel
+            $billingModel,
+            $empAccountId
         );
 
         $columnMapping = $this->buildColumnMapping($parsed['headers']);
@@ -212,8 +217,15 @@ class FileUploadService
         string $storedPath,
         int $totalRows,
         ?int $userId,
-        BillingModel $billingModel
+        BillingModel $billingModel,
+        ?int $empAccountId = null
     ): Upload {
+        // If no emp_account_id provided, use the active account
+        if ($empAccountId === null) {
+            $activeAccount = EmpAccount::getActive();
+            $empAccountId = $activeAccount?->id;
+        }
+
         return Upload::create([
             'filename' => basename($storedPath),
             'original_filename' => $file->getClientOriginalName(),
@@ -222,6 +234,7 @@ class FileUploadService
             'mime_type' => $file->getMimeType(),
             'status' => Upload::STATUS_PENDING,
             'billing_model' => $billingModel->value,
+            'emp_account_id' => $empAccountId,
             'total_records' => $totalRows,
             'processed_records' => 0,
             'failed_records' => 0,

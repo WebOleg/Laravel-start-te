@@ -1,15 +1,20 @@
 <?php
+
 /**
  * API resource for Upload model.
  */
+
 namespace App\Http\Resources;
+
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
+
 class UploadResource extends JsonResource
 {
     public function toArray(Request $request): array
     {
         $meta = $this->meta ?? [];
+
         return [
             'id' => $this->id,
             'filename' => $this->filename,
@@ -26,6 +31,19 @@ class UploadResource extends JsonResource
             'processing_completed_at' => $this->processing_completed_at?->toISOString(),
             'created_at' => $this->created_at->toISOString(),
             'updated_at' => $this->updated_at->toISOString(),
+
+            // EMP Account
+            'emp_account_id' => $this->emp_account_id,
+            'emp_account' => $this->when(
+                $this->relationLoaded('empAccount') && $this->empAccount,
+                fn() => [
+                    'id' => $this->empAccount->id,
+                    'name' => $this->empAccount->name,
+                    'slug' => $this->empAccount->slug,
+                ]
+            ),
+
+            // Counts
             'debtors_count' => $this->whenCounted('debtors'),
             'valid_count' => $this->when(isset($this->valid_count), $this->valid_count),
             'invalid_count' => $this->when(isset($this->invalid_count), $this->invalid_count),
@@ -36,6 +54,8 @@ class UploadResource extends JsonResource
             'chargeback_count' => $this->when(isset($this->chargeback_count), $this->chargeback_count),
             'approved_amount' => $this->when(isset($this->approved_amount), (float) $this->approved_amount),
             'chargeback_amount' => $this->when(isset($this->chargeback_amount), (float) $this->chargeback_amount),
+
+            // Percentages
             'cb_percentage' => $this->when(
                 isset($this->valid_count) && isset($this->chargeback_count),
                 function () {
@@ -55,8 +75,12 @@ class UploadResource extends JsonResource
                     return round(($this->chargeback_amount / $totalCharged) * 100, 2);
                 }
             ),
+
+            // Meta
             'skipped' => $this->when(isset($meta['skipped']), $meta['skipped'] ?? null),
             'skipped_rows' => $this->when(isset($meta['skipped_rows']), $meta['skipped_rows'] ?? null),
+
+            // Relations
             'uploader' => new UserResource($this->whenLoaded('uploader')),
             'is_deletable' => $this->isDeletable(),
         ];

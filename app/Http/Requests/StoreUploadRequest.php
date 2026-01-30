@@ -26,8 +26,8 @@ class StoreUploadRequest extends FormRequest
                 'max:51200',
                 'mimes:csv,txt,xlsx,xls',
             ],
-
             'billing_model' => ['sometimes', Rule::enum(BillingModel::class)],
+            'emp_account_id' => ['sometimes', 'nullable', 'integer', 'exists:emp_accounts,id'],
         ];
     }
 
@@ -38,6 +38,7 @@ class StoreUploadRequest extends FormRequest
             'file.file' => 'The upload must be a valid file.',
             'file.max' => 'File size cannot exceed 50MB.',
             'file.mimes' => 'Only CSV, TXT and Excel files (xlsx, xls) are allowed.',
+            'emp_account_id.exists' => 'Selected EMP account does not exist.',
         ];
     }
 }

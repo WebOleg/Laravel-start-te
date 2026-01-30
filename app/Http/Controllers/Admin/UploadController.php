@@ -38,7 +38,7 @@ class UploadController extends Controller
 
     public function index(Request $request): AnonymousResourceCollection
     {
-        $query = Upload::withCount([
+        $query = Upload::with('empAccount')->withCount([
             'debtors',
             'debtors as valid_count' => function ($q) {
                 $q->where('validation_status', Debtor::VALIDATION_VALID);
@@ -69,7 +69,7 @@ class UploadController extends Controller
 
     public function show(Upload $upload): UploadResource
     {
-        $upload->load(['uploader']);
+        $upload->load(['uploader', 'empAccount']);
         $upload->loadCount([
             'debtors',
             'debtors as valid_count' => function ($q) {
@@ -121,6 +121,8 @@ class UploadController extends Controller
                 $request->input('billing_model', BillingModel::Legacy->value)
             );
 
+            $empAccountId = $request->input('emp_account_id');
+
             $preValidation = $this->preValidationService->validate($file);
             if (!$preValidation['valid']) {
                 return response()->json([
@@ -135,7 +137,8 @@ class UploadController extends Controller
                 $result = $this->uploadService->processAsync(
                     $file,
                     $request->user()?->id,
-                    $billingModel
+                    $billingModel,
+                    $empAccountId
                 );
 
                 return response()->json([
@@ -150,7 +153,8 @@ class UploadController extends Controller
             $result = $this->uploadService->process(
                 $file,
                 $request->user()?->id,
-                $billingModel
+                $billingModel,
+                $empAccountId
             );
 
             return response()->json([

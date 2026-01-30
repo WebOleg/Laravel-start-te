@@ -39,9 +39,8 @@ class Upload extends Model
         'processing_completed_at',
         'uploaded_by',
         'meta',
-        // Merged from HEAD
         'billing_model',
-        // Merged from main
+        'emp_account_id',
         'validation_status',
         'validation_batch_id',
         'validation_started_at',
@@ -85,6 +84,11 @@ class Upload extends Model
         return $this->belongsTo(User::class, 'uploaded_by');
     }
 
+    public function empAccount(): BelongsTo
+    {
+        return $this->belongsTo(EmpAccount::class);
+    }
+
     public function debtors(): HasMany
     {
         return $this->hasMany(Debtor::class);
@@ -102,6 +106,19 @@ class Upload extends Model
         }
         $successful = $this->processed_records - $this->failed_records;
         return round(($successful / $this->processed_records) * 100, 1);
+    }
+
+    /**
+     * Get the EMP account to use for billing this upload.
+     * Falls back to system active account if not set.
+     */
+    public function getEffectiveEmpAccount(): ?EmpAccount
+    {
+        if ($this->emp_account_id) {
+            return $this->empAccount;
+        }
+        
+        return EmpAccount::getActive();
     }
 
     public function canBeSoftDeleted(): bool
