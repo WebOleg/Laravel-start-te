@@ -25,6 +25,8 @@ class EmpBillingServiceTest extends TestCase
         $this->mockClient = Mockery::mock(EmpClient::class);
         $this->mockClient->shouldReceive('getTerminalToken')
             ->andReturn('test_terminal_token_123');
+        $this->mockClient->shouldReceive('getEmpAccountId')
+            ->andReturn(null);
         $this->service = new EmpBillingService($this->mockClient);
     }
 

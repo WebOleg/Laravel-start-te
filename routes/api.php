@@ -4,6 +4,7 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\ClientController;
 use App\Http\Controllers\Api\UploadController;
+use App\Http\Controllers\Api\EmpAccountController;
 use App\Http\Controllers\Admin\DashboardController as AdminDashboardController;
 use App\Http\Controllers\Admin\DebtorController as AdminDebtorController;
 use App\Http\Controllers\Admin\VopLogController as AdminVopLogController;
@@ -72,6 +73,11 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/refresh', [AdminEmpRefreshController::class, 'refresh']);
             Route::get('/refresh/status', [AdminEmpRefreshController::class, 'currentStatus']);
             Route::get('/refresh/{jobId}', [AdminEmpRefreshController::class, 'status']);
+
+            Route::get('/accounts', [EmpAccountController::class, 'index']);
+            Route::get('/accounts/active', [EmpAccountController::class, 'active']);
+            Route::post('/accounts/{empAccount}/activate', [EmpAccountController::class, 'setActive']);
+            Route::get('/accounts/{empAccount}/stats', [EmpAccountController::class, 'stats']);
         });
 
         Route::prefix('chargebacks')->group(function () {

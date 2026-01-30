@@ -53,6 +53,7 @@ class BillingAttempt extends Model
         'status',
         'attempt_number',
         'mid_reference',
+        'emp_account_id',
         'bic',
         'error_code',
         'error_message',
@@ -105,6 +106,11 @@ class BillingAttempt extends Model
     public function debtorProfile(): BelongsTo
     {
         return $this->belongsTo(DebtorProfile::class);
+    }
+
+    public function empAccount(): BelongsTo
+    {
+        return $this->belongsTo(EmpAccount::class);
     }
 
     public function chargeback(): HasOne

@@ -3,11 +3,14 @@
 namespace Tests\Unit\Services\Emp;
 
 use App\Services\Emp\EmpClient;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
 class EmpClientTest extends TestCase
 {
+    use RefreshDatabase;
+
     protected function setUp(): void
     {
         parent::setUp();

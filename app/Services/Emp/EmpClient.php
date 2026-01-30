@@ -3,10 +3,12 @@
 /**
  * HTTP client for emerchantpay Genesis API.
  * Handles authentication, XML building, and request/response processing.
+ * Supports multiple EMP accounts via EmpAccount model.
  */
 
 namespace App\Services\Emp;
 
+use App\Models\EmpAccount;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Http\Client\Response;
@@ -18,12 +20,15 @@ class EmpClient
     private ?string $username = null;
     private ?string $password = null;
     private ?string $terminalToken = null;
+    private ?int $empAccountId = null;
+    private ?string $empAccountName = null;
     private int $timeout = 30;
     private int $connectTimeout = 10;
     private bool $initialized = false;
 
     /**
      * Lazy load configuration on first use.
+     * Prioritizes active EmpAccount, falls back to .env config.
      */
     private function initialize(): void
     {
@@ -31,18 +36,59 @@ class EmpClient
             return;
         }
 
-        $this->endpoint = config('services.emp.endpoint');
-        $this->username = config('services.emp.username');
-        $this->password = config('services.emp.password');
-        $this->terminalToken = config('services.emp.terminal_token');
         $this->timeout = config('services.emp.timeout', 30);
         $this->connectTimeout = config('services.emp.connect_timeout', 10);
 
+        // Try to load from active EmpAccount first
+        $activeAccount = EmpAccount::getActive();
+        
+        if ($activeAccount) {
+            $this->endpoint = $activeAccount->endpoint;
+            $this->username = $activeAccount->username;
+            $this->password = $activeAccount->password;
+            $this->terminalToken = $activeAccount->terminal_token;
+            $this->empAccountId = $activeAccount->id;
+            $this->empAccountName = $activeAccount->name;
+        } else {
+            // Fallback to .env config
+            $this->endpoint = config('services.emp.endpoint');
+            $this->username = config('services.emp.username');
+            $this->password = config('services.emp.password');
+            $this->terminalToken = config('services.emp.terminal_token');
+        }
+
         if (!$this->username || !$this->password || !$this->terminalToken) {
-            throw new RuntimeException('EMP credentials not configured');
+            throw new RuntimeException('EMP credentials not configured. Set active EmpAccount or configure .env');
         }
 
         $this->initialized = true;
+    }
+
+    /**
+     * Force re-initialization (useful when switching accounts).
+     */
+    public function reinitialize(): void
+    {
+        $this->initialized = false;
+        $this->initialize();
+    }
+
+    /**
+     * Get current EMP account ID.
+     */
+    public function getEmpAccountId(): ?int
+    {
+        $this->initialize();
+        return $this->empAccountId;
+    }
+
+    /**
+     * Get current EMP account name.
+     */
+    public function getEmpAccountName(): ?string
+    {
+        $this->initialize();
+        return $this->empAccountName;
     }
 
     /**
@@ -201,6 +247,7 @@ class EmpClient
         Log::debug('EMP request', [
             'url' => $url,
             'xml' => $xml,
+            'emp_account' => $this->empAccountName,
         ]);
 
         try {
@@ -227,6 +274,7 @@ class EmpClient
             Log::error('EMP request failed', [
                 'url' => $url,
                 'error' => $e->getMessage(),
+                'emp_account' => $this->empAccountName,
             ]);
 
             return [

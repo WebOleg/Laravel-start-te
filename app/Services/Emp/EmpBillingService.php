@@ -67,6 +67,7 @@ class EmpBillingService
             'attempt_number' => $this->getNextAttemptNumber($debtor),
             'bic' => $debtor->bic,
             'mid_reference' => $this->client->getTerminalToken(),
+            'emp_account_id' => $this->client->getEmpAccountId(),
             'request_payload' => $payload,
         ]);
 
