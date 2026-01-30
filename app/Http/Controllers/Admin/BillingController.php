@@ -16,7 +16,6 @@ use Illuminate\Database\Query\Builder;
 
 class BillingController extends Controller
 {
-
     /**
      * Start billing process for upload (async).
      * Returns 202 Accepted - client should poll stats endpoint.

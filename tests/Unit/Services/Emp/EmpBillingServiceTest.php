@@ -5,6 +5,7 @@ namespace Tests\Unit\Services\Emp;
 use App\Models\BillingAttempt;
 use App\Models\Debtor;
 use App\Models\Upload;
+use App\Services\DescriptorService;
 use App\Services\Emp\EmpBillingService;
 use App\Services\Emp\EmpClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -16,18 +17,30 @@ class EmpBillingServiceTest extends TestCase
     use RefreshDatabase;
 
     private EmpBillingService $service;
-    private $mockClient;
+    private mixed $mockClient;
+    private mixed $mockDescriptorService;
 
     protected function setUp(): void
     {
         parent::setUp();
-        
+
+        // 1. Mock Client
         $this->mockClient = Mockery::mock(EmpClient::class);
         $this->mockClient->shouldReceive('getTerminalToken')
             ->andReturn('test_terminal_token_123');
         $this->mockClient->shouldReceive('getEmpAccountId')
             ->andReturn(null);
-        $this->service = new EmpBillingService($this->mockClient);
+
+        // 2. Mock Descriptor Service
+        $this->mockDescriptorService = Mockery::mock(DescriptorService::class);
+
+        // Handle the call made inside buildRequestPayload to prevent errors
+        $this->mockDescriptorService->shouldReceive('getActiveDescriptor')
+            ->byDefault()
+            ->andReturn(null);
+
+        // 3. Instantiate Service with both dependencies
+        $this->service = new EmpBillingService($this->mockClient, $this->mockDescriptorService);
     }
 
     public function test_bill_debtor_creates_billing_attempt(): void
@@ -199,7 +212,7 @@ class EmpBillingServiceTest extends TestCase
     public function test_bill_batch_skips_invalid_debtors(): void
     {
         $upload = Upload::factory()->create();
-        
+
         Debtor::factory()->create([
             'upload_id' => $upload->id,
             'validation_status' => 'valid',
@@ -265,7 +278,7 @@ class EmpBillingServiceTest extends TestCase
     {
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
-        
+
         $uniqueId = 'reconcile_' . uniqid();
         $billingAttempt = BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,

@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Admin\DescriptorController;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\ClientController;
@@ -89,6 +90,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::apiResource('debtors', AdminDebtorController::class)->only(['index', 'show', 'update', 'destroy']);
         Route::apiResource('vop-logs', AdminVopLogController::class)->only(['index', 'show']);
         Route::apiResource('billing-attempts', AdminBillingAttemptController::class)->only(['index', 'show']);
+
+        Route::apiResource('billing/descriptors', DescriptorController::class);
     });
 });
 

@@ -544,4 +544,12 @@ class BavReportGenerationTest extends TestCase
         $this->assertEquals('partial', array_values($partialRow)[0][3]);
         $this->assertEquals('no', array_values($noRow)[0][3]);
     }
+
+    protected function tearDown(): void
+    {
+        // Break the reference to the service (and thus the app)
+        unset($this->reportService);
+
+        parent::tearDown();
+    }
 }

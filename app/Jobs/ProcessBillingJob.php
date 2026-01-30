@@ -85,7 +85,7 @@ class ProcessBillingJob implements ShouldQueue, ShouldBeUnique
 
         $debtorIds = $query->pluck('id')->toArray();
 
-        // Calculate exclusions for logging (Logic from main, adapted to HEAD status)
+        // Calculate exclusions for logging
         $excludedCount = Debtor::where('upload_id', $uploadId)
             ->where('validation_status', Debtor::VALIDATION_VALID)
             ->where('status', Debtor::STATUS_UPLOADED)
