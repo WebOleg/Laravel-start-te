@@ -1,0 +1,35 @@
+services:
+  app:
+    build:
+      context: ../../../
+      dockerfile: Dockerfile
+    container_name: tether_app
+    restart: unless-stopped
+    working_dir: /var/www
+    env_file:
+      - ../../../.env
+    volumes:
+      - ../../../:/var/www
+      - ../../../storage:/var/www/storage
+    networks:
+      - tether_network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  nginx:
+    image: nginx:alpine
+    container_name: tether_nginx
+    restart: unless-stopped
+    ports:
+      - "8000:80"
+    volumes:
+      - ../../../:/var/www
+      - ../../../docker/nginx/conf.d:/etc/nginx/conf.d
+    networks:
+      - tether_network
+    depends_on:
+      - app
+
+networks:
+  tether_network:
+    driver: bridge

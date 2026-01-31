@@ -30,8 +30,10 @@ jobs:
             sudo -u deploy git clean -fd || true
             sudo -u deploy git fetch origin main
             sudo -u deploy git reset --hard origin/main
+            docker compose -f infrastructure/docker/api-node/docker-compose.yml up -d --build --remove-orphans
             docker exec tether_app composer install --no-dev --optimize-autoloader
             docker exec tether_app php artisan migrate --force
+            docker exec tether_app php artisan optimize:clear
             docker exec tether_app php artisan config:cache
             docker exec tether_app php artisan route:cache
             docker exec tether_app php artisan view:cache
@@ -54,7 +56,9 @@ jobs:
             sudo -u deploy git clean -fd || true
             sudo -u deploy git fetch origin main
             sudo -u deploy git reset --hard origin/main
+            docker compose -f infrastructure/docker/api-node/docker-compose.yml up -d --build --remove-orphans
             docker exec tether_app composer install --no-dev --optimize-autoloader
+            docker exec tether_app php artisan optimize:clear
             docker exec tether_app php artisan config:cache
             docker exec tether_app php artisan route:cache
             docker exec tether_app php artisan view:cache
@@ -62,7 +66,7 @@ jobs:
 
   deploy-worker:
     if: ${{ github.event.inputs.target == 'all' || github.event.inputs.target == 'worker' }}
-    needs: [deploy-node-1, deploy-node-2]
+    needs: [ deploy-node-1, deploy-node-2 ]
     runs-on: ubuntu-latest
     steps:
       - name: Deploy to Worker
@@ -77,7 +81,9 @@ jobs:
             sudo -u deploy git clean -fd || true
             sudo -u deploy git fetch origin main
             sudo -u deploy git reset --hard origin/main
+            docker compose -f infrastructure/docker/worker/docker-compose.yml up -d --build --remove-orphans
             docker exec tether_app composer install --no-dev --optimize-autoloader
+            docker exec tether_app php artisan optimize:clear
             docker exec tether_app php artisan config:cache
             docker exec tether_horizon php artisan horizon:terminate
             echo "Worker deployed!"
