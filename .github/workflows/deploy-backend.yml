@@ -30,6 +30,7 @@ jobs:
             sudo -u deploy git clean -fd || true
             sudo -u deploy git fetch origin main
             sudo -u deploy git reset --hard origin/main
+            docker rm -f tether_app tether_nginx || true
             docker compose -f infrastructure/docker/api-node/docker-compose.yml up -d --build --remove-orphans
             docker exec tether_app composer install --no-dev --optimize-autoloader
             docker exec tether_app php artisan migrate --force
@@ -56,6 +57,7 @@ jobs:
             sudo -u deploy git clean -fd || true
             sudo -u deploy git fetch origin main
             sudo -u deploy git reset --hard origin/main
+            docker rm -f tether_app tether_nginx || true
             docker compose -f infrastructure/docker/api-node/docker-compose.yml up -d --build --remove-orphans
             docker exec tether_app composer install --no-dev --optimize-autoloader
             docker exec tether_app php artisan optimize:clear
@@ -81,6 +83,7 @@ jobs:
             sudo -u deploy git clean -fd || true
             sudo -u deploy git fetch origin main
             sudo -u deploy git reset --hard origin/main
+            docker rm -f tether_app tether_nginx tether_horizon || true
             docker compose -f infrastructure/docker/worker/docker-compose.yml up -d --build --remove-orphans
             docker exec tether_app composer install --no-dev --optimize-autoloader
             docker exec tether_app php artisan optimize:clear
