@@ -34,7 +34,7 @@ class DashboardController extends Controller
             'data' => [
                 'uploads' => $this->getUploadStats($empAccountId),
                 'debtors' => $this->getDebtorStats($month, $year, $empAccountId),
-                'vop' => $this->getVopStats(),
+                'vop' => $this->getVopStats($empAccountId),
                 'billing' => $this->getBillingStats($month, $year, $empAccountId),
                 'recent_activity' => $this->getRecentActivity($empAccountId),
                 'trends' => $this->getTrends($empAccountId),
@@ -66,6 +66,15 @@ class DashboardController extends Controller
         ];
     }
 
+    private function getFilteredUploadIds(?int $empAccountId): ?array
+    {
+        if (!$empAccountId) {
+            return null;
+        }
+        
+        return Upload::where('emp_account_id', $empAccountId)->pluck('id')->toArray();
+    }
+
     private function getDebtorStats(?int $month = null, ?int $year = null, ?int $empAccountId = null): array
     {
         $startDate = null;
@@ -87,7 +96,6 @@ class DashboardController extends Controller
         }
 
         if ($startDate && $endDate) {
-            // Use emp_created_at (real EMP transaction date) with fallback to created_at
             $billedQuery->whereRaw('COALESCE(emp_created_at, created_at) BETWEEN ? AND ?', [$startDate, $endDate]);
             $approvedQuery->whereRaw('COALESCE(emp_created_at, created_at) BETWEEN ? AND ?', [$startDate, $endDate]);
             $chargebackedQuery->whereRaw('COALESCE(emp_created_at, created_at) BETWEEN ? AND ?', [$startDate, $endDate]);
@@ -98,53 +106,70 @@ class DashboardController extends Controller
         $totalChargebacked = $chargebackedQuery->sum('amount');
         $netRecovered = $totalApproved - $totalChargebacked;
 
+        $debtorQuery = Debtor::query();
+        $uploadIds = $this->getFilteredUploadIds($empAccountId);
+        
+        if ($uploadIds !== null) {
+            $debtorQuery->whereIn('upload_id', $uploadIds);
+        }
+
+        $totalDebtors = (clone $debtorQuery)->count();
+
         return [
-            'total' => Debtor::count(),
+            'total' => $totalDebtors,
             'by_status' => [
-                'pending' => Debtor::where('status', Debtor::STATUS_PENDING)->count(),
-                'processing' => Debtor::where('status', Debtor::STATUS_PROCESSING)->count(),
-                'approved' => Debtor::where('status', Debtor::STATUS_APPROVED)->count(),
-                'chargebacked' => Debtor::where('status', Debtor::STATUS_CHARGEBACKED)->count(),
-                'recovered' => Debtor::where('status', Debtor::STATUS_RECOVERED)->count(),
-                'failed' => Debtor::where('status', Debtor::STATUS_FAILED)->count(),
+                'pending' => (clone $debtorQuery)->where('status', Debtor::STATUS_PENDING)->count(),
+                'processing' => (clone $debtorQuery)->where('status', Debtor::STATUS_PROCESSING)->count(),
+                'approved' => (clone $debtorQuery)->where('status', Debtor::STATUS_APPROVED)->count(),
+                'chargebacked' => (clone $debtorQuery)->where('status', Debtor::STATUS_CHARGEBACKED)->count(),
+                'recovered' => (clone $debtorQuery)->where('status', Debtor::STATUS_RECOVERED)->count(),
+                'failed' => (clone $debtorQuery)->where('status', Debtor::STATUS_FAILED)->count(),
             ],
             'total_amount' => round($totalBilled, 2),
             'recovered_amount' => round($netRecovered, 2),
             'recovery_rate' => $totalBilled > 0
                 ? round(($netRecovered / $totalBilled) * 100, 2)
                 : 0,
-            'by_country' => Debtor::select('country', DB::raw('count(*) as count'))
+            'by_country' => (clone $debtorQuery)->select('country', DB::raw('count(*) as count'))
                 ->whereNotNull('country')
                 ->groupBy('country')
                 ->orderByDesc('count')
                 ->limit(10)
                 ->pluck('count', 'country'),
             'valid_iban_rate' => $this->calculateRate(
-                Debtor::where('iban_valid', true)->count(),
-                Debtor::count()
+                (clone $debtorQuery)->where('iban_valid', true)->count(),
+                $totalDebtors
             ),
         ];
     }
 
-    private function getVopStats(): array
+    private function getVopStats(?int $empAccountId = null): array
     {
-        $total = VopLog::count();
+        $vopQuery = VopLog::query();
+        $uploadIds = $this->getFilteredUploadIds($empAccountId);
+        
+        if ($uploadIds !== null) {
+            $debtorIds = Debtor::whereIn('upload_id', $uploadIds)->pluck('id')->toArray();
+            $vopQuery->whereIn('debtor_id', $debtorIds);
+        }
+
+        $total = (clone $vopQuery)->count();
 
         return [
             'total' => $total,
             'by_result' => [
-                'verified' => VopLog::where('result', VopLog::RESULT_VERIFIED)->count(),
-                'likely_verified' => VopLog::where('result', VopLog::RESULT_LIKELY_VERIFIED)->count(),
-                'inconclusive' => VopLog::where('result', VopLog::RESULT_INCONCLUSIVE)->count(),
-                'mismatch' => VopLog::where('result', VopLog::RESULT_MISMATCH)->count(),
-                'rejected' => VopLog::where('result', VopLog::RESULT_REJECTED)->count(),
+                'verified' => (clone $vopQuery)->where('result', VopLog::RESULT_VERIFIED)->count(),
+                'likely_verified' => (clone $vopQuery)->where('result', VopLog::RESULT_LIKELY_VERIFIED)->count(),
+                'inconclusive' => (clone $vopQuery)->where('result', VopLog::RESULT_INCONCLUSIVE)->count(),
+                'mismatch' => (clone $vopQuery)->where('result', VopLog::RESULT_MISMATCH)->count(),
+                'rejected' => (clone $vopQuery)->where('result', VopLog::RESULT_REJECTED)->count(),
             ],
             'verification_rate' => $this->calculateRate(
-                VopLog::whereIn('result', [VopLog::RESULT_VERIFIED, VopLog::RESULT_LIKELY_VERIFIED])->count(),
+                (clone $vopQuery)->whereIn('result', [VopLog::RESULT_VERIFIED, VopLog::RESULT_LIKELY_VERIFIED])->count(),
                 $total
             ),
-            'average_score' => round(VopLog::avg('vop_score') ?? 0, 2),
-            'today' => VopLog::whereDate('created_at', today())->count(),
+            'average_score' => round((clone $vopQuery)->avg('vop_score') ?? 0, 2),
+            'today' => (clone $vopQuery)->whereDate('created_at', today())->count(),
         ];
     }
 
@@ -158,7 +183,6 @@ class DashboardController extends Controller
             $endDate = Carbon::create($year, $month, 1)->endOfMonth();
         }
 
-        // Base queries with date filter using emp_created_at
         $baseQuery = BillingAttempt::query();
         
         if ($empAccountId) {
@@ -180,10 +204,17 @@ class DashboardController extends Controller
         $error = (clone $baseQuery)->where('status', BillingAttempt::STATUS_ERROR)->count();
         $voided = (clone $baseQuery)->where('status', BillingAttempt::STATUS_VOIDED)->count();
 
-        // Today query with emp_account filter
         $todayQuery = BillingAttempt::whereRaw('DATE(COALESCE(emp_created_at, created_at)) = ?', [today()->toDateString()]);
         if ($empAccountId) {
             $todayQuery->where('emp_account_id', $empAccountId);
+        }
+
+        $debtorCount = Debtor::count();
+        if ($empAccountId) {
+            $uploadIds = $this->getFilteredUploadIds($empAccountId);
+            if ($uploadIds !== null) {
+                $debtorCount = Debtor::whereIn('upload_id', $uploadIds)->count();
+            }
         }
 
         return [
@@ -202,7 +233,7 @@ class DashboardController extends Controller
             'total_chargeback_amount' => round($chargebackAmount, 2),
             'today' => $todayQuery->count(),
             'average_attempts_per_debtor' => round(
-                $total / max(Debtor::count(), 1),
+                $total / max($debtorCount, 1),
                 2
             ),
         ];
@@ -235,11 +266,13 @@ class DashboardController extends Controller
     {
         $days = 7;
         $trends = [];
+        $uploadIds = $this->getFilteredUploadIds($empAccountId);
 
         for ($i = $days - 1; $i >= 0; $i--) {
             $date = now()->subDays($i)->format('Y-m-d');
             
             $uploadsQuery = Upload::whereDate('created_at', $date);
+            $debtorsQuery = Debtor::whereDate('created_at', $date);
             $billingQuery = BillingAttempt::whereRaw('DATE(COALESCE(emp_created_at, created_at)) = ?', [$date]);
             $successQuery = BillingAttempt::whereRaw('DATE(COALESCE(emp_created_at, created_at)) = ?', [$date])
                 ->where('status', BillingAttempt::STATUS_APPROVED);
@@ -253,10 +286,14 @@ class DashboardController extends Controller
                 $cbQuery->where('emp_account_id', $empAccountId);
             }
 
+            if ($uploadIds !== null) {
+                $debtorsQuery->whereIn('upload_id', $uploadIds);
+            }
+
             $trends[] = [
                 'date' => $date,
                 'uploads' => $uploadsQuery->count(),
-                'debtors' => Debtor::whereDate('created_at', $date)->count(),
+                'debtors' => $debtorsQuery->count(),
                 'billing_attempts' => $billingQuery->count(),
                 'successful_payments' => $successQuery->count(),
                 'chargebacks' => $cbQuery->count(),
