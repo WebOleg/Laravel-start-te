@@ -30,16 +30,12 @@ class DashboardTest extends TestCase
         $this->token = $this->user->createToken('test')->plainTextToken;
     }
 
-    // Authentication Tests 
-
     public function test_dashboard_requires_authentication(): void
     {
         $response = $this->getJson('/api/admin/dashboard');
 
         $response->assertStatus(401);
     }
-
-    // Basic Structure Tests 
 
     public function test_dashboard_returns_all_sections(): void
     {
@@ -75,8 +71,6 @@ class DashboardTest extends TestCase
                 ],
             ]);
     }
-
-    // Upload Stats Tests
 
     public function test_dashboard_returns_upload_stats(): void
     {
@@ -125,7 +119,8 @@ class DashboardTest extends TestCase
 
     public function test_dashboard_upload_stats_this_week_count(): void
     {
-        // Create uploads on different dates within the same week
+        Carbon::setTestNow(Carbon::create(2026, 2, 5, 12, 0, 0));
+
         Upload::factory()->create(['status' => Upload::STATUS_COMPLETED, 'created_at' => now()]);
         Upload::factory()->create(['status' => Upload::STATUS_COMPLETED, 'created_at' => now()->subDay()]);
         Upload::factory()->create(['status' => Upload::STATUS_COMPLETED, 'created_at' => now()->subDays(8)]);
@@ -135,9 +130,9 @@ class DashboardTest extends TestCase
 
         $response->assertStatus(200)
             ->assertJsonPath('data.uploads.this_week', 2);
-    }
 
-    // Debtor Stats Tests
+        Carbon::setTestNow();
+    }
 
     public function test_dashboard_returns_debtor_stats(): void
     {
@@ -151,7 +146,6 @@ class DashboardTest extends TestCase
             'status' => Debtor::STATUS_RECOVERED,
         ]);
 
-        // Create billing attempts
         BillingAttempt::factory()->count(5)->create([
             'debtor_id' => null,
             'upload_id' => null,
@@ -242,10 +236,8 @@ class DashboardTest extends TestCase
             ->getJson('/api/admin/dashboard');
 
         $response->assertStatus(200)
-            ->assertJsonPath('data.debtors.valid_iban_rate', 80); // Integer, not float
+            ->assertJsonPath('data.debtors.valid_iban_rate', 80);
     }
-
-    // VOP Stats Tests
 
     public function test_dashboard_returns_vop_stats(): void
     {
@@ -293,7 +285,7 @@ class DashboardTest extends TestCase
             ->getJson('/api/admin/dashboard');
 
         $response->assertStatus(200)
-            ->assertJsonPath('data.vop.verification_rate', 66.67); // (10/15) * 100 = 66.67
+            ->assertJsonPath('data.vop.verification_rate', 66.67);
     }
 
     public function test_dashboard_vop_average_score(): void
@@ -306,7 +298,7 @@ class DashboardTest extends TestCase
             ->getJson('/api/admin/dashboard');
 
         $response->assertStatus(200)
-            ->assertJsonPath('data.vop.average_score', 75); // (50 + 75.5 + 99) / 3 = 74.83
+            ->assertJsonPath('data.vop.average_score', 75);
     }
 
     public function test_dashboard_vop_today_count(): void
@@ -336,10 +328,8 @@ class DashboardTest extends TestCase
             ->getJson('/api/admin/dashboard');
 
         $response->assertStatus(200)
-            ->assertJsonPath('data.vop.average_score', 0); // Integer 0, not float
+            ->assertJsonPath('data.vop.average_score', 0);
     }
-
-    // Billing Stats Tests
 
     public function test_dashboard_returns_billing_stats(): void
     {
@@ -388,7 +378,7 @@ class DashboardTest extends TestCase
             ->getJson('/api/admin/dashboard');
 
         $response->assertStatus(200)
-            ->assertJsonPath('data.billing.approval_rate', 70); // Integer, not float
+            ->assertJsonPath('data.billing.approval_rate', 70);
     }
 
     public function test_dashboard_billing_chargeback_rate(): void
@@ -400,7 +390,7 @@ class DashboardTest extends TestCase
             ->getJson('/api/admin/dashboard');
 
         $response->assertStatus(200)
-            ->assertJsonPath('data.billing.chargeback_rate', 20); // Integer, not float
+            ->assertJsonPath('data.billing.chargeback_rate', 20);
     }
 
     public function test_dashboard_billing_amounts(): void
@@ -412,8 +402,8 @@ class DashboardTest extends TestCase
             ->getJson('/api/admin/dashboard');
 
         $response->assertStatus(200)
-            ->assertJsonPath('data.billing.total_approved_amount', 502.5) // 5 * 100.50
-            ->assertJsonPath('data.billing.total_chargeback_amount', 150.5); // 2 * 75.25
+            ->assertJsonPath('data.billing.total_approved_amount', 502.5)
+            ->assertJsonPath('data.billing.total_chargeback_amount', 150.5);
     }
 
     public function test_dashboard_billing_today_count(): void
@@ -436,11 +426,8 @@ class DashboardTest extends TestCase
 
     public function test_dashboard_billing_average_attempts_per_debtor(): void
     {
-        // Create 5 debtors
         $debtors = Debtor::factory()->count(5)->create();
-        
-        // Create 15 billing attempts distributed across all debtors
-        // 3 attempts per debtor (15/5 = 3)
+
         foreach ($debtors as $debtor) {
             BillingAttempt::factory()->count(3)->create([
                 'status' => BillingAttempt::STATUS_APPROVED,
@@ -452,24 +439,22 @@ class DashboardTest extends TestCase
             ->getJson('/api/admin/dashboard');
 
         $response->assertStatus(200)
-            ->assertJsonPath('data.billing.average_attempts_per_debtor', 3); // 15/5 = 3.0 (as integer)
+            ->assertJsonPath('data.billing.average_attempts_per_debtor', 3);
     }
 
     public function test_dashboard_billing_average_attempts_per_debtor_zero_debtors(): void
     {
         BillingAttempt::factory()->count(5)->create([
             'status' => BillingAttempt::STATUS_APPROVED,
-            'debtor_id' => null, // No debtors linked
+            'debtor_id' => null,
         ]);
 
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
             ->getJson('/api/admin/dashboard');
 
         $response->assertStatus(200)
-            ->assertJsonPath('data.billing.average_attempts_per_debtor', 5); // 5 / max(0, 1) = 5.0 (as integer)
+            ->assertJsonPath('data.billing.average_attempts_per_debtor', 5);
     }
-
-    // Recent Activity Tests
 
     public function test_dashboard_returns_recent_activity(): void
     {
@@ -555,8 +540,6 @@ class DashboardTest extends TestCase
             ->assertJsonPath('data.recent_activity.recent_uploads.4.id', $first->id);
     }
 
-    // Trends Tests
-
     public function test_dashboard_returns_trends(): void
     {
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
@@ -604,21 +587,18 @@ class DashboardTest extends TestCase
         }
     }
 
-    // Filter Tests
-
     public function test_dashboard_with_month_and_year_filters(): void
     {
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
             ->getJson('/api/admin/dashboard?month=3&year=2025');
 
         $response->assertStatus(200)
-            ->assertJsonPath('data.filters.month', '3') // String, not integer
-            ->assertJsonPath('data.filters.year', '2025'); // String, not integer
+            ->assertJsonPath('data.filters.month', '3')
+            ->assertJsonPath('data.filters.year', '2025');
     }
 
     public function test_dashboard_debtor_stats_filtered_by_month(): void
     {
-        // Create billing attempts in different months
         $march = Carbon::create(2025, 3, 15);
         $april = Carbon::create(2025, 4, 15);
 
@@ -637,7 +617,7 @@ class DashboardTest extends TestCase
             ->getJson('/api/admin/dashboard?month=3&year=2025');
 
         $marchResponse->assertStatus(200)
-            ->assertJsonPath('data.debtors.total_amount', 500); // 5 * 100
+            ->assertJsonPath('data.debtors.total_amount', 500);
     }
 
     public function test_dashboard_billing_stats_filtered_by_month(): void
@@ -666,7 +646,6 @@ class DashboardTest extends TestCase
         $march = Carbon::create(2025, 3, 15);
         $april = Carbon::create(2025, 4, 15);
 
-        // Create billing attempts with emp_created_at in March but created_at in April
         BillingAttempt::factory()->count(3)->create([
             'status' => BillingAttempt::STATUS_APPROVED,
             'amount' => 100,
@@ -678,10 +657,8 @@ class DashboardTest extends TestCase
             ->getJson('/api/admin/dashboard?month=3&year=2025');
 
         $marchResponse->assertStatus(200)
-            ->assertJsonPath('data.debtors.total_amount', 300); // Should use emp_created_at
+            ->assertJsonPath('data.debtors.total_amount', 300);
     }
-
-    // Validation Tests
 
     public function test_dashboard_validates_month_parameter(): void
     {
@@ -731,8 +708,6 @@ class DashboardTest extends TestCase
         $response->assertStatus(422);
     }
 
-    // Edge Cases Tests 
-
     public function test_dashboard_with_empty_database(): void
     {
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
@@ -747,7 +722,6 @@ class DashboardTest extends TestCase
 
     public function test_dashboard_handles_division_by_zero_in_rates(): void
     {
-        // No billing attempts means no successful or chargebacked
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
             ->getJson('/api/admin/dashboard');
 
