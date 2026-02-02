@@ -38,6 +38,12 @@ class UploadController extends Controller
 
     public function index(Request $request): AnonymousResourceCollection
     {
+        $request->validate([
+            'status' => 'nullable|string|in:pending,processing,completed,failed',
+            'emp_account_id' => 'nullable|integer|exists:emp_accounts,id',
+            'per_page' => 'nullable|integer|min:1|max:100',
+        ]);
+
         $query = Upload::with('empAccount')->withCount([
             'debtors',
             'debtors as valid_count' => function ($q) {
@@ -58,8 +64,12 @@ class UploadController extends Controller
             $q->where('status', BillingAttempt::STATUS_CHARGEBACKED);
         }], 'amount');
 
-        if ($request->has('status')) {
+        if ($request->filled('status')) {
             $query->where('status', $request->input('status'));
+        }
+
+        if ($request->filled('emp_account_id')) {
+            $query->where('emp_account_id', $request->input('emp_account_id'));
         }
 
         $uploads = $query->latest()->paginate($request->input('per_page', 20));
@@ -204,7 +214,6 @@ class UploadController extends Controller
         if ($request->filled('debtor_type') && $request->input('debtor_type') !== 'all') {
             $type = $request->input('debtor_type');
 
-            // filters by billing models
             if ($type === DebtorProfile::MODEL_LEGACY) {
                 $query->where(function ($q) {
                     $q->whereDoesntHave('debtorProfile')
@@ -290,13 +299,11 @@ class UploadController extends Controller
             $type = $request->input('debtor_type');
 
             if ($type === DebtorProfile::MODEL_LEGACY) {
-                // Legacy = No Profile OR Profile is explicitly Legacy
                 $query->where(function ($q) {
                     $q->whereDoesntHave('debtorProfile')
                         ->orWhereHas('debtorProfile', fn($sub) => $sub->where('billing_model', DebtorProfile::MODEL_LEGACY));
                 });
             } else {
-                // Standard filtering for Flywheel/Recovery
                 $query->whereHas('debtorProfile', fn($q) => $q->where('billing_model', $type));
             }
         }
