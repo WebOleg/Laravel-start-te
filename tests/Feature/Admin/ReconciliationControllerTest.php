@@ -400,12 +400,25 @@ class ReconciliationControllerTest extends TestCase
     {
         Bus::fake();
 
+        // Create an active EMP account
+        $empAccount = \App\Models\EmpAccount::create([
+            'name' => 'Test EMP Account',
+            'slug' => 'test-emp',
+            'endpoint' => 'https://test.emp.com',
+            'username' => 'test_user',
+            'password' => 'test_pass',
+            'terminal_token' => 'test_token',
+            'is_active' => true,
+            'sort_order' => 1,
+        ]);
+
         $debtor = Debtor::factory()->create(['upload_id' => $this->upload->id]);
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'upload_id' => $this->upload->id,
             'status' => 'pending',
             'unique_id' => 'emp_123456',
+            'emp_account_id' => $empAccount->id,  // Add this
             'created_at' => now()->subHours(3),
         ]);
 
@@ -416,7 +429,8 @@ class ReconciliationControllerTest extends TestCase
             ]);
 
         $response->assertStatus(202)
-            ->assertJsonPath('data.queued', true);
+            ->assertJsonPath('data.queued', true)
+            ->assertJsonPath('data.emp_accounts', fn($accounts) => count($accounts) > 0);
 
         Bus::assertDispatched(ProcessReconciliationJob::class);
     }

@@ -8,21 +8,15 @@
 namespace App\Services\Emp;
 
 use App\Models\BillingAttempt;
+use App\Models\EmpAccount;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
 
 class EmpChargebackService
 {
-    private EmpClient $client;
-
     public const BATCH_SIZE = 100;
     public const RATE_LIMIT_DELAY_MS = 500;
-
-    public function __construct(EmpClient $client)
-    {
-        $this->client = $client;
-    }
 
     public function processChargebackDetail(string $uniqueId): array
     {
@@ -32,8 +26,20 @@ class EmpChargebackService
                 return ['success' => false, 'error' => 'Billing attempt not found'];
             }
 
-            $xml = $this->client->buildChargebackDetailXml($uniqueId);
-            $response = $this->client->sendRequest('/chargebacks', $xml);
+            // Get the correct EMP account for this billing attempt
+            $empAccount = null;
+            if ($billingAttempt->emp_account_id) {
+                $empAccount = EmpAccount::find($billingAttempt->emp_account_id);
+                if (!$empAccount) {
+                    return ['success' => false, 'error' => 'EMP account not found for this billing attempt'];
+                }
+            }
+
+            // Initialize client with the correct account
+            $client = new EmpClient($empAccount);
+            
+            $xml = $client->buildChargebackDetailXml($uniqueId);
+            $response = $client->sendRequest('/chargebacks', $xml);
             
             if (empty($response)) {
                 Log::warning('EMP Chargeback: empty response', ['unique_id' => $uniqueId]);
@@ -48,6 +54,7 @@ class EmpChargebackService
                     'unique_id' => $uniqueId,
                     'error_code' => $errorCode,
                     'message' => $errorMessage,
+                    'emp_account_id' => $billingAttempt->emp_account_id,
                 ]);
                 
                 return ['success' => false, 'error' => $errorMessage, 'code' => $errorCode];

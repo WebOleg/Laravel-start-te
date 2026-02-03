@@ -132,14 +132,13 @@ class ReconciliationController extends Controller
 
         $maxAgeHours = $validated['max_age_hours'] ?? 720;
         $limit = $validated['limit'] ?? 1000;
+        
+        // Get all active EMP accounts
+        $empAccountIds = \App\Models\EmpAccount::where('is_active', true)->pluck('id')->toArray();
 
-        $eligible = BillingAttempt::query()->needsReconciliation()
-            ->where('created_at', '>', now()->subHours($maxAgeHours))
-            ->count();
-
-        if ($eligible === 0) {
+        if (empty($empAccountIds)) {
             return response()->json([
-                'message' => 'No eligible billing attempts to reconcile',
+                'message' => 'No active EMP accounts found',
                 'data' => [
                     'eligible' => 0,
                     'queued' => false,
@@ -147,18 +146,51 @@ class ReconciliationController extends Controller
             ]);
         }
 
-        $toProcess = min($eligible, $limit);
+        // Count eligible attempts per EMP account
+        $eligibleByAccount = [];
+        $totalEligible = 0;
+        
+        foreach ($empAccountIds as $accountId) {
+            $count = BillingAttempt::query()
+                ->needsReconciliation()
+                ->where('emp_account_id', $accountId)
+                ->where('created_at', '>', now()->subHours($maxAgeHours))
+                ->count();
+                
+            if ($count > 0) {
+                $eligibleByAccount[$accountId] = $count;
+                $totalEligible += $count;
+            }
+        }
 
-        Cache::put($cacheKey, true, now()->addHours(2));
+        if ($totalEligible === 0) {
+            return response()->json([
+                'message' => 'No eligible billing attempts to reconcile',
+                'data' => [
+                    'eligible' => 0,
+                    'queued' => false,
+                    'emp_accounts_checked' => count($empAccountIds),
+                ],
+            ]);
+        }
+
+        $toProcess = min($totalEligible, $limit);
+
+        Cache::put($cacheKey, [
+            'started_at' => now(),
+            'emp_accounts' => $eligibleByAccount,
+            'total_eligible' => $totalEligible,
+        ], now()->addHours(2));
 
         ProcessReconciliationJob::dispatch(null, 'bulk', $maxAgeHours, $limit);
 
         return response()->json([
-            'message' => "Bulk reconciliation queued for {$toProcess} billing attempts",
+            'message' => "Bulk reconciliation queued for {$toProcess} billing attempts across " . count($eligibleByAccount) . " EMP accounts",
             'data' => [
-                'eligible' => $eligible,
+                'eligible' => $totalEligible,
                 'to_process' => $toProcess,
                 'max_age_hours' => $maxAgeHours,
+                'emp_accounts' => $eligibleByAccount,
                 'queued' => true,
             ],
         ], 202);
