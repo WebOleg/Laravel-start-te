@@ -63,14 +63,14 @@ class EmpRefreshService
     /**
      * Process array of transactions and upsert to database.
      */
-    public function processTransactions(array $transactions): array
+    public function processTransactions(array $transactions, ?int $empAccountId = null): array
     {
         $stats = ['inserted' => 0, 'updated' => 0, 'unchanged' => 0, 'errors' => 0];
         
         $batches = array_chunk($transactions, self::BATCH_SIZE);
         
         foreach ($batches as $batch) {
-            $result = $this->processBatch($batch);
+            $result = $this->processBatch($batch, $empAccountId);
             $stats['inserted'] += $result['inserted'];
             $stats['updated'] += $result['updated'];
             $stats['unchanged'] += $result['unchanged'];
@@ -85,7 +85,7 @@ class EmpRefreshService
     /**
      * Process a batch of transactions using upsert.
      */
-    private function processBatch(array $transactions): array
+    private function processBatch(array $transactions, ?int $empAccountId = null): array
     {
         $rows = [];
         $uniqueIds = [];
@@ -117,6 +117,7 @@ class EmpRefreshService
                 'currency' => $tx['currency'] ?? 'EUR',
                 'bic' => null,
                 'mid_reference' => $terminalToken,
+                'emp_account_id' => $empAccountId,  // Add this line
                 'error_code' => $tx['code'] ?? $tx['reason_code'] ?? null,
                 'error_message' => $tx['message'] ?? null,
                 'technical_message' => $tx['technical_message'] ?? null,
@@ -160,7 +161,7 @@ class EmpRefreshService
             BillingAttempt::upsert(
                 $rows,
                 ['unique_id'],
-                ['status', 'amount', 'currency', 'error_code', 'error_message', 'technical_message', 'emp_created_at', 'processed_at', 'response_payload', 'updated_at', 'last_reconciled_at', 'mid_reference']
+                ['status', 'amount', 'currency', 'error_code', 'error_message', 'technical_message', 'emp_created_at', 'processed_at', 'response_payload', 'updated_at', 'last_reconciled_at', 'mid_reference', 'emp_account_id']
             );
             
             Log::debug('EMP Refresh: batch upserted', [

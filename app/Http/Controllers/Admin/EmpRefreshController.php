@@ -9,6 +9,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Jobs\EmpRefreshByDateJob;
+use App\Models\EmpAccount;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -21,6 +22,7 @@ class EmpRefreshController extends Controller
         $validated = $request->validate([
             'from' => 'required|date|date_format:Y-m-d',
             'to' => 'required|date|date_format:Y-m-d|after_or_equal:from',
+            'emp_account_id' => 'nullable|integer|exists:emp_accounts,id',
         ]);
 
         $from = \Carbon\Carbon::parse($validated['from']);
@@ -50,6 +52,23 @@ class EmpRefreshController extends Controller
             Cache::forget('emp_refresh_active');
         }
 
+        // Determine which accounts to refresh
+        $accountIds = [];
+        if (isset($validated['emp_account_id'])) {
+            // Single account refresh
+            $accountIds = [$validated['emp_account_id']];
+        } else {
+            // All accounts refresh
+            $accountIds = EmpAccount::pluck('id')->toArray();
+            
+            if (empty($accountIds)) {
+                return response()->json([
+                    'message' => 'No EMP accounts configured',
+                    'data' => null,
+                ], 422);
+            }
+        }
+
         $jobId = Str::uuid()->toString();
 
         Cache::put('emp_refresh_active', [
@@ -58,6 +77,7 @@ class EmpRefreshController extends Controller
             'started_at' => now()->toIso8601String(),
             'from' => $validated['from'],
             'to' => $validated['to'],
+            'account_ids' => $accountIds,
         ], 7200);
 
         Cache::put("emp_refresh_{$jobId}", [
@@ -69,13 +89,17 @@ class EmpRefreshController extends Controller
                 'unchanged' => 0,
                 'errors' => 0,
             ],
+            'accounts_total' => count($accountIds),
+            'accounts_processed' => 0,
+            'current_account' => null,
             'started_at' => now()->toIso8601String(),
         ], 7200);
 
         EmpRefreshByDateJob::dispatch(
             $validated['from'],
             $validated['to'],
-            $jobId
+            $jobId,
+            $accountIds
         );
 
         return response()->json([
@@ -84,6 +108,7 @@ class EmpRefreshController extends Controller
                 'job_id' => $jobId,
                 'from' => $validated['from'],
                 'to' => $validated['to'],
+                'accounts_count' => count($accountIds),
                 'estimated_pages' => 0,
                 'queued' => true,
             ],
@@ -109,6 +134,8 @@ class EmpRefreshController extends Controller
                             'unchanged' => 0,
                             'errors' => 0,
                         ],
+                        'accounts_total' => $active['accounts_total'] ?? 0,
+                        'accounts_processed' => 0,
                         'started_at' => $active['started_at'] ?? null,
                         'completed_at' => null,
                     ],
@@ -139,6 +166,9 @@ class EmpRefreshController extends Controller
                     'unchanged' => 0,
                     'errors' => 0,
                 ],
+                'accounts_total' => $status['accounts_total'] ?? 0,
+                'accounts_processed' => $status['accounts_processed'] ?? 0,
+                'current_account' => $status['current_account'] ?? null,
                 'started_at' => $status['started_at'] ?? null,
                 'completed_at' => $status['completed_at'] ?? null,
             ],
@@ -175,6 +205,8 @@ class EmpRefreshController extends Controller
                             'unchanged' => 0,
                             'errors' => 0,
                         ],
+                        'accounts_total' => $active['accounts_total'] ?? 0,
+                        'accounts_processed' => 0,
                     ],
                 ]);
             }
@@ -208,6 +240,9 @@ class EmpRefreshController extends Controller
                 'job_id' => $active['job_id'],
                 'progress' => $jobStatus['progress'] ?? 0,
                 'stats' => $jobStatus['stats'] ?? null,
+                'accounts_total' => $jobStatus['accounts_total'] ?? 0,
+                'accounts_processed' => $jobStatus['accounts_processed'] ?? 0,
+                'current_account' => $jobStatus['current_account'] ?? null,
             ],
         ]);
     }
