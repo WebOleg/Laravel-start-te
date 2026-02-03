@@ -8,6 +8,7 @@
 namespace App\Services;
 
 use App\Models\BillingAttempt;
+use App\Models\Debtor;
 use App\Models\Upload;
 use App\Services\Emp\EmpBillingService;
 use App\Services\BlacklistService;
@@ -56,7 +57,7 @@ class ReconciliationService
 
             // Update debtor status if approved
             if ($newStatus === BillingAttempt::STATUS_APPROVED && $attempt->debtor) {
-                $attempt->debtor->update(['status' => 'recovered']);
+                $attempt->debtor->update(['status' => Debtor::STATUS_APPROVED]);
             }
 
             $attempt->markReconciled();
