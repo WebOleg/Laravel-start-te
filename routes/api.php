@@ -92,8 +92,12 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::apiResource('billing-attempts', AdminBillingAttemptController::class)->only(['index', 'show']);
 
         // Clean users export
-        Route::get('billing-attempts/clean-users/stats', [AdminBillingAttemptController::class, 'cleanUsersStats']);
-        Route::get('billing-attempts/clean-users/export', [AdminBillingAttemptController::class, 'exportCleanUsers']);
+        Route::prefix('billing-attempts/clean-users')->group(function () {
+            Route::get('/stats', [AdminBillingAttemptController::class, 'cleanUsersStats']);
+            Route::get('/export', [AdminBillingAttemptController::class, 'exportCleanUsers']);
+            Route::get('/export/{jobId}/status', [AdminBillingAttemptController::class, 'exportStatus']);
+            Route::get('/export/{jobId}/download', [AdminBillingAttemptController::class, 'downloadExport'])->name('admin.clean-users.download');
+        });
 
         Route::apiResource('billing/descriptors', DescriptorController::class);
     });

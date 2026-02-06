@@ -10,6 +10,7 @@
  * - billing: EMP billing jobs (processed with high priority)
  * - reconciliation: Reconciliation jobs
  * - emp-refresh: EMP inbound sync (long-running import)
+ * - exports: CSV/report exports (long-running, low priority)
  * - default: File processing, imports
  * - low: Reports, notifications, cleanup
  */
@@ -29,6 +30,7 @@ return [
         'redis:billing' => 60,
         'redis:reconciliation' => 60,
         'redis:emp-refresh' => 120,
+        'redis:exports' => 300,
         'redis:default' => 120,
         'redis:low' => 300,
     ],
@@ -104,6 +106,18 @@ return [
             'timeout' => 900,
             'nice' => 5,
         ],
+        'supervisor-exports' => [
+            'connection' => 'redis',
+            'queue' => ['exports'],
+            'balance' => 'simple',
+            'maxProcesses' => 2,
+            'maxTime' => 0,
+            'maxJobs' => 50,
+            'memory' => 512,
+            'tries' => 2,
+            'timeout' => 900,
+            'nice' => 10,
+        ],
         'supervisor-default' => [
             'connection' => 'redis',
             'queue' => ['default'],
@@ -151,6 +165,9 @@ return [
             'supervisor-emp-refresh' => [
                 'maxProcesses' => 3,
             ],
+            'supervisor-exports' => [
+                'maxProcesses' => 2,
+            ],
             'supervisor-default' => [
                 'maxProcesses' => 5,
                 'balanceMaxShift' => 2,
@@ -175,13 +192,17 @@ return [
             'supervisor-emp-refresh' => [
                 'maxProcesses' => 1,
             ],
+            'supervisor-exports' => [
+                'maxProcesses' => 1,
+            ],
             'supervisor-default' => [
                 'maxProcesses' => 2,
             ],
             'supervisor-low' => [
                 'maxProcesses' => 1,
             ],
-        ], 'staging' => [
+        ],
+        'staging' => [
             'supervisor-critical' => [
                 'maxProcesses' => 2,
             ],
@@ -194,6 +215,9 @@ return [
             'supervisor-emp-refresh' => [
                 'maxProcesses' => 1,
             ],
+            'supervisor-exports' => [
+                'maxProcesses' => 1,
+            ],
             'supervisor-default' => [
                 'maxProcesses' => 2,
             ],
@@ -201,6 +225,5 @@ return [
                 'maxProcesses' => 1,
             ],
         ],
-
     ],
 ];
