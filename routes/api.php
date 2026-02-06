@@ -18,10 +18,10 @@ use App\Http\Controllers\Admin\StatsController as AdminStatsController;
 use App\Http\Controllers\Admin\VopController as AdminVopController;
 use App\Http\Controllers\Admin\EmpRefreshController as AdminEmpRefreshController;
 use App\Http\Controllers\Admin\BicAnalyticsController as AdminBicAnalyticsController;
-use App\Http\Controllers\Webhook\EmpWebhookController;
 use App\Http\Middleware\EmpWebhookSecurity;
+use App\Http\Controllers\Webhook\EmpWebhookController;
 
-Route::post('/login', [AuthController::class, 'login']);
+Route::post('/login', [AuthController::class, 'login'])->name('login');
 
 Route::prefix('auth')->group(function () {
     Route::post('/setup-2fa', [AuthController::class, 'setup2fa']);
