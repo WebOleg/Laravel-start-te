@@ -66,11 +66,10 @@ class ExportCleanUsersJob implements ShouldQueue
                 ->where('emp_created_at', '<=', $cutoffDate)
                 ->whereNotNull('debtor_id')
                 ->whereNotIn('debtor_id', $chargebackedSubquery)
-                ->oldest('emp_created_at')
-                ->limit($this->limit);
+                ->oldest('emp_created_at');
 
-            $total = min($query->count(), $this->limit);
             $processed = 0;
+            $written = 0;
 
             // Create temp file
             $tempFile = tempnam(sys_get_temp_dir(), 'clean_users_');
@@ -79,8 +78,13 @@ class ExportCleanUsersJob implements ShouldQueue
             // Write CSV header
             fputcsv($handle, ['name', 'iban', 'amount', 'currency']);
 
-            // Process in chunks
-            foreach ($query->lazy(500) as $attempt) {
+            // Process with cursor and manual limit check
+            foreach ($query->cursor() as $attempt) {
+                // Stop when limit reached
+                if ($written >= $this->limit) {
+                    break;
+                }
+
                 $debtor = $attempt->debtor;
                 if (!$debtor || !$debtor->iban) {
                     continue;
@@ -93,12 +97,13 @@ class ExportCleanUsersJob implements ShouldQueue
                     $attempt->currency ?? 'EUR',
                 ]);
 
+                $written++;
                 $processed++;
 
                 // Update progress every 1000 records
-                if ($processed % 1000 === 0) {
-                    $progress = $total > 0 ? round(($processed / $total) * 100) : 0;
-                    $this->updateStatus('processing', $progress, $processed);
+                if ($written % 1000 === 0) {
+                    $progress = round(($written / $this->limit) * 100);
+                    $this->updateStatus('processing', min($progress, 99), $written);
                 }
             }
 
@@ -110,7 +115,7 @@ class ExportCleanUsersJob implements ShouldQueue
 
             $size = Storage::disk('s3')->size($path);
 
-            $this->updateStatus('completed', 100, $processed, [
+            $this->updateStatus('completed', 100, $written, [
                 'filename' => $filename,
                 'path' => $path,
                 'size' => $size,
@@ -119,7 +124,7 @@ class ExportCleanUsersJob implements ShouldQueue
 
             Log::info("ExportCleanUsersJob completed", [
                 'job_id' => $this->jobId,
-                'processed' => $processed,
+                'processed' => $written,
                 'size' => $size,
             ]);
 
