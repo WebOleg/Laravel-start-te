@@ -58,6 +58,7 @@ class ExportCleanUsersJob implements ShouldQueue
                 ->whereNotNull('debtor_id')
                 ->distinct();
 
+            // Build query WITHOUT limit - we'll enforce it manually
             $query = BillingAttempt::query()
                 ->with('debtor:id,first_name,last_name,iban')
                 ->select('id', 'debtor_id', 'amount', 'currency')
@@ -68,7 +69,6 @@ class ExportCleanUsersJob implements ShouldQueue
                 ->whereNotIn('debtor_id', $chargebackedSubquery)
                 ->oldest('emp_created_at');
 
-            $processed = 0;
             $written = 0;
 
             // Create temp file
@@ -78,8 +78,8 @@ class ExportCleanUsersJob implements ShouldQueue
             // Write CSV header
             fputcsv($handle, ['name', 'iban', 'amount', 'currency']);
 
-            // Process with cursor and manual limit check
-            foreach ($query->cursor() as $attempt) {
+            // Process with lazy() for memory efficiency, manual limit check
+            foreach ($query->lazy(1000) as $attempt) {
                 // Stop when limit reached
                 if ($written >= $this->limit) {
                     break;
@@ -98,7 +98,6 @@ class ExportCleanUsersJob implements ShouldQueue
                 ]);
 
                 $written++;
-                $processed++;
 
                 // Update progress every 1000 records
                 if ($written % 1000 === 0) {
