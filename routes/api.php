@@ -91,6 +91,10 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::apiResource('vop-logs', AdminVopLogController::class)->only(['index', 'show']);
         Route::apiResource('billing-attempts', AdminBillingAttemptController::class)->only(['index', 'show']);
 
+        // Clean users export
+        Route::get('billing-attempts/clean-users/stats', [AdminBillingAttemptController::class, 'cleanUsersStats']);
+        Route::get('billing-attempts/clean-users/export', [AdminBillingAttemptController::class, 'exportCleanUsers']);
+
         Route::apiResource('billing/descriptors', DescriptorController::class);
     });
 });
