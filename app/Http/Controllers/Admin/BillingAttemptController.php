@@ -13,9 +13,9 @@ use App\Models\BillingAttempt;
 use App\Models\DebtorProfile;
 use App\Services\Emp\EmpBillingService;
 use Illuminate\Http\JsonResponse;
-use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
+use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -189,10 +189,10 @@ class BillingAttemptController extends Controller
     }
 
     /**
-     * Download completed export file via S3 Signed URL.
-     * No server load - redirect directly to S3.
+     * Download completed export file via nginx X-Accel-Redirect.
+     * File is served by nginx directly from MinIO - minimal Laravel overhead.
      */
-    public function downloadExport(string $jobId): JsonResponse|RedirectResponse
+    public function downloadExport(string $jobId): JsonResponse|Response
     {
         $status = Cache::get("clean_users_export:{$jobId}");
 
@@ -210,17 +210,19 @@ class BillingAttemptController extends Controller
             ], 404);
         }
 
-        // Generate signed URL valid for 1 hour - download directly from S3
-        $signedUrl = Storage::disk('s3')->temporaryUrl(
-            $path,
-            now()->addHour(),
-            [
-                'ResponseContentDisposition' => 'attachment; filename="' . $status['filename'] . '"',
-                'ResponseContentType' => 'text/csv; charset=utf-8',
-            ]
-        );
+        $filename = $status['filename'];
+        
+        // Extract relative path after 'exports/'
+        // Path format: exports/{jobId}/filename.csv
+        $relativePath = Str::after($path, 'exports/');
 
-        return redirect($signedUrl);
+        // Use X-Accel-Redirect for nginx to proxy from MinIO
+        // nginx location /s3-exports/ proxies to MinIO
+        return response('', 200, [
+            'X-Accel-Redirect' => '/s3-exports/' . $relativePath,
+            'Content-Type' => 'text/csv; charset=utf-8',
+            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
+        ]);
     }
 
     /**
