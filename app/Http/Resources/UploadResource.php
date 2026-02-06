@@ -47,6 +47,7 @@ class UploadResource extends JsonResource
             'debtors_count' => $this->whenCounted('debtors'),
             'valid_count' => $this->when(isset($this->valid_count), $this->valid_count),
             'invalid_count' => $this->when(isset($this->invalid_count), $this->invalid_count),
+            'approved_count' => $this->when(isset($this->billed_with_emp_count), $this->billed_with_emp_count),
             'bav_excluded_count' => $this->when(isset($this->bav_excluded_count), $this->bav_excluded_count),
             'bav_passed_count' => $this->when(isset($this->bav_passed_count), $this->bav_passed_count),
             'bav_verified_count' => $this->when(isset($this->bav_verified_count), $this->bav_verified_count),
@@ -56,6 +57,15 @@ class UploadResource extends JsonResource
             'chargeback_amount' => $this->when(isset($this->chargeback_amount), (float) $this->chargeback_amount),
 
             // Percentages
+            'approved_percentage' => $this->when(
+                isset($this->valid_count) && isset($this->billed_with_emp_count),
+                function () {
+                    if (!$this->valid_count || $this->valid_count == 0) {
+                        return null;
+                    }
+                    return round(($this->billed_with_emp_count / $this->valid_count) * 100, 2);
+                }
+            ),
             'cb_percentage' => $this->when(
                 isset($this->valid_count) && isset($this->chargeback_count),
                 function () {

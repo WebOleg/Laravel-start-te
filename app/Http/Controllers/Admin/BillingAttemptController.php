@@ -8,15 +8,23 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Http\Resources\BillingAttemptResource;
+use App\Jobs\ExportCleanUsersJob;
 use App\Models\BillingAttempt;
 use App\Models\DebtorProfile;
 use App\Services\Emp\EmpBillingService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
+use Illuminate\Http\Response;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class BillingAttemptController extends Controller
 {
+    private const STREAMING_THRESHOLD = 10000;
+
     /**
      * List billing attempts with filters.
      */
@@ -49,19 +57,16 @@ class BillingAttemptController extends Controller
             }
         }
 
-        // Transaction ID, Unique ID, or Debtor Name/IBAN/Email
         if ($request->filled('search')) {
             $search = $request->input('search');
             $query->where(function ($q) use ($search) {
                 $q->where('transaction_id', 'like', "%{$search}%")
                     ->orWhere('unique_id', 'like', "%{$search}%")
-
                     ->orWhereHas('debtor', function ($d) use ($search) {
                         $d->where('first_name', 'like', "%{$search}%")
                             ->orWhere('last_name', 'like', "%{$search}%")
                             ->orWhere('email', 'like', "%{$search}%")
                             ->orWhere('iban', 'like', "%{$search}%")
-
                             ->orWhereHas('debtorProfile', function ($dp) use ($search) {
                                 $dp->where('iban_masked', 'like', "%{$search}%");
                             });
@@ -112,5 +117,196 @@ class BillingAttemptController extends Controller
                 'message' => 'Retry failed: ' . $e->getMessage(),
             ], 500);
         }
+    }
+
+    /**
+     * Get stats for clean users (cycle1 approved, no chargeback, 30+ days old).
+     */
+    public function cleanUsersStats(Request $request): JsonResponse
+    {
+        $request->validate([
+            'min_days' => 'nullable|integer|min:1|max:365',
+        ]);
+
+        $minDays = (int) $request->input('min_days', 30);
+        $cutoffDate = now()->subDays($minDays);
+
+        $count = $this->buildCleanUsersQuery($cutoffDate)->count();
+
+        return response()->json([
+            'data' => [
+                'count' => $count,
+                'min_days' => $minDays,
+                'cutoff_date' => $cutoffDate->toDateString(),
+                'streaming_threshold' => self::STREAMING_THRESHOLD,
+            ],
+        ]);
+    }
+
+    /**
+     * Export clean users - streaming for small, job for large.
+     */
+    public function exportCleanUsers(Request $request): StreamedResponse|JsonResponse
+    {
+        $request->validate([
+            'limit' => 'required|integer|min:1|max:100000',
+            'min_days' => 'nullable|integer|min:1|max:365',
+        ]);
+
+        $limit = (int) $request->input('limit');
+        $minDays = (int) $request->input('min_days', 30);
+
+        // For small exports - use streaming
+        if ($limit <= self::STREAMING_THRESHOLD) {
+            return $this->streamCleanUsers($limit, $minDays);
+        }
+
+        // For large exports - use background job
+        return $this->queueCleanUsersExport($limit, $minDays);
+    }
+
+    /**
+     * Get export job status.
+     */
+    public function exportStatus(string $jobId): JsonResponse
+    {
+        $status = Cache::get("clean_users_export:{$jobId}");
+
+        if (!$status) {
+            return response()->json([
+                'message' => 'Export job not found',
+            ], 404);
+        }
+
+        // Add download URL if completed
+        if ($status['status'] === 'completed' && isset($status['path'])) {
+            $status['download_url'] = route('admin.clean-users.download', ['jobId' => $jobId]);
+        }
+
+        return response()->json([
+            'data' => $status,
+        ]);
+    }
+
+    /**
+     * Download completed export file via nginx X-Accel-Redirect.
+     * File is served by nginx directly from MinIO - minimal Laravel overhead.
+     */
+    public function downloadExport(string $jobId): JsonResponse|Response
+    {
+        $status = Cache::get("clean_users_export:{$jobId}");
+
+        if (!$status || $status['status'] !== 'completed') {
+            return response()->json([
+                'message' => 'Export not ready or not found',
+            ], 404);
+        }
+
+        $path = $status['path'];
+
+        if (!Storage::disk('s3')->exists($path)) {
+            return response()->json([
+                'message' => 'Export file not found',
+            ], 404);
+        }
+
+        $filename = $status['filename'];
+        
+        // Extract relative path after 'exports/'
+        // Path format: exports/{jobId}/filename.csv
+        $relativePath = Str::after($path, 'exports/');
+
+        // Use X-Accel-Redirect for nginx to proxy from MinIO
+        // nginx location /s3-exports/ proxies to MinIO
+        return response('', 200, [
+            'X-Accel-Redirect' => '/s3-exports/' . $relativePath,
+            'Content-Type' => 'text/csv; charset=utf-8',
+            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
+        ]);
+    }
+
+    /**
+     * Stream small export directly.
+     */
+    private function streamCleanUsers(int $limit, int $minDays): StreamedResponse
+    {
+        $cutoffDate = now()->subDays($minDays);
+        $filename = 'clean_users_' . now()->format('Y-m-d_His') . '.csv';
+
+        return response()->streamDownload(function () use ($cutoffDate, $limit) {
+            $handle = fopen('php://output', 'w');
+
+            fputcsv($handle, ['name', 'iban', 'amount', 'currency']);
+
+            $query = $this->buildCleanUsersQuery($cutoffDate)
+                ->with('debtor:id,first_name,last_name,iban')
+                ->select('id', 'debtor_id', 'amount', 'currency')
+                ->limit($limit);
+
+            foreach ($query->lazy(500) as $attempt) {
+                $debtor = $attempt->debtor;
+                if (!$debtor || !$debtor->iban) {
+                    continue;
+                }
+
+                fputcsv($handle, [
+                    trim($debtor->first_name . ' ' . $debtor->last_name),
+                    $debtor->iban,
+                    number_format($attempt->amount, 2, '.', ''),
+                    $attempt->currency ?? 'EUR',
+                ]);
+            }
+
+            fclose($handle);
+        }, $filename, [
+            'Content-Type' => 'text/csv; charset=utf-8',
+            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
+        ]);
+    }
+
+    /**
+     * Queue large export as background job.
+     */
+    private function queueCleanUsersExport(int $limit, int $minDays): JsonResponse
+    {
+        $jobId = Str::uuid()->toString();
+
+        Cache::put("clean_users_export:{$jobId}", [
+            'status' => 'pending',
+            'progress' => 0,
+            'processed' => 0,
+            'limit' => $limit,
+            'min_days' => $minDays,
+            'created_at' => now()->toISOString(),
+        ], now()->addHours(24));
+
+        ExportCleanUsersJob::dispatch($jobId, $limit, $minDays);
+
+        return response()->json([
+            'data' => [
+                'job_id' => $jobId,
+                'status' => 'pending',
+                'message' => 'Export queued. Use job_id to check status.',
+            ],
+        ], 202);
+    }
+
+    /**
+     * Build optimized query for clean users.
+     */
+    private function buildCleanUsersQuery(\Carbon\Carbon $cutoffDate)
+    {
+        $chargebackedSubquery = BillingAttempt::select('debtor_id')
+            ->where('status', BillingAttempt::STATUS_CHARGEBACKED)
+            ->whereNotNull('debtor_id')
+            ->distinct();
+
+        return BillingAttempt::query()
+            ->where('status', BillingAttempt::STATUS_APPROVED)
+            ->where('attempt_number', 1)
+            ->where('emp_created_at', '<=', $cutoffDate)
+            ->whereNotNull('debtor_id')
+            ->whereNotIn('debtor_id', $chargebackedSubquery)
+            ->oldest('emp_created_at');
     }
 }
