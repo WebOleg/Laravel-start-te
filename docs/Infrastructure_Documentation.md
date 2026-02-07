@@ -1,5 +1,6 @@
 # Infrastructure Documentation
 
+
 ## 1. Infrastructure Diagram
 **Visual Overview of System Architecture & Data Flow**
 
