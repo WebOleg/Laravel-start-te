@@ -265,4 +265,36 @@ class DebtorController extends Controller
             default => trim($value),
         };
     }
+
+
+    /**
+     * Get the count of debtors attached to non-existent (or soft-deleted) uploads.
+     */
+    public function getOrphanedCount(): JsonResponse
+    {
+        $count = Debtor::whereNotNull('upload_id')
+                        ->doesntHave('upload')
+                        ->count();
+
+        return response()->json([
+            'orphaned_count' => $count,
+        ]);
+    }
+
+    /**
+     * Remove all debtors that are attached to non-existent (or soft-deleted) uploads.
+     *
+     * @return JsonResponse
+     */
+    public function pruneOrphans(): JsonResponse
+    {
+        $count = Debtor::whereNotNull('upload_id')
+                        ->doesntHave('upload')
+                        ->delete();
+
+        return response()->json([
+            'message' => 'Orphaned debtors cleaned up successfully.',
+            'deleted_count' => $count,
+        ]);
+    }
 }
