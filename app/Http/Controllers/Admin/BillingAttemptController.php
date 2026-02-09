@@ -15,7 +15,6 @@ use App\Services\Emp\EmpBillingService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
-use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -189,10 +188,9 @@ class BillingAttemptController extends Controller
     }
 
     /**
-     * Download completed export file via nginx X-Accel-Redirect.
-     * File is served by nginx directly from MinIO - minimal Laravel overhead.
+     * Download completed export file - stream from S3 through Laravel.
      */
-    public function downloadExport(string $jobId): JsonResponse|Response
+    public function downloadExport(string $jobId): JsonResponse|StreamedResponse
     {
         $status = Cache::get("clean_users_export:{$jobId}");
 
@@ -211,17 +209,13 @@ class BillingAttemptController extends Controller
         }
 
         $filename = $status['filename'];
-        
-        // Extract relative path after 'exports/'
-        // Path format: exports/{jobId}/filename.csv
-        $relativePath = Str::after($path, 'exports/');
 
-        // Use X-Accel-Redirect for nginx to proxy from MinIO
-        // nginx location /s3-exports/ proxies to MinIO
-        return response('', 200, [
-            'X-Accel-Redirect' => '/s3-exports/' . $relativePath,
+        return response()->streamDownload(function () use ($path) {
+            $stream = Storage::disk('s3')->readStream($path);
+            fpassthru($stream);
+            fclose($stream);
+        }, $filename, [
             'Content-Type' => 'text/csv; charset=utf-8',
-            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
         ]);
     }
 

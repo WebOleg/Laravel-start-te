@@ -182,7 +182,7 @@ class CleanUsersExportTest extends TestCase
             ->get("/api/admin/billing-attempts/clean-users/export/{$jobId}/download");
 
         // Should redirect to signed URL
-        $response->assertOk()->assertHeader('X-Accel-Redirect');
+        $response->assertOk()->assertDownload();
     }
 
     public function test_clean_users_query_excludes_chargebacked_debtors(): void
