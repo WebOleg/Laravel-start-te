@@ -20,13 +20,18 @@ class ChargebackService
     public function getChargebacks(Request $request)
     {
         $chargebacks = BillingAttempt::with([
-                'debtor:id,first_name,last_name,email,iban', 
-                'debtor.latestVopLog:vop_logs.id,vop_logs.debtor_id,vop_logs.bank_name,vop_logs.country'
-            ])
-            ->where('status', BillingAttempt::STATUS_CHARGEBACKED);
+            'debtor:id,first_name,last_name,email,iban', 
+            'debtor.latestVopLog:vop_logs.id,vop_logs.debtor_id,vop_logs.bank_name,vop_logs.country',
+            'empAccount:id,name,slug'
+        ])
+        ->where('status', BillingAttempt::STATUS_CHARGEBACKED);
 
         if ($request->has('code')) {
             $chargebacks->where('chargeback_reason_code', $request->input('code'));
+        }
+
+        if ($request->has('emp_account_id')) {
+            $chargebacks->where('emp_account_id', $request->input('emp_account_id'));
         }
 
         $perPage = min((int) $request->input('per_page', 50), 100);
