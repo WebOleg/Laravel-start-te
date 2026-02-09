@@ -28,14 +28,9 @@ class IbanBavService
     private const RESULT_MISMATCH = 'mismatch';
     private const RESULT_REJECTED = 'rejected';
 
-    /** @var array<string> Valid error codes that indicate successful verification */
-    private const VALID_RESPONSES = [
-        'NAME_NOT_MATCH',
-        'NAME_PARTIAL_MATCH',
-    ];
-
     private string $apiKey;
     private string $apiUrl;
+    private string $balanceApiUrl;
     private bool $mockMode;
     private IbanValidator $ibanValidator;
 
@@ -43,8 +38,74 @@ class IbanBavService
     {
         $this->apiKey = config('services.iban.api_key', '');
         $this->apiUrl = config('services.iban.bav_api_url', 'https://api.iban.com/clients/api/verify/v3/');
+        $this->balanceApiUrl = config('services.iban.balance_api_url', 'https://api.ibanapi.com/v1/balance');
         $this->mockMode = config('services.iban.mock', true);
         $this->ibanValidator = $ibanValidator;
+    }
+
+    /**
+     * @return array{success: bool, credits_remaining: int, credits_total: int, error: string|null}
+     */
+    public function getBalance(): array
+    {
+        if ($this->mockMode) {
+            Log::channel('bav')->info('IbanBavService: getBalance() mock mode');
+            return [
+                'success' => true,
+                'credits_remaining' => 1007,
+                'credits_total' => 2500,
+                'error' => null,
+            ];
+        }
+
+        try {
+            Log::channel('bav')->info('IbanBavService: Fetching BAV balance', [
+                'url' => $this->balanceApiUrl,
+            ]);
+
+            $response = Http::timeout(30)->get($this->balanceApiUrl, [
+                'api_key' => $this->apiKey,
+            ]);
+
+            $data = $response->json();
+
+            if (!$response->successful() || !isset($data['credits_remaining'])) {
+                Log::channel('bav')->warning('IbanBavService: Balance API error', [
+                    'status' => $response->status(),
+                    'response' => $data,
+                ]);
+
+                return [
+                    'success' => false,
+                    'credits_remaining' => 0,
+                    'credits_total' => 0,
+                    'error' => $data['error'] ?? 'Failed to fetch balance',
+                ];
+            }
+
+            Log::channel('bav')->info('IbanBavService: Balance fetched', [
+                'credits_remaining' => $data['credits_remaining'] ?? 0,
+            ]);
+
+            return [
+                'success' => true,
+                'credits_remaining' => (int) ($data['credits_remaining'] ?? 0),
+                'credits_total' => (int) ($data['credits_total'] ?? 2500),
+                'error' => null,
+            ];
+
+        } catch (\Exception $e) {
+            Log::channel('bav')->error('IbanBavService: Balance API exception', [
+                'error' => $e->getMessage(),
+            ]);
+
+            return [
+                'success' => false,
+                'credits_remaining' => 0,
+                'credits_total' => 0,
+                'error' => $e->getMessage(),
+            ];
+        }
     }
 
     /**
@@ -90,11 +151,17 @@ class IbanBavService
         return in_array(strtoupper($countryCode), self::SUPPORTED_COUNTRIES, true);
     }
 
+    /**
+     * @return array<string>
+     */
     public function getSupportedCountries(): array
     {
         return self::SUPPORTED_COUNTRIES;
     }
 
+    /**
+     * @return array{success: bool, valid: bool, name_match: string, bic: ?string, vop_score: int, vop_result: string, error: ?string}
+     */
     private function callApi(string $iban, string $name): array
     {
         try {
@@ -127,18 +194,14 @@ class IbanBavService
                 'bic' => $data['result']['bic'] ?? null,
             ]);
 
-            // Check if query was successful
             if (!$querySuccess) {
-                // Real error - not a valid response
                 return $this->buildResult(success: false, error: $errorCode ?: 'BAV verification failed');
             }
 
-            // Query successful - even if error contains NAME_NOT_MATCH etc, it's a valid result
             $nameMatch = $data['result']['name_match'] ?? 'unavailable';
             $valid = !empty($data['result']['valid']);
             $bic = $data['result']['bic'] ?? null;
 
-            // If we got a name_match result, the verification was successful
             if (in_array($nameMatch, ['yes', 'partial', 'no'], true)) {
                 return $this->buildResult(
                     success: true,
@@ -148,7 +211,6 @@ class IbanBavService
                 );
             }
 
-            // Verification succeeded but bank doesn't support name matching
             return $this->buildResult(
                 success: true,
                 valid: $valid,
@@ -166,6 +228,9 @@ class IbanBavService
         }
     }
 
+    /**
+     * @return array{success: bool, valid: bool, name_match: string, bic: ?string, vop_score: int, vop_result: string, error: ?string}
+     */
     private function getMockResponse(string $iban, string $name): array
     {
         $lastDigit = (int) substr($iban, -1);
@@ -211,6 +276,9 @@ class IbanBavService
         };
     }
 
+    /**
+     * @return array{success: bool, valid: bool, name_match: string, bic: ?string, vop_score: int, vop_result: string, error: ?string}
+     */
     private function buildResult(
         bool $success,
         bool $valid = false,

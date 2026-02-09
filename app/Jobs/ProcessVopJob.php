@@ -1,5 +1,7 @@
 <?php
-
+/**
+ * Process VOP verification for upload.
+ */
 namespace App\Jobs;
 
 use App\Models\Upload;
@@ -79,7 +81,6 @@ class ProcessVopJob implements ShouldQueue, ShouldBeUnique
                 $upload->markVopCompleted();
                 Log::info('ProcessVopJob batch completed', ['upload_id' => $upload->id]);
 
-                // Automatically generate BAV CSV report after VOP completes
                 GenerateVopReportJob::dispatch($upload->id);
                 Log::info('GenerateVopReportJob dispatched', ['upload_id' => $upload->id]);
             })
@@ -108,6 +109,13 @@ class ProcessVopJob implements ShouldQueue, ShouldBeUnique
     private function selectDebtorsForBav(array $debtorIds): int
     {
         if (!config('services.iban.bav_enabled', false)) {
+            return 0;
+        }
+
+        if (!config('services.iban.bav_auto_select', false)) {
+            Log::info('ProcessVopJob: BAV auto-select disabled', [
+                'upload_id' => $this->upload->id,
+            ]);
             return 0;
         }
 
