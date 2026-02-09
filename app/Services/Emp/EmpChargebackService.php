@@ -40,6 +40,11 @@ class EmpChargebackService
             
             $xml = $client->buildChargebackDetailXml($uniqueId);
             $response = $client->sendRequest('/chargebacks', $xml);
+
+            Log::info('Response obtained from EMP API', [
+                'unique_id' => $uniqueId,
+                'response' => $response,
+            ]);
             
             if (empty($response)) {
                 Log::warning('EMP Chargeback: empty response', ['unique_id' => $uniqueId]);

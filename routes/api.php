@@ -86,6 +86,9 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/codes', [ChargebackController::class, 'codes']);
         });
 
+        Route::get('debtors/orphans/count', [AdminDebtorController::class, 'getOrphanedCount']);
+        Route::delete('debtors/orphans', [AdminDebtorController::class, 'pruneOrphans']);
+
         Route::post('debtors/{debtor}/validate', [AdminDebtorController::class, 'validate']);
         Route::apiResource('debtors', AdminDebtorController::class)->only(['index', 'show', 'update', 'destroy']);
         Route::apiResource('vop-logs', AdminVopLogController::class)->only(['index', 'show']);

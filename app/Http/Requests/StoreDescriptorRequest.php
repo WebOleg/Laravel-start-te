@@ -19,8 +19,7 @@ class StoreDescriptorRequest extends FormRequest
             'descriptor_name' => [
                 'required',
                 'string',
-                'max:25',
-                'regex:/^[a-zA-Z0-9 ]+$/'
+                'max:25'
             ],
             'descriptor_city' => 'nullable|string|max:13',
             'descriptor_country' => 'nullable|string|size:3', // ISO alpha-3
