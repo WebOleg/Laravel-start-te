@@ -165,7 +165,7 @@ class BavVerificationTest extends TestCase
         $this->assertEquals(4000, $response->json('data.credits_remaining'));
         
         // Verify in DB
-        $credit = BavCredit::first();
+        $credit = BavCredit::getInstance()->fresh();
         $this->assertEquals(5000, $credit->credits_total);
         $this->assertEquals(1000, $credit->credits_used);
     }
@@ -175,7 +175,7 @@ class BavVerificationTest extends TestCase
         // Initial: 80 remaining (2500 - 2420)
         $this->assertTrue(BavCredit::consume(1));
         
-        $credit = BavCredit::first();
+        $credit = BavCredit::getInstance()->fresh();
         $this->assertEquals(2421, $credit->credits_used);
         $this->assertEquals(79, $credit->getRemaining());
     }
@@ -186,7 +186,7 @@ class BavVerificationTest extends TestCase
         $this->assertFalse(BavCredit::consume(100));
         
         // Credits unchanged
-        $credit = BavCredit::first();
+        $credit = BavCredit::getInstance()->fresh();
         $this->assertEquals(2420, $credit->credits_used);
     }
 
