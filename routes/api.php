@@ -18,10 +18,10 @@ use App\Http\Controllers\Admin\StatsController as AdminStatsController;
 use App\Http\Controllers\Admin\VopController as AdminVopController;
 use App\Http\Controllers\Admin\EmpRefreshController as AdminEmpRefreshController;
 use App\Http\Controllers\Admin\BicAnalyticsController as AdminBicAnalyticsController;
-use App\Http\Controllers\Webhook\EmpWebhookController;
 use App\Http\Middleware\EmpWebhookSecurity;
+use App\Http\Controllers\Webhook\EmpWebhookController;
 
-Route::post('/login', [AuthController::class, 'login']);
+Route::post('/login', [AuthController::class, 'login'])->name('login');
 
 Route::prefix('auth')->group(function () {
     Route::post('/setup-2fa', [AuthController::class, 'setup2fa']);
@@ -89,6 +89,15 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('debtors/{debtor}/validate', [AdminDebtorController::class, 'validate']);
         Route::apiResource('debtors', AdminDebtorController::class)->only(['index', 'show', 'update', 'destroy']);
         Route::apiResource('vop-logs', AdminVopLogController::class)->only(['index', 'show']);
+
+        // Clean users export - MUST be BEFORE apiResource to avoid {billing_attempt} catching 'clean-users'
+        Route::prefix('billing-attempts/clean-users')->group(function () {
+            Route::get('/stats', [AdminBillingAttemptController::class, 'cleanUsersStats']);
+            Route::get('/export', [AdminBillingAttemptController::class, 'exportCleanUsers']);
+            Route::get('/export/{jobId}/status', [AdminBillingAttemptController::class, 'exportStatus']);
+            Route::get('/export/{jobId}/download', [AdminBillingAttemptController::class, 'downloadExport'])->name('admin.clean-users.download');
+        });
+
         Route::apiResource('billing-attempts', AdminBillingAttemptController::class)->only(['index', 'show']);
 
         Route::apiResource('billing/descriptors', DescriptorController::class);
