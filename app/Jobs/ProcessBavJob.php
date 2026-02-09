@@ -132,7 +132,7 @@ class ProcessBavJob implements ShouldQueue
             'yes' => 15,
             'partial' => 10,
             'unavailable' => 0,
-            'no' => -10,
+            'no' => 0,
             default => 0,
         };
     }
