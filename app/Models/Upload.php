@@ -53,6 +53,12 @@ class Upload extends Model
         'vop_batch_id',
         'vop_started_at',
         'vop_completed_at',
+        'bav_status',
+        'bav_batch_id',
+        'bav_started_at',
+        'bav_completed_at',
+        'bav_total_count',
+        'bav_processed_count',
         'reconciliation_status',
         'reconciliation_batch_id',
         'reconciliation_started_at',
@@ -75,6 +81,10 @@ class Upload extends Model
         'billing_completed_at' => 'datetime',
         'vop_started_at' => 'datetime',
         'vop_completed_at' => 'datetime',
+        'bav_started_at' => 'datetime',
+        'bav_completed_at' => 'datetime',
+        'bav_total_count' => 'integer',
+        'bav_processed_count' => 'integer',
         'reconciliation_started_at' => 'datetime',
         'reconciliation_completed_at' => 'datetime',
     ];
@@ -109,8 +119,7 @@ class Upload extends Model
     }
 
     /**
-     * Get the EMP account to use for billing this upload.
-     * Falls back to system active account if not set.
+     * @return EmpAccount|null
      */
     public function getEffectiveEmpAccount(): ?EmpAccount
     {
@@ -136,7 +145,6 @@ class Upload extends Model
         return $this->canBeSoftDeleted() || $this->canBeHardDeleted();
     }
 
-    // Validation job tracking
     public function isValidationProcessing(): bool
     {
         if ($this->validation_status !== self::JOB_PROCESSING) {
@@ -180,7 +188,6 @@ class Upload extends Model
         ]);
     }
 
-    // Billing job tracking
     public function isBillingProcessing(): bool
     {
         if ($this->billing_status !== self::JOB_PROCESSING) {
@@ -224,7 +231,6 @@ class Upload extends Model
         ]);
     }
 
-    // VOP job tracking
     public function isVopProcessing(): bool
     {
         if ($this->vop_status !== self::JOB_PROCESSING) {
@@ -268,7 +274,113 @@ class Upload extends Model
         ]);
     }
 
-    // Reconciliation job tracking
+    public function isBavProcessing(): bool
+    {
+        if ($this->bav_status !== self::JOB_PROCESSING) {
+            return false;
+        }
+
+        if ($this->bav_batch_id) {
+            $batch = Bus::findBatch($this->bav_batch_id);
+            if ($batch && $batch->finished()) {
+                $this->markBavCompleted();
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    public function startBav(string $batchId, int $totalCount): void
+    {
+        $this->update([
+            'bav_status' => self::JOB_PROCESSING,
+            'bav_batch_id' => $batchId,
+            'bav_started_at' => now(),
+            'bav_completed_at' => null,
+            'bav_total_count' => $totalCount,
+            'bav_processed_count' => 0,
+        ]);
+    }
+
+    public function markBavCompleted(): void
+    {
+        $this->update([
+            'bav_status' => self::JOB_COMPLETED,
+            'bav_completed_at' => now(),
+        ]);
+    }
+
+    public function markBavFailed(): void
+    {
+        $this->update([
+            'bav_status' => self::JOB_FAILED,
+            'bav_completed_at' => now(),
+        ]);
+    }
+
+    public function incrementBavProcessed(int $count = 1): void
+    {
+        $this->increment('bav_processed_count', $count);
+    }
+
+    /**
+     * @return array{status: string, total: int, processed: int, percentage: float, started_at: string|null, completed_at: string|null}
+     */
+    public function getBavProgress(): array
+    {
+        return [
+            'status' => $this->bav_status ?? 'idle',
+            'total' => $this->bav_total_count ?? 0,
+            'processed' => $this->bav_processed_count ?? 0,
+            'percentage' => $this->bav_total_count > 0 
+                ? round(($this->bav_processed_count / $this->bav_total_count) * 100, 1) 
+                : 0,
+            'started_at' => $this->bav_started_at?->toISOString(),
+            'completed_at' => $this->bav_completed_at?->toISOString(),
+        ];
+    }
+
+    /**
+     * @return int
+     */
+    public function getBavEligibleCount(): int
+    {
+        $supportedCountries = config('services.iban.bav_supported_countries', []);
+        
+        return $this->debtors()
+            ->whereHas('latestVopLog', function ($query) use ($supportedCountries) {
+                $query->where('result', 'verified')
+                    ->where('vop_score', '>=', 60)
+                    ->where('bav_verified', false)
+                    ->whereIn('country', $supportedCountries);
+            })
+            ->count();
+    }
+
+    /**
+     * @param int|null $limit
+     * @return array<int>
+     */
+    public function getBavEligibleDebtorIds(?int $limit = null): array
+    {
+        $supportedCountries = config('services.iban.bav_supported_countries', []);
+        
+        $query = $this->debtors()
+            ->whereHas('latestVopLog', function ($q) use ($supportedCountries) {
+                $q->where('result', 'verified')
+                    ->where('vop_score', '>=', 60)
+                    ->where('bav_verified', false)
+                    ->whereIn('country', $supportedCountries);
+            });
+        
+        if ($limit) {
+            $query->limit($limit);
+        }
+        
+        return $query->pluck('id')->toArray();
+    }
+
     public function isReconciliationProcessing(): bool
     {
         if ($this->reconciliation_status !== self::JOB_PROCESSING) {
