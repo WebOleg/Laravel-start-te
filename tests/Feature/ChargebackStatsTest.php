@@ -145,8 +145,8 @@ class ChargebackStatsTest extends TestCase
         $this->assertEquals(8, $country['approved']);
         $this->assertEquals(2, $country['chargebacks']);
         $this->assertEquals(20, $country['cb_rate_total']);
-        // cb_rate_approved = chargebacks / (approved + chargebacks) = 2 / 10 = 20%
-        $this->assertEquals(20, $country['cb_rate_approved']);
+        // cb_rate_approved = chargebacks / approved = 2 / 8 = 25%
+        $this->assertEquals(25, $country['cb_rate_approved']);
     }
 
     public function test_chargeback_rates_triggers_alert_above_threshold(): void
@@ -751,9 +751,9 @@ class ChargebackStatsTest extends TestCase
         $response->assertStatus(200);
         $data = $response->json('data');
 
-        // CB rate = chargebacks / (approved + chargebacks) = 2 / (10 + 2) = 16.67%
-        $this->assertEqualsWithDelta(16.67, $data['banks'][0]['cb_rate'], 0.01);
-        $this->assertEqualsWithDelta(16.67, $data['totals']['cb_rate'], 0.01);
+        // CB rate = chargebacks / approved = 2 / 10 = 20%
+        $this->assertEqualsWithDelta(20.0, $data['banks'][0]['cb_rate'], 0.01);
+        $this->assertEqualsWithDelta(20.0, $data['totals']['cb_rate'], 0.01);
     }
 
     public function test_chargeback_banks_multiple_aggregated_correctly(): void
@@ -824,13 +824,13 @@ class ChargebackStatsTest extends TestCase
         
         $this->assertEquals(400.0, $deutscheBank['total_amount']);
         $this->assertEquals(1, $deutscheBank['chargebacks']);
-        // CB rate = chargebacks / (approved + chargebacks) = 1 / (3 + 1) = 25%
-        $this->assertEqualsWithDelta(25.0, $deutscheBank['cb_rate'], 0.01);
+        // CB rate = chargebacks / approved = 1 / 3 = 33.33%
+        $this->assertEqualsWithDelta(33.33, $deutscheBank['cb_rate'], 0.01);
         
         $this->assertEquals(400.0, $commerzbank['total_amount']);
         $this->assertEquals(2, $commerzbank['chargebacks']);
-        // CB rate = chargebacks / (approved + chargebacks) = 2 / (2 + 2) = 50%
-        $this->assertEqualsWithDelta(50.0, $commerzbank['cb_rate'], 0.01);
+        // CB rate = chargebacks / approved = 2 / 2 = 100%
+        $this->assertEqualsWithDelta(100.0, $commerzbank['cb_rate'], 0.01);
     }
 
     public function test_chargeback_banks_response_is_cached(): void
