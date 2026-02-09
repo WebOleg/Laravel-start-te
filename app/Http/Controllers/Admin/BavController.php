@@ -7,6 +7,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Jobs\ProcessBavJob;
+use App\Models\BavCredit;
 use App\Models\Upload;
 use App\Services\IbanBavService;
 use Illuminate\Http\JsonResponse;
@@ -26,15 +27,11 @@ class BavController extends Controller
      */
     public function getBalance(): JsonResponse
     {
-        $balance = $this->bavService->getBalance();
+        $credit = BavCredit::getInstance();
 
         return response()->json([
-            'success' => $balance['success'],
-            'data' => [
-                'credits_remaining' => $balance['credits_remaining'],
-                'credits_total' => $balance['credits_total'],
-            ],
-            'error' => $balance['error'],
+            'success' => true,
+            'data' => $credit->getBalanceInfo(),
         ]);
     }
 
@@ -45,17 +42,18 @@ class BavController extends Controller
     public function getStats(Upload $upload): JsonResponse
     {
         $eligibleCount = $upload->getBavEligibleCount();
-        $balance = $this->bavService->getBalance();
+        $credit = BavCredit::getInstance();
 
         return response()->json([
             'success' => true,
             'data' => [
                 'upload_id' => $upload->id,
                 'eligible_count' => $eligibleCount,
-                'credits_remaining' => $balance['credits_remaining'],
-                'credits_total' => $balance['credits_total'],
+                'credits_remaining' => $credit->getRemaining(),
+                'credits_total' => $credit->credits_total,
+                'is_expired' => $credit->isExpired(),
                 'bav_status' => $upload->bav_status ?? 'idle',
-                'can_start' => $eligibleCount > 0 && $balance['credits_remaining'] > 0,
+                'can_start' => $eligibleCount > 0 && $credit->hasCredits() && !$credit->isExpired(),
             ],
         ]);
     }
@@ -80,11 +78,19 @@ class BavController extends Controller
             ], 422);
         }
 
-        $balance = $this->bavService->getBalance();
-        if (!$balance['success'] || $balance['credits_remaining'] < $limit) {
+        $credit = BavCredit::getInstance();
+
+        if ($credit->isExpired()) {
             return response()->json([
                 'success' => false,
-                'error' => 'Insufficient BAV credits. Available: ' . $balance['credits_remaining'],
+                'error' => 'BAV credits have expired. Please renew subscription.',
+            ], 422);
+        }
+
+        if (!$credit->hasCredits($limit)) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Insufficient BAV credits. Available: ' . $credit->getRemaining() . ', Requested: ' . $limit,
             ], 422);
         }
 
@@ -176,6 +182,32 @@ class BavController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'BAV verification cancelled',
+        ]);
+    }
+
+    /**
+     * Manual credit adjustment (admin only).
+     * @param Request $request
+     * @return JsonResponse
+     */
+    public function adjustCredits(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'credits_total' => 'required|integer|min:0',
+            'credits_used' => 'required|integer|min:0',
+        ]);
+
+        $credit = BavCredit::getInstance();
+        $credit->adjust(
+            $validated['credits_total'],
+            $validated['credits_used'],
+            $request->user()?->email ?? 'system'
+        );
+
+        return response()->json([
+            'success' => true,
+            'data' => $credit->fresh()->getBalanceInfo(),
+            'message' => 'Credits adjusted successfully',
         ]);
     }
 }

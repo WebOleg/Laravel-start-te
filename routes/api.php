@@ -63,6 +63,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
         Route::prefix('bav')->group(function () {
             Route::get('/balance', [AdminBavController::class, 'getBalance']);
+            Route::post('/adjust', [AdminBavController::class, 'adjustCredits']);
         });
         Route::prefix('uploads/{upload}/bav')->group(function () {
             Route::get('/stats', [AdminBavController::class, 'getStats']);
