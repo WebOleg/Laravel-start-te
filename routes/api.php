@@ -18,6 +18,7 @@ use App\Http\Controllers\Admin\StatsController as AdminStatsController;
 use App\Http\Controllers\Admin\VopController as AdminVopController;
 use App\Http\Controllers\Admin\EmpRefreshController as AdminEmpRefreshController;
 use App\Http\Controllers\Admin\BicAnalyticsController as AdminBicAnalyticsController;
+use App\Http\Controllers\Admin\BavController as AdminBavController;
 use App\Http\Middleware\EmpWebhookSecurity;
 use App\Http\Controllers\Webhook\EmpWebhookController;
 
@@ -60,6 +61,17 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('uploads/{upload}/vop-logs', [AdminVopController::class, 'logs']);
         Route::post('vop/verify-single', [AdminVopController::class, 'verifySingle']);
 
+        Route::prefix('bav')->group(function () {
+            Route::get('/balance', [AdminBavController::class, 'getBalance']);
+            Route::post('/adjust', [AdminBavController::class, 'adjustCredits']);
+        });
+        Route::prefix('uploads/{upload}/bav')->group(function () {
+            Route::get('/stats', [AdminBavController::class, 'getStats']);
+            Route::post('/start', [AdminBavController::class, 'startVerification']);
+            Route::get('/status', [AdminBavController::class, 'getStatus']);
+            Route::post('/cancel', [AdminBavController::class, 'cancelVerification']);
+        });
+
         Route::post('uploads/{upload}/sync', [AdminBillingController::class, 'sync']);
         Route::get('uploads/{upload}/billing-stats', [AdminBillingController::class, 'stats']);
         Route::post('billing-attempts/{billing_attempt}/retry', [AdminBillingAttemptController::class, 'retry']);
@@ -93,7 +105,6 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::apiResource('debtors', AdminDebtorController::class)->only(['index', 'show', 'update', 'destroy']);
         Route::apiResource('vop-logs', AdminVopLogController::class)->only(['index', 'show']);
 
-        // Clean users export - MUST be BEFORE apiResource to avoid {billing_attempt} catching 'clean-users'
         Route::prefix('billing-attempts/clean-users')->group(function () {
             Route::get('/stats', [AdminBillingAttemptController::class, 'cleanUsersStats']);
             Route::get('/export', [AdminBillingAttemptController::class, 'exportCleanUsers']);
