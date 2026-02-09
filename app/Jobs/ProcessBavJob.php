@@ -4,6 +4,7 @@
  */
 namespace App\Jobs;
 
+use App\Models\BavCredit;
 use App\Models\Debtor;
 use App\Models\Upload;
 use App\Models\VopLog;
@@ -69,10 +70,19 @@ class ProcessBavJob implements ShouldQueue
                 break;
             }
 
+            // Check and consume credit before API call
+            if (!BavCredit::consume(1)) {
+                Log::channel('bav')->warning('ProcessBavJob: No credits remaining, stopping', [
+                    'upload_id' => $this->uploadId,
+                    'processed_in_chunk' => $processed,
+                ]);
+                break;
+            }
+
             $this->verifyDebtor($debtor, $bavService);
             $processed++;
 
-            $this->updateProgress($upload, $processed);
+            $this->updateProgress($upload);
         }
 
         Log::channel('bav')->info('ProcessBavJob: Chunk completed', [
@@ -127,9 +137,9 @@ class ProcessBavJob implements ShouldQueue
         };
     }
 
-    private function updateProgress(Upload $upload, int $chunkProcessed): void
+    private function updateProgress(Upload $upload): void
     {
-        $upload->incrementBavProcessed($chunkProcessed > 1 ? 1 : $chunkProcessed);
+        $upload->incrementBavProcessed();
 
         $cacheKey = "bav_progress_{$this->uploadId}";
         $cached = Cache::get($cacheKey, []);
