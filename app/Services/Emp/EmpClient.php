@@ -283,6 +283,11 @@ class EmpClient
     {
         $xml = new \SimpleXMLElement('<?xml version="1.0" encoding="UTF-8"?><chargeback_request/>');
         $xml->addChild('original_transaction_unique_id', $uniqueId);
+        
+        Log::info('Chargeback detail XML built', [
+            'unique_id' => $uniqueId,
+            'xml' => $xml->asXML(),
+        ]);
 
         return $xml->asXML();
     }
