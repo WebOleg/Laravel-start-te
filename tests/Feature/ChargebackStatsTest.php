@@ -65,7 +65,6 @@ class ChargebackStatsTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id, 'country' => 'ES']);
 
-        // Create old billing attempt (100 days ago)
         BillingAttempt::factory()->create([
             'upload_id' => $upload->id,
             'debtor_id' => $debtor->id,
@@ -73,7 +72,6 @@ class ChargebackStatsTest extends TestCase
             'created_at' => now()->subDays(100),
         ]);
 
-        // Create recent billing attempt
         BillingAttempt::factory()->create([
             'upload_id' => $upload->id,
             'debtor_id' => $debtor->id,
@@ -81,7 +79,6 @@ class ChargebackStatsTest extends TestCase
             'created_at' => now()->subDays(1),
         ]);
 
-        // Without period parameter - should return all-time data
         $response = $this->actingAs($this->user)
             ->getJson('/api/admin/stats/chargeback-rates');
 
@@ -145,8 +142,8 @@ class ChargebackStatsTest extends TestCase
         $this->assertEquals(8, $country['approved']);
         $this->assertEquals(2, $country['chargebacks']);
         $this->assertEquals(20, $country['cb_rate_total']);
-        // cb_rate_approved = chargebacks / (approved + chargebacks) = 2 / (8 + 2) = 20%
-        $this->assertEquals(20, $country['cb_rate_approved']);
+        // cb_rate_approved = chargebacks / approved = 2 / 8 = 25% (EMP-aligned)
+        $this->assertEquals(25, $country['cb_rate_approved']);
     }
 
     public function test_chargeback_rates_triggers_alert_above_threshold(): void
@@ -189,7 +186,6 @@ class ChargebackStatsTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id, 'country' => 'ES']);
 
-        // Transaction created 2 days ago, chargebacked today
         BillingAttempt::factory()->create([
             'upload_id' => $upload->id,
             'debtor_id' => $debtor->id,
@@ -198,7 +194,6 @@ class ChargebackStatsTest extends TestCase
             'chargebacked_at' => now(),
         ]);
 
-        // Transaction created 10 days ago (outside 7d period)
         BillingAttempt::factory()->create([
             'upload_id' => $upload->id,
             'debtor_id' => $debtor->id,
@@ -220,7 +215,6 @@ class ChargebackStatsTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id, 'country' => 'ES']);
 
-        // Transaction created 30 days ago, chargebacked 2 days ago
         BillingAttempt::factory()->create([
             'upload_id' => $upload->id,
             'debtor_id' => $debtor->id,
@@ -229,7 +223,6 @@ class ChargebackStatsTest extends TestCase
             'chargebacked_at' => now()->subDays(2),
         ]);
 
-        // Transaction created and chargebacked 10 days ago (outside 7d period)
         BillingAttempt::factory()->create([
             'upload_id' => $upload->id,
             'debtor_id' => $debtor->id,
@@ -243,7 +236,6 @@ class ChargebackStatsTest extends TestCase
 
         $response->assertOk();
         $this->assertEquals('chargeback', $response->json('data.date_mode'));
-        // In chargeback mode with 7d period, only chargebacks within last 7 days by chargeback_at
         $this->assertEquals(1, $response->json('data.totals.total'));
         $this->assertEquals(1, $response->json('data.totals.chargebacks'));
     }
@@ -266,7 +258,6 @@ class ChargebackStatsTest extends TestCase
 
         $response->assertOk();
         $this->assertEquals('chargeback', $response->json('data.date_mode'));
-        // Rates should be NULL in chargeback mode
         $this->assertNull($response->json('data.totals.cb_rate_total'));
         $this->assertNull($response->json('data.totals.cb_rate_approved'));
         $this->assertFalse($response->json('data.totals.alert'));
@@ -295,7 +286,6 @@ class ChargebackStatsTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id, 'country' => 'ES']);
 
-        // Old data (outside 7d period)
         BillingAttempt::factory()->create([
             'upload_id' => $upload->id,
             'debtor_id' => $debtor->id,
@@ -303,7 +293,6 @@ class ChargebackStatsTest extends TestCase
             'created_at' => now()->subDays(10),
         ]);
 
-        // Recent data (within 7d period)
         BillingAttempt::factory()->create([
             'upload_id' => $upload->id,
             'debtor_id' => $debtor->id,
@@ -325,7 +314,6 @@ class ChargebackStatsTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id, 'country' => 'ES']);
 
-        // Create data in January 2025
         BillingAttempt::factory()->create([
             'upload_id' => $upload->id,
             'debtor_id' => $debtor->id,
@@ -333,7 +321,6 @@ class ChargebackStatsTest extends TestCase
             'created_at' => Carbon::create(2025, 1, 15),
         ]);
 
-        // Create data in February 2025 (should be excluded)
         BillingAttempt::factory()->create([
             'upload_id' => $upload->id,
             'debtor_id' => $debtor->id,
@@ -341,7 +328,6 @@ class ChargebackStatsTest extends TestCase
             'created_at' => Carbon::create(2025, 2, 10),
         ]);
 
-        // Create data in January 2024 (different year, should be excluded)
         BillingAttempt::factory()->create([
             'upload_id' => $upload->id,
             'debtor_id' => $debtor->id,
@@ -391,7 +377,6 @@ class ChargebackStatsTest extends TestCase
             'created_at' => Carbon::create(2025, 6, 15),
         ]);
 
-        // When both period and month/year are provided, month/year should take precedence
         $response = $this->actingAs($this->user)
             ->getJson('/api/admin/stats/chargeback-rates?period=7d&month=6&year=2025');
 
@@ -406,7 +391,6 @@ class ChargebackStatsTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id, 'country' => 'ES']);
 
-        // First day of month
         BillingAttempt::factory()->create([
             'upload_id' => $upload->id,
             'debtor_id' => $debtor->id,
@@ -414,7 +398,6 @@ class ChargebackStatsTest extends TestCase
             'created_at' => Carbon::create(2025, 3, 1, 0, 0, 0),
         ]);
 
-        // Last day of month
         BillingAttempt::factory()->create([
             'upload_id' => $upload->id,
             'debtor_id' => $debtor->id,
@@ -422,7 +405,6 @@ class ChargebackStatsTest extends TestCase
             'created_at' => Carbon::create(2025, 3, 31, 23, 59, 59),
         ]);
 
-        // Day before first (should be excluded)
         BillingAttempt::factory()->create([
             'upload_id' => $upload->id,
             'debtor_id' => $debtor->id,
@@ -442,7 +424,6 @@ class ChargebackStatsTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id, 'country' => 'ES']);
 
-        // Transaction created in June, chargebacked in July
         BillingAttempt::factory()->create([
             'upload_id' => $upload->id,
             'debtor_id' => $debtor->id,
@@ -451,7 +432,6 @@ class ChargebackStatsTest extends TestCase
             'chargebacked_at' => Carbon::create(2025, 7, 10),
         ]);
 
-        // Filter by July with chargeback mode
         $response = $this->actingAs($this->user)
             ->getJson('/api/admin/stats/chargeback-rates?month=7&year=2025&date_mode=chargeback');
 
@@ -461,7 +441,6 @@ class ChargebackStatsTest extends TestCase
         $this->assertEquals('chargeback', $response->json('data.date_mode'));
         $this->assertEquals(1, $response->json('data.totals.chargebacks'));
 
-        // Filter by June with transaction mode (should show the same transaction)
         $response2 = $this->actingAs($this->user)
             ->getJson('/api/admin/stats/chargeback-rates?month=6&year=2025&date_mode=transaction');
 
@@ -476,7 +455,6 @@ class ChargebackStatsTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id, 'country' => 'ES']);
 
-        // Feb 29, 2024 (leap year)
         BillingAttempt::factory()->create([
             'upload_id' => $upload->id,
             'debtor_id' => $debtor->id,
@@ -583,7 +561,6 @@ class ChargebackStatsTest extends TestCase
             'created_at' => now()->subDays(200),
         ]);
 
-        // Very old transaction (200 days ago)
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
@@ -592,7 +569,6 @@ class ChargebackStatsTest extends TestCase
             'created_at' => now()->subDays(200),
         ]);
 
-        // Recent transaction
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
@@ -751,16 +727,15 @@ class ChargebackStatsTest extends TestCase
         $response->assertStatus(200);
         $data = $response->json('data');
 
-        // CB rate = chargebacks / (approved + chargebacks) = 2 / (10 + 2) = 16.67%
-        $this->assertEqualsWithDelta(16.67, $data['banks'][0]['cb_rate'], 0.01);
-        $this->assertEqualsWithDelta(16.67, $data['totals']['cb_rate'], 0.01);
+        // CB rate = chargebacks / approved = 2 / 10 = 20% (EMP-aligned)
+        $this->assertEqualsWithDelta(20.0, $data['banks'][0]['cb_rate'], 0.01);
+        $this->assertEqualsWithDelta(20.0, $data['totals']['cb_rate'], 0.01);
     }
 
     public function test_chargeback_banks_multiple_aggregated_correctly(): void
     {
         $upload = Upload::factory()->create();
 
-        // Bank 1: Deutsche Bank with 3 approved, 1 chargebacked
         $debtor1 = Debtor::factory()->create();
         VopLog::factory()->create([
             'debtor_id' => $debtor1->id,
@@ -783,7 +758,6 @@ class ChargebackStatsTest extends TestCase
             'amount' => 100.00,
         ]);
 
-        // Bank 2: Commerzbank with 2 approved, 2 chargebacked
         $debtor2 = Debtor::factory()->create();
         VopLog::factory()->create([
             'debtor_id' => $debtor2->id,
@@ -824,13 +798,13 @@ class ChargebackStatsTest extends TestCase
 
         $this->assertEquals(400.0, $deutscheBank['total_amount']);
         $this->assertEquals(1, $deutscheBank['chargebacks']);
-        // CB rate = chargebacks / (approved + chargebacks) = 1 / (3 + 1) = 25%
-        $this->assertEqualsWithDelta(25.0, $deutscheBank['cb_rate'], 0.01);
+        // CB rate = chargebacks / approved = 1 / 3 = 33.33% (EMP-aligned)
+        $this->assertEqualsWithDelta(33.33, $deutscheBank['cb_rate'], 0.01);
 
         $this->assertEquals(400.0, $commerzbank['total_amount']);
         $this->assertEquals(2, $commerzbank['chargebacks']);
-        // CB rate = chargebacks / (approved + chargebacks) = 2 / (2 + 2) = 50%
-        $this->assertEqualsWithDelta(50.0, $commerzbank['cb_rate'], 0.01);
+        // CB rate = chargebacks / approved = 2 / 2 = 100% (EMP-aligned)
+        $this->assertEqualsWithDelta(100.0, $commerzbank['cb_rate'], 0.01);
     }
 
     public function test_chargeback_banks_response_is_cached(): void
@@ -907,7 +881,6 @@ class ChargebackStatsTest extends TestCase
         $response7d->assertStatus(200);
         $this->assertEquals('7d', $response7d->json('data.period'));
 
-        // All three should have different cache entries
         $this->assertNotEquals($responseAll->json('data.period'), $response24h->json('data.period'));
         $this->assertNotEquals($response24h->json('data.period'), $response7d->json('data.period'));
     }
@@ -1023,7 +996,6 @@ class ChargebackStatsTest extends TestCase
             'bank_name' => 'Deutsche Bank',
         ]);
 
-        // July 2025 transaction
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
@@ -1032,7 +1004,6 @@ class ChargebackStatsTest extends TestCase
             'created_at' => Carbon::create(2025, 7, 15),
         ]);
 
-        // August 2025 transaction (should be excluded)
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
@@ -1071,7 +1042,6 @@ class ChargebackStatsTest extends TestCase
             'bank_name' => 'Deutsche Bank',
         ]);
 
-        // Transaction created 5 days ago
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
@@ -1098,7 +1068,6 @@ class ChargebackStatsTest extends TestCase
             'bank_name' => 'Commerzbank',
         ]);
 
-        // Transaction created 30 days ago, chargebacked 2 days ago
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
@@ -1114,7 +1083,7 @@ class ChargebackStatsTest extends TestCase
         $response->assertOk();
         $this->assertEquals('chargeback', $response->json('data.date_mode'));
         $this->assertEquals(1, $response->json('data.totals.chargebacks'));
-        $this->assertNull($response->json('data.totals.cb_rate')); // NULL in chargeback mode
+        $this->assertNull($response->json('data.totals.cb_rate'));
     }
 
     public function test_chargeback_banks_cache_separates_by_month_year(): void
@@ -1151,7 +1120,6 @@ class ChargebackStatsTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id, 'country' => 'ES']);
 
-        // Feb 29, 2024 (leap year)
         BillingAttempt::factory()->create([
             'upload_id' => $upload->id,
             'debtor_id' => $debtor->id,
@@ -1198,7 +1166,6 @@ class ChargebackStatsTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create();
 
-        // Old chargeback (150 days ago)
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
@@ -1208,7 +1175,6 @@ class ChargebackStatsTest extends TestCase
             'created_at' => now()->subDays(150),
         ]);
 
-        // Recent chargeback
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
@@ -1312,37 +1278,10 @@ class ChargebackStatsTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create();
 
-        BillingAttempt::factory()->create([
-            'debtor_id' => $debtor->id,
-            'upload_id' => $upload->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargeback_reason_code' => 'CB001',
-            'created_at' => now()->subHours(2),
-        ]);
-
-        BillingAttempt::factory()->create([
-            'debtor_id' => $debtor->id,
-            'upload_id' => $upload->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargeback_reason_code' => 'CB002',
-            'created_at' => now()->subDays(5),
-        ]);
-
-        BillingAttempt::factory()->create([
-            'debtor_id' => $debtor->id,
-            'upload_id' => $upload->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargeback_reason_code' => 'CB003',
-            'created_at' => now()->subDays(15),
-        ]);
-
-        BillingAttempt::factory()->create([
-            'debtor_id' => $debtor->id,
-            'upload_id' => $upload->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargeback_reason_code' => 'CB004',
-            'created_at' => now()->subDays(45),
-        ]);
+        BillingAttempt::factory()->create(['debtor_id' => $debtor->id, 'upload_id' => $upload->id, 'status' => BillingAttempt::STATUS_CHARGEBACKED, 'chargeback_reason_code' => 'CB001', 'created_at' => now()->subHours(2)]);
+        BillingAttempt::factory()->create(['debtor_id' => $debtor->id, 'upload_id' => $upload->id, 'status' => BillingAttempt::STATUS_CHARGEBACKED, 'chargeback_reason_code' => 'CB002', 'created_at' => now()->subDays(5)]);
+        BillingAttempt::factory()->create(['debtor_id' => $debtor->id, 'upload_id' => $upload->id, 'status' => BillingAttempt::STATUS_CHARGEBACKED, 'chargeback_reason_code' => 'CB003', 'created_at' => now()->subDays(15)]);
+        BillingAttempt::factory()->create(['debtor_id' => $debtor->id, 'upload_id' => $upload->id, 'status' => BillingAttempt::STATUS_CHARGEBACKED, 'chargeback_reason_code' => 'CB004', 'created_at' => now()->subDays(45)]);
 
         $response = $this->actingAs($this->user)
             ->getJson('/api/admin/stats/chargeback-codes?period=30d');
@@ -1363,45 +1302,11 @@ class ChargebackStatsTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create();
 
-        BillingAttempt::factory()->create([
-            'debtor_id' => $debtor->id,
-            'upload_id' => $upload->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargeback_reason_code' => 'CB001',
-            'created_at' => now()->subHours(2),
-        ]);
-
-        BillingAttempt::factory()->create([
-            'debtor_id' => $debtor->id,
-            'upload_id' => $upload->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargeback_reason_code' => 'CB002',
-            'created_at' => now()->subDays(5),
-        ]);
-
-        BillingAttempt::factory()->create([
-            'debtor_id' => $debtor->id,
-            'upload_id' => $upload->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargeback_reason_code' => 'CB003',
-            'created_at' => now()->subDays(15),
-        ]);
-
-        BillingAttempt::factory()->create([
-            'debtor_id' => $debtor->id,
-            'upload_id' => $upload->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargeback_reason_code' => 'CB004',
-            'created_at' => now()->subDays(45),
-        ]);
-
-        BillingAttempt::factory()->create([
-            'debtor_id' => $debtor->id,
-            'upload_id' => $upload->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargeback_reason_code' => 'CB005',
-            'created_at' => now()->subDays(120),
-        ]);
+        BillingAttempt::factory()->create(['debtor_id' => $debtor->id, 'upload_id' => $upload->id, 'status' => BillingAttempt::STATUS_CHARGEBACKED, 'chargeback_reason_code' => 'CB001', 'created_at' => now()->subHours(2)]);
+        BillingAttempt::factory()->create(['debtor_id' => $debtor->id, 'upload_id' => $upload->id, 'status' => BillingAttempt::STATUS_CHARGEBACKED, 'chargeback_reason_code' => 'CB002', 'created_at' => now()->subDays(5)]);
+        BillingAttempt::factory()->create(['debtor_id' => $debtor->id, 'upload_id' => $upload->id, 'status' => BillingAttempt::STATUS_CHARGEBACKED, 'chargeback_reason_code' => 'CB003', 'created_at' => now()->subDays(15)]);
+        BillingAttempt::factory()->create(['debtor_id' => $debtor->id, 'upload_id' => $upload->id, 'status' => BillingAttempt::STATUS_CHARGEBACKED, 'chargeback_reason_code' => 'CB004', 'created_at' => now()->subDays(45)]);
+        BillingAttempt::factory()->create(['debtor_id' => $debtor->id, 'upload_id' => $upload->id, 'status' => BillingAttempt::STATUS_CHARGEBACKED, 'chargeback_reason_code' => 'CB005', 'created_at' => now()->subDays(120)]);
 
         $response = $this->actingAs($this->user)
             ->getJson('/api/admin/stats/chargeback-codes?period=90d');
@@ -1509,21 +1414,8 @@ class ChargebackStatsTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create();
 
-        BillingAttempt::factory()->create([
-            'debtor_id' => $debtor->id,
-            'upload_id' => $upload->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargeback_reason_code' => 'CB001',
-            'amount' => 150.00,
-        ]);
-
-        BillingAttempt::factory()->create([
-            'debtor_id' => $debtor->id,
-            'upload_id' => $upload->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargeback_reason_code' => 'CB002',
-            'amount' => 250.00,
-        ]);
+        BillingAttempt::factory()->create(['debtor_id' => $debtor->id, 'upload_id' => $upload->id, 'status' => BillingAttempt::STATUS_CHARGEBACKED, 'chargeback_reason_code' => 'CB001', 'amount' => 150.00]);
+        BillingAttempt::factory()->create(['debtor_id' => $debtor->id, 'upload_id' => $upload->id, 'status' => BillingAttempt::STATUS_CHARGEBACKED, 'chargeback_reason_code' => 'CB002', 'amount' => 250.00]);
 
         $response = $this->actingAs($this->user)
             ->getJson('/api/admin/stats/chargeback-codes');
@@ -1566,25 +1458,8 @@ class ChargebackStatsTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create();
 
-        // April 2025 chargeback
-        BillingAttempt::factory()->create([
-            'debtor_id' => $debtor->id,
-            'upload_id' => $upload->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargeback_reason_code' => 'CB_APR',
-            'amount' => 100.00,
-            'created_at' => Carbon::create(2025, 4, 15),
-        ]);
-
-        // May 2025 chargeback (should be excluded)
-        BillingAttempt::factory()->create([
-            'debtor_id' => $debtor->id,
-            'upload_id' => $upload->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargeback_reason_code' => 'CB_MAY',
-            'amount' => 200.00,
-            'created_at' => Carbon::create(2025, 5, 10),
-        ]);
+        BillingAttempt::factory()->create(['debtor_id' => $debtor->id, 'upload_id' => $upload->id, 'status' => BillingAttempt::STATUS_CHARGEBACKED, 'chargeback_reason_code' => 'CB_APR', 'amount' => 100.00, 'created_at' => Carbon::create(2025, 4, 15)]);
+        BillingAttempt::factory()->create(['debtor_id' => $debtor->id, 'upload_id' => $upload->id, 'status' => BillingAttempt::STATUS_CHARGEBACKED, 'chargeback_reason_code' => 'CB_MAY', 'amount' => 200.00, 'created_at' => Carbon::create(2025, 5, 10)]);
 
         $response = $this->actingAs($this->user)
             ->getJson('/api/admin/stats/chargeback-codes?month=4&year=2025');
@@ -1611,7 +1486,6 @@ class ChargebackStatsTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create();
 
-        // Transaction created 3 days ago
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
@@ -1635,7 +1509,6 @@ class ChargebackStatsTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create();
 
-        // Transaction created 20 days ago, chargebacked 3 days ago
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
@@ -1645,7 +1518,6 @@ class ChargebackStatsTest extends TestCase
             'chargebacked_at' => now()->subDays(3),
         ]);
 
-        // Transaction chargebacked 10 days ago (outside 7d)
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
@@ -1670,7 +1542,6 @@ class ChargebackStatsTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create();
 
-        // Feb 29, 2024 (leap year)
         BillingAttempt::factory()->create([
             'upload_id' => $upload->id,
             'debtor_id' => $debtor->id,

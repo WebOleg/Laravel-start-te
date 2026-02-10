@@ -2,6 +2,8 @@
 
 /**
  * Admin Dashboard controller for overview statistics.
+ *
+ * CB Rate formula: chargebacks / approved (EMP-aligned).
  */
 
 namespace App\Http\Controllers\Admin;
@@ -50,7 +52,7 @@ class DashboardController extends Controller
     private function getUploadStats(?int $empAccountId = null): array
     {
         $query = Upload::query();
-        
+
         if ($empAccountId) {
             $query->where('emp_account_id', $empAccountId);
         }
@@ -71,7 +73,7 @@ class DashboardController extends Controller
         if (!$empAccountId) {
             return null;
         }
-        
+
         return Upload::where('emp_account_id', $empAccountId)->pluck('id')->toArray();
     }
 
@@ -116,7 +118,7 @@ class DashboardController extends Controller
 
         $debtorQuery = Debtor::query();
         $uploadIds = $this->getFilteredUploadIds($empAccountId);
-        
+
         if ($uploadIds !== null) {
             $debtorQuery->whereIn('upload_id', $uploadIds);
         }
@@ -155,7 +157,7 @@ class DashboardController extends Controller
     {
         $vopQuery = VopLog::query();
         $uploadIds = $this->getFilteredUploadIds($empAccountId);
-        
+
         if ($uploadIds !== null) {
             $debtorIds = Debtor::whereIn('upload_id', $uploadIds)->pluck('id')->toArray();
             $vopQuery->whereIn('debtor_id', $debtorIds);
@@ -194,18 +196,18 @@ class DashboardController extends Controller
         $excludedCbCodes = config('tether.chargeback.excluded_cb_reason_codes', []);
 
         $baseQuery = BillingAttempt::query();
-        
+
         if ($empAccountId) {
             $baseQuery->where('emp_account_id', $empAccountId);
         }
-        
+
         if ($startDate && $endDate) {
             $baseQuery->whereRaw('COALESCE(emp_created_at, created_at) BETWEEN ? AND ?', [$startDate, $endDate]);
         }
 
         $total = (clone $baseQuery)->count();
         $successful = (clone $baseQuery)->where('status', BillingAttempt::STATUS_APPROVED)->count();
-        
+
         $chargebackQuery = (clone $baseQuery)->where('status', BillingAttempt::STATUS_CHARGEBACKED)
             ->where(function ($q) use ($excludedCbCodes) {
                 if (!empty($excludedCbCodes)) {
@@ -213,7 +215,7 @@ class DashboardController extends Controller
                       ->orWhereNull('chargeback_reason_code');
                 }
             });
-        
+
         $chargebacked = $chargebackQuery->count();
         $totalAmount = (clone $baseQuery)->where('status', BillingAttempt::STATUS_APPROVED)->sum('amount');
         $chargebackAmount = $chargebackQuery->sum('amount');
@@ -247,7 +249,7 @@ class DashboardController extends Controller
                 'chargebacked' => $chargebacked,
             ],
             'approval_rate' => $this->calculateRate($successful, $total),
-            'chargeback_rate' => $this->calculateRate($chargebacked, $successful + $chargebacked),
+            'chargeback_rate' => $this->calculateRate($chargebacked, $successful),
             'total_approved_amount' => round($totalAmount, 2),
             'total_chargeback_amount' => round($chargebackAmount, 2),
             'today' => $todayQuery->count(),
@@ -290,7 +292,7 @@ class DashboardController extends Controller
 
         for ($i = $days - 1; $i >= 0; $i--) {
             $date = now()->subDays($i)->format('Y-m-d');
-            
+
             $uploadsQuery = Upload::whereDate('created_at', $date);
             $debtorsQuery = Debtor::whereDate('created_at', $date);
             $billingQuery = BillingAttempt::whereRaw('DATE(COALESCE(emp_created_at, created_at)) = ?', [$date]);

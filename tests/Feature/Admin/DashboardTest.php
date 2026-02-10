@@ -2,6 +2,8 @@
 
 /**
  * Feature tests for Admin Dashboard endpoint.
+ *
+ * CB Rate formula: chargebacks / approved (EMP-aligned).
  */
 
 namespace Tests\Feature\Admin;
@@ -383,6 +385,7 @@ class DashboardTest extends TestCase
 
     public function test_dashboard_billing_chargeback_rate(): void
     {
+        // 8 approved, 2 chargebacked => CB/approved = 2/8 = 25%
         BillingAttempt::factory()->count(8)->create(['status' => BillingAttempt::STATUS_APPROVED]);
         BillingAttempt::factory()->count(2)->create(['status' => BillingAttempt::STATUS_CHARGEBACKED]);
 
@@ -390,7 +393,7 @@ class DashboardTest extends TestCase
             ->getJson('/api/admin/dashboard');
 
         $response->assertStatus(200)
-            ->assertJsonPath('data.billing.chargeback_rate', 20);
+            ->assertJsonPath('data.billing.chargeback_rate', 25);
     }
 
     public function test_dashboard_billing_amounts(): void
