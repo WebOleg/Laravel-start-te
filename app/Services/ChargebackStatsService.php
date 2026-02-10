@@ -1,5 +1,15 @@
 <?php
 
+/**
+ * Chargeback Statistics Service.
+ *
+ * CB Rate formula aligned with EMP: chargebacks / approved * 100
+ *
+ * Note: When a billing attempt gets chargebacked, its status changes from
+ * 'approved' to 'chargebacked'. The 'approved' count reflects only currently
+ * approved transactions, not those that later became chargebacks.
+ */
+
 namespace App\Services;
 
 use App\Models\BillingAttempt;
@@ -9,35 +19,11 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Database\Query\Builder;
 
-/**
- * Chargeback Statistics Service
- * 
- * Supports two date filtering modes:
- * 1. Transaction Date (default): Filter by emp_created_at/created_at, calculate rates normally
- * 2. Chargeback Date: Filter by chargebacked_at, rates are NULL (approved transactions don't have this date)
- * 
- * CB Rate Calculation Logic:
- * --------------------------
- * When a transaction gets chargebacked, its status changes from 'approved' to 'chargebacked'.
- * Therefore, to calculate the true CB Rate vs Approved, we must include chargebacked transactions
- * in the denominator since they were approved before becoming chargebacks.
- * 
- * Formula: CB Rate = chargebacks / (approved + chargebacked) * 100
- * 
- * Example:
- *   - approved (current status): 1
- *   - chargebacked (current status): 4741
- *   - Total that were approved: 1 + 4741 = 4742
- *   - CB Rate = 4741 / 4742 * 100 = 99.98%
- */
 class ChargebackStatsService
 {
     public const DATE_MODE_TRANSACTION = 'transaction';
     public const DATE_MODE_CHARGEBACK = 'chargeback';
 
-    /**
-     * Helper to apply model filtering to the query.
-     */
     private function applyModelFilter(Builder $query, ?string $model): void
     {
         if (empty($model) || $model === 'all') {
@@ -54,9 +40,6 @@ class ChargebackStatsService
         }
     }
 
-    /**
-     * Helper to apply EMP account filtering to the query.
-     */
     private function applyEmpAccountFilter(Builder $query, ?int $empAccountId): void
     {
         if (empty($empAccountId)) {
@@ -66,49 +49,30 @@ class ChargebackStatsService
     }
 
     /**
-     * Calculate CB Rate vs Approved.
-     * 
-     * Formula: chargebacks / (approved + chargebacked) * 100
-     * 
-     * Important: Chargebacked transactions were originally approved, so we must
-     * include them in the denominator to get the true approval-based CB rate.
-     * 
-     * @param int $chargebacks Number of chargebacks
-     * @param int $approved Number of currently approved transactions
-     * @param int $chargebacked Number of chargebacked transactions (were approved before)
-     * @return float CB Rate percentage
+     * Calculate CB Rate vs Approved (EMP-aligned).
+     *
+     * Formula: chargebacks / approved * 100
      */
-    private function calculateCbRateApproved(int $chargebacks, int $approved, int $chargebacked = 0): float
+    private function calculateCbRateApproved(int $chargebacks, int $approved): float
     {
-        // Total approved = currently approved + those that became chargebacks
-        $totalApproved = $approved + $chargebacked;
-        
-        if ($totalApproved > 0) {
-            return round(($chargebacks / $totalApproved) * 100, 2);
+        if ($approved > 0) {
+            return round(($chargebacks / $approved) * 100, 2);
         }
-        
-        // If no approved transactions at all but has chargebacks, return 100%
+
         return $chargebacks > 0 ? 100.00 : 0.00;
     }
 
     /**
-     * Calculate CB Rate vs Approved Amount.
-     * 
-     * Formula: chargeback_amount / (approved_amount + chargeback_amount) * 100
-     * 
-     * @param float $chargebackAmount Total chargeback amount
-     * @param float $approvedAmount Currently approved amount
-     * @return float CB Rate percentage by amount
+     * Calculate CB Rate vs Approved Amount (EMP-aligned).
+     *
+     * Formula: chargeback_amount / approved_amount * 100
      */
     private function calculateCbRateAmountApproved(float $chargebackAmount, float $approvedAmount): float
     {
-        // Total approved amount = currently approved + chargebacked amounts
-        $totalApprovedAmount = $approvedAmount + $chargebackAmount;
-        
-        if ($totalApprovedAmount > 0) {
-            return round(($chargebackAmount / $totalApprovedAmount) * 100, 2);
+        if ($approvedAmount > 0) {
+            return round(($chargebackAmount / $approvedAmount) * 100, 2);
         }
-        
+
         return $chargebackAmount > 0 ? 100.00 : 0.00;
     }
 
@@ -165,27 +129,21 @@ class ChargebackStatsService
             'approved_amount' => 0,
         ];
 
-        // When filtering by chargeback date, rates cannot be calculated
-        // because approved transactions don't have chargebacked_at timestamp
         $canCalculateRates = $dateMode !== self::DATE_MODE_CHARGEBACK;
 
         foreach ($stats as $row) {
             if ($canCalculateRates) {
-                $cbRateTotal = $row->total > 0 
-                    ? round(($row->chargebacks / $row->total) * 100, 2) 
+                $cbRateTotal = $row->total > 0
+                    ? round(($row->chargebacks / $row->total) * 100, 2)
                     : 0;
-                
-                // CB Rate vs Approved: chargebacks / (approved + chargebacks)
-                // Chargebacked transactions were approved before, so include them in denominator
+
                 $cbRateApproved = $this->calculateCbRateApproved(
-                    (int) $row->chargebacks, 
-                    (int) $row->approved,
-                    (int) $row->chargebacks
+                    (int) $row->chargebacks,
+                    (int) $row->approved
                 );
 
                 $alert = $cbRateTotal >= $threshold || $cbRateApproved >= $threshold;
             } else {
-                // Chargeback date mode: rates are NULL (not calculable)
                 $cbRateTotal = null;
                 $cbRateApproved = null;
                 $alert = false;
@@ -221,30 +179,26 @@ class ChargebackStatsService
 
         $totals['chargeback_amount'] = round($totals['chargeback_amount'], 2);
         $totals['approved_amount'] = round($totals['approved_amount'], 2);
-        
+
         if ($canCalculateRates) {
-            $totals['cb_rate_total'] = $totals['total'] > 0 
-                ? round(($totals['chargebacks'] / $totals['total']) * 100, 2) 
+            $totals['cb_rate_total'] = $totals['total'] > 0
+                ? round(($totals['chargebacks'] / $totals['total']) * 100, 2)
                 : 0;
-            
-            // CB Rate vs Approved: chargebacks / (approved + chargebacks)
+
             $totals['cb_rate_approved'] = $this->calculateCbRateApproved(
-                (int) $totals['chargebacks'], 
-                (int) $totals['approved'],
-                (int) $totals['chargebacks']
+                (int) $totals['chargebacks'],
+                (int) $totals['approved']
             );
-            
+
             $totals['alert'] = $totals['cb_rate_total'] >= $threshold || $totals['cb_rate_approved'] >= $threshold;
-            
-            // CB Rate Amount vs Approved: chargeback_amount / (approved_amount + chargeback_amount)
+
             $totals['cb_rate_amount_approved'] = $this->calculateCbRateAmountApproved(
                 (float) $totals['chargeback_amount'],
                 (float) $totals['approved_amount']
             );
-            
+
             $totals['cb_alert_amount_approved'] = $totals['cb_rate_amount_approved'] >= $threshold;
         } else {
-            // Chargeback date mode: rates are NULL
             $totals['cb_rate_total'] = null;
             $totals['cb_rate_approved'] = null;
             $totals['cb_rate_amount_approved'] = null;
@@ -280,7 +234,6 @@ class ChargebackStatsService
             ];
         }
 
-        // If period is 'all', return all-time (no date filter)
         if ($period === 'all') {
             return [
                 'start' => null,
@@ -300,19 +253,15 @@ class ChargebackStatsService
 
     private function applyDateFilter($query, array $dateFilter): void
     {
-        // If type is 'all', don't apply any date filter
         if ($dateFilter['type'] === 'all') {
             return;
         }
 
         $dateMode = $dateFilter['date_mode'] ?? self::DATE_MODE_TRANSACTION;
 
-        // Choose date column based on mode
         if ($dateMode === self::DATE_MODE_CHARGEBACK) {
-            // Filter by chargeback date - only chargebacked transactions have this date
             $dateColumn = 'billing_attempts.chargebacked_at';
         } else {
-            // Filter by transaction date (default) - use emp_created_at with fallback
             $dateColumn = 'COALESCE(billing_attempts.emp_created_at, billing_attempts.created_at)';
         }
 
@@ -356,7 +305,6 @@ class ChargebackStatsService
     public function clearCache(): void
     {
         $periods = ['24h', '7d', '30d', '90d', 'all'];
-        // Include 'all' plus the defined models from DebtorProfile
         $models = array_merge([DebtorProfile::ALL], DebtorProfile::BILLING_MODELS);
         $dateModes = ['_tx', '_cb'];
 
@@ -386,14 +334,13 @@ class ChargebackStatsService
         $dateFilter = $this->buildDateFilter($period, $month, $year, $dateMode);
 
         $query = DB::table('billing_attempts')
-        ->where('status', BillingAttempt::STATUS_CHARGEBACKED);
+            ->where('status', BillingAttempt::STATUS_CHARGEBACKED);
 
-        // Exclude specific chargeback codes (but keep NULL since they'll be grouped)
         $excludedCodes = config('tether.chargeback.excluded_cb_reason_codes', []);
         if (!empty($excludedCodes)) {
             $query->where(function ($q) use ($excludedCodes) {
-            $q->whereNotIn('chargeback_reason_code', $excludedCodes)
-              ->orWhereNull('chargeback_reason_code');
+                $q->whereNotIn('chargeback_reason_code', $excludedCodes)
+                  ->orWhereNull('chargeback_reason_code');
             });
         }
 
@@ -451,7 +398,6 @@ class ChargebackStatsService
         $dateFilter = $this->buildDateFilter($period, $month, $year, $dateMode);
         $threshold = config('tether.chargeback.alert_threshold', 25);
 
-        // Use a subquery to get the most recent vop_log per debtor
         $latestVopLogs = DB::table('vop_logs')
             ->select('debtor_id', DB::raw('MAX(id) as latest_vop_log_id'))
             ->groupBy('debtor_id');
@@ -507,25 +453,19 @@ class ChargebackStatsService
             ],
         ];
 
-        // When filtering by chargeback date, rates cannot be calculated
-        // because approved transactions don't have chargebacked_at timestamp
         $canCalculateRates = $dateMode !== self::DATE_MODE_CHARGEBACK;
 
         foreach ($banks as $row) {
-
             if ($canCalculateRates) {
-                // CB Rate vs Approved: chargebacks / (approved + chargebacks)
                 $cbBankRate = $this->calculateCbRateApproved(
-                    (int) $row->chargebacks, 
-                    (int) $row->approved,
-                    (int) $row->chargebacks
+                    (int) $row->chargebacks,
+                    (int) $row->approved
                 );
-                $cbBankRateAmount = $row->total_amount > 0 
-                    ? round(($row->chargeback_amount / $row->total_amount) * 100, 2) 
+                $cbBankRateAmount = $row->total_amount > 0
+                    ? round(($row->chargeback_amount / $row->total_amount) * 100, 2)
                     : 0;
                 $alert = $cbBankRate >= $threshold || $cbBankRateAmount >= $threshold;
             } else {
-                // Chargeback date mode: rates are NULL
                 $cbBankRate = null;
                 $alert = false;
             }
@@ -550,21 +490,18 @@ class ChargebackStatsService
 
         $result['totals']['total_amount'] = round($result['totals']['total_amount'], 2);
         $result['totals']['chargeback_amount'] = round($result['totals']['chargeback_amount'], 2);
-        
+
         if ($canCalculateRates) {
-            // CB Rate vs Approved: chargebacks / (approved + chargebacks)
             $result['totals']['cb_rate'] = $this->calculateCbRateApproved(
-                (int) $result['totals']['chargebacks'], 
-                (int) $result['totals']['approved'],
-                (int) $result['totals']['chargebacks']
+                (int) $result['totals']['chargebacks'],
+                (int) $result['totals']['approved']
             );
-            
-            $totalsAlertAmount = $result['totals']['total_amount'] > 0 
-                ? round(($result['totals']['chargeback_amount'] / $result['totals']['total_amount']) * 100, 2) 
+
+            $totalsAlertAmount = $result['totals']['total_amount'] > 0
+                ? round(($result['totals']['chargeback_amount'] / $result['totals']['total_amount']) * 100, 2)
                 : 0;
             $result['totals']['alert'] = $result['totals']['cb_rate'] >= $threshold || $totalsAlertAmount >= $threshold;
         } else {
-            // Chargeback date mode: rates are NULL
             $result['totals']['cb_rate'] = null;
             $result['totals']['alert'] = false;
         }
