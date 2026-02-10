@@ -85,9 +85,17 @@ class DashboardController extends Controller
             $endDate = Carbon::create($year, $month, 1)->endOfMonth();
         }
 
+        $excludedCbCodes = config('tether.chargeback.excluded_cb_reason_codes', []);
+
         $billedQuery = BillingAttempt::query();
         $approvedQuery = BillingAttempt::where('status', BillingAttempt::STATUS_APPROVED);
-        $chargebackedQuery = BillingAttempt::where('status', BillingAttempt::STATUS_CHARGEBACKED);
+        $chargebackedQuery = BillingAttempt::where('status', BillingAttempt::STATUS_CHARGEBACKED)
+            ->where(function ($q) use ($excludedCbCodes) {
+                if (!empty($excludedCbCodes)) {
+                    $q->whereNotIn('chargeback_reason_code', $excludedCbCodes)
+                      ->orWhereNull('chargeback_reason_code');
+                }
+            });
 
         if ($empAccountId) {
             $billedQuery->where('emp_account_id', $empAccountId);
@@ -183,6 +191,8 @@ class DashboardController extends Controller
             $endDate = Carbon::create($year, $month, 1)->endOfMonth();
         }
 
+        $excludedCbCodes = config('tether.chargeback.excluded_cb_reason_codes', []);
+
         $baseQuery = BillingAttempt::query();
         
         if ($empAccountId) {
@@ -195,9 +205,18 @@ class DashboardController extends Controller
 
         $total = (clone $baseQuery)->count();
         $successful = (clone $baseQuery)->where('status', BillingAttempt::STATUS_APPROVED)->count();
-        $chargebacked = (clone $baseQuery)->where('status', BillingAttempt::STATUS_CHARGEBACKED)->count();
+        
+        $chargebackQuery = (clone $baseQuery)->where('status', BillingAttempt::STATUS_CHARGEBACKED)
+            ->where(function ($q) use ($excludedCbCodes) {
+                if (!empty($excludedCbCodes)) {
+                    $q->whereNotIn('chargeback_reason_code', $excludedCbCodes)
+                      ->orWhereNull('chargeback_reason_code');
+                }
+            });
+        
+        $chargebacked = $chargebackQuery->count();
         $totalAmount = (clone $baseQuery)->where('status', BillingAttempt::STATUS_APPROVED)->sum('amount');
-        $chargebackAmount = (clone $baseQuery)->where('status', BillingAttempt::STATUS_CHARGEBACKED)->sum('amount');
+        $chargebackAmount = $chargebackQuery->sum('amount');
 
         $pending = (clone $baseQuery)->where('status', BillingAttempt::STATUS_PENDING)->count();
         $declined = (clone $baseQuery)->where('status', BillingAttempt::STATUS_DECLINED)->count();
@@ -267,6 +286,7 @@ class DashboardController extends Controller
         $days = 7;
         $trends = [];
         $uploadIds = $this->getFilteredUploadIds($empAccountId);
+        $excludedCbCodes = config('tether.chargeback.excluded_cb_reason_codes', []);
 
         for ($i = $days - 1; $i >= 0; $i--) {
             $date = now()->subDays($i)->format('Y-m-d');
@@ -277,7 +297,13 @@ class DashboardController extends Controller
             $successQuery = BillingAttempt::whereRaw('DATE(COALESCE(emp_created_at, created_at)) = ?', [$date])
                 ->where('status', BillingAttempt::STATUS_APPROVED);
             $cbQuery = BillingAttempt::whereRaw('DATE(COALESCE(emp_created_at, created_at)) = ?', [$date])
-                ->where('status', BillingAttempt::STATUS_CHARGEBACKED);
+                ->where('status', BillingAttempt::STATUS_CHARGEBACKED)
+                ->where(function ($q) use ($excludedCbCodes) {
+                    if (!empty($excludedCbCodes)) {
+                        $q->whereNotIn('chargeback_reason_code', $excludedCbCodes)
+                          ->orWhereNull('chargeback_reason_code');
+                    }
+                });
 
             if ($empAccountId) {
                 $uploadsQuery->where('emp_account_id', $empAccountId);
