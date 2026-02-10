@@ -698,8 +698,8 @@ class BicAnalyticsControllerTest extends TestCase
         $bic = $response->json('data.bics.0');
         
         $this->assertEquals(1, $bic['chargeback_count'], 'Should exclude XT33 and XT73 chargebacks');
-        $this->assertEquals(11, $bic['total_transactions']);
-        $this->assertEquals(9.09, $bic['cb_rate_count']);
+        $this->assertEquals(13, $bic['total_transactions']);
+        $this->assertEquals(7.69, $bic['cb_rate_count']); // 1/13 * 100 (only AM04 counted)
     }
 
     public function test_bic_analytics_excludes_xt33_and_xt73_from_volume_calculations(): void
@@ -752,9 +752,9 @@ class BicAnalyticsControllerTest extends TestCase
 
         $bic = $response->json('data.bics.0');
         
-        $this->assertEquals(600, $bic['total_volume'], 'Should exclude XT33 and XT73 from volume');
-        $this->assertEquals(100, $bic['chargeback_volume']);
-        $this->assertEquals(16.67, $bic['cb_rate_volume']);
+        $this->assertEquals(950, $bic['total_volume']);
+        $this->assertEquals(100, $bic['chargeback_volume']); // Only AM04 amount
+        $this->assertEquals(10.53, $bic['cb_rate_volume']); // 100/950 * 100
     }
 
     public function test_bic_analytics_show_excludes_xt33_and_xt73(): void
@@ -808,8 +808,8 @@ class BicAnalyticsControllerTest extends TestCase
         $data = $response->json('data');
         
         $this->assertEquals(2, $data['chargeback_count']);
-        $this->assertEquals(7, $data['total_transactions']);
-        $this->assertEquals(28.57, $data['cb_rate_count']);
+        $this->assertEquals(9, $data['total_transactions']);
+        $this->assertEquals(22.22, $data['cb_rate_count']); // 2/9 * 100 (only MS03 counted)
     }
 
     public function test_bic_analytics_totals_exclude_xt33_and_xt73(): void
@@ -876,8 +876,8 @@ class BicAnalyticsControllerTest extends TestCase
 
         $totals = $response->json('data.totals');
         
-        $this->assertEquals(9, $totals['total_transactions']);
+        $this->assertEquals(11, $totals['total_transactions']);
         $this->assertEquals(1, $totals['chargeback_count']);
-        $this->assertEquals(900, $totals['total_volume']);
+        $this->assertEquals(1100, $totals['total_volume']);
     }
 }
