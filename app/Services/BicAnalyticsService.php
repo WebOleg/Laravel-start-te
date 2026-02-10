@@ -20,6 +20,11 @@ class BicAnalyticsService
     public const CACHE_TTL = 900;
     public const HIGH_RISK_THRESHOLD = 25.0;
 
+    //TODO: remove this 
+    public function __construct() {
+        $this->clearCache();
+    }
+
     /**
      * Get BIC analytics with caching.
      */
@@ -51,6 +56,7 @@ class BicAnalyticsService
     {
         [$start, $end] = $this->resolveDateRange($period, $startDate, $endDate);
         $threshold = config('tether.chargeback.alert_threshold', self::HIGH_RISK_THRESHOLD);
+        $excludedCbCodes = config('tether.chargeback.excluded_cb_reason_codes', []);
 
         $query = DB::table('billing_attempts')
             ->whereBetween('created_at', [$start, $end])
@@ -65,18 +71,22 @@ class BicAnalyticsService
             $query->where('emp_account_id', $empAccountId);
         }
 
+        // Build chargeback case statements with exclusions
+        $chargebackCountCase = $this->buildChargebackCountCase($excludedCbCodes);
+        $chargebackVolumeCase = $this->buildChargebackVolumeCase($excludedCbCodes);
+
         $query->groupBy('bic')
             ->select([
                 'bic',
                 DB::raw('COUNT(*) as total_transactions'),
                 DB::raw("SUM(CASE WHEN status = '" . BillingAttempt::STATUS_APPROVED . "' THEN 1 ELSE 0 END) as approved_count"),
                 DB::raw("SUM(CASE WHEN status = '" . BillingAttempt::STATUS_DECLINED . "' THEN 1 ELSE 0 END) as declined_count"),
-                DB::raw("SUM(CASE WHEN status = '" . BillingAttempt::STATUS_CHARGEBACKED . "' THEN 1 ELSE 0 END) as chargeback_count"),
+                DB::raw($chargebackCountCase . ' as chargeback_count'),
                 DB::raw("SUM(CASE WHEN status = '" . BillingAttempt::STATUS_ERROR . "' THEN 1 ELSE 0 END) as error_count"),
                 DB::raw("SUM(CASE WHEN status = '" . BillingAttempt::STATUS_PENDING . "' THEN 1 ELSE 0 END) as pending_count"),
                 DB::raw('SUM(amount) as total_volume'),
                 DB::raw("SUM(CASE WHEN status = '" . BillingAttempt::STATUS_APPROVED . "' THEN amount ELSE 0 END) as approved_volume"),
-                DB::raw("SUM(CASE WHEN status = '" . BillingAttempt::STATUS_CHARGEBACKED . "' THEN amount ELSE 0 END) as chargeback_volume"),
+                DB::raw($chargebackVolumeCase . ' as chargeback_volume'),
             ]);
 
         $results = $query->get();
@@ -119,6 +129,7 @@ class BicAnalyticsService
     public function getBicSummary(string $bic, string $period = self::DEFAULT_PERIOD, ?string $billingModel = null, ?int $empAccountId = null): ?array
     {
         [$start, $end] = $this->resolveDateRange($period, null, null);
+        $excludedCbCodes = config('tether.chargeback.excluded_cb_reason_codes', []);
 
         $query = DB::table('billing_attempts')
             ->where('bic', $bic)
@@ -132,14 +143,17 @@ class BicAnalyticsService
             $query->where('emp_account_id', $empAccountId);
         }
 
+        $chargebackCountCase = $this->buildChargebackCountCase($excludedCbCodes);
+        $chargebackVolumeCase = $this->buildChargebackVolumeCase($excludedCbCodes);
+
         $result = $query->select([
             DB::raw('COUNT(*) as total_transactions'),
             DB::raw("SUM(CASE WHEN status = '" . BillingAttempt::STATUS_APPROVED . "' THEN 1 ELSE 0 END) as approved_count"),
             DB::raw("SUM(CASE WHEN status = '" . BillingAttempt::STATUS_DECLINED . "' THEN 1 ELSE 0 END) as declined_count"),
-            DB::raw("SUM(CASE WHEN status = '" . BillingAttempt::STATUS_CHARGEBACKED . "' THEN 1 ELSE 0 END) as chargeback_count"),
+            DB::raw($chargebackCountCase . ' as chargeback_count'),
             DB::raw('SUM(amount) as total_volume'),
             DB::raw("SUM(CASE WHEN status = '" . BillingAttempt::STATUS_APPROVED . "' THEN amount ELSE 0 END) as approved_volume"),
-            DB::raw("SUM(CASE WHEN status = '" . BillingAttempt::STATUS_CHARGEBACKED . "' THEN amount ELSE 0 END) as chargeback_volume"),
+            DB::raw($chargebackVolumeCase . ' as chargeback_volume'),
         ])
             ->first();
 
@@ -165,6 +179,40 @@ class BicAnalyticsService
                 Cache::forget($key);
             }
         }
+    }
+
+    /**
+     * Build SQL CASE statement for chargeback count excluding specified reason codes.
+     */
+    private function buildChargebackCountCase(array $excludedCodes): string
+    {
+        if (empty($excludedCodes)) {
+            return "SUM(CASE WHEN status = '" . BillingAttempt::STATUS_CHARGEBACKED . "' THEN 1 ELSE 0 END)";
+        }
+
+        $quotedCodes = array_map(fn($code) => "'" . addslashes($code) . "'", $excludedCodes);
+        $excludeList = implode(', ', $quotedCodes);
+
+        return "SUM(CASE WHEN status = '" . BillingAttempt::STATUS_CHARGEBACKED . "' 
+                AND (chargeback_reason_code IS NULL OR chargeback_reason_code = '' OR chargeback_reason_code NOT IN ({$excludeList})) 
+                THEN 1 ELSE 0 END)";
+    }
+
+    /**
+     * Build SQL CASE statement for chargeback volume excluding specified reason codes.
+     */
+    private function buildChargebackVolumeCase(array $excludedCodes): string
+    {
+        if (empty($excludedCodes)) {
+            return "SUM(CASE WHEN status = '" . BillingAttempt::STATUS_CHARGEBACKED . "' THEN amount ELSE 0 END)";
+        }
+
+        $quotedCodes = array_map(fn($code) => "'" . addslashes($code) . "'", $excludedCodes);
+        $excludeList = implode(', ', $quotedCodes);
+
+        return "SUM(CASE WHEN status = '" . BillingAttempt::STATUS_CHARGEBACKED . "' 
+                AND (chargeback_reason_code IS NULL OR chargeback_reason_code = '' OR chargeback_reason_code NOT IN ({$excludeList})) 
+                THEN amount ELSE 0 END)";
     }
 
     private function buildCacheKey(
