@@ -15,6 +15,20 @@ use Illuminate\Database\Query\Builder;
  * Supports two date filtering modes:
  * 1. Transaction Date (default): Filter by emp_created_at/created_at, calculate rates normally
  * 2. Chargeback Date: Filter by chargebacked_at, rates are NULL (approved transactions don't have this date)
+ * 
+ * CB Rate Calculation Logic:
+ * --------------------------
+ * When a transaction gets chargebacked, its status changes from 'approved' to 'chargebacked'.
+ * Therefore, to calculate the true CB Rate vs Approved, we must include chargebacked transactions
+ * in the denominator since they were approved before becoming chargebacks.
+ * 
+ * Formula: CB Rate = chargebacks / (approved + chargebacked) * 100
+ * 
+ * Example:
+ *   - approved (current status): 1
+ *   - chargebacked (current status): 4741
+ *   - Total that were approved: 1 + 4741 = 4742
+ *   - CB Rate = 4741 / 4742 * 100 = 99.98%
  */
 class ChargebackStatsService
 {
@@ -53,17 +67,49 @@ class ChargebackStatsService
 
     /**
      * Calculate CB Rate vs Approved.
-     * Formula: chargebacks / approved
-     * If approved = 0 and chargebacks > 0, return 100%
+     * 
+     * Formula: chargebacks / (approved + chargebacked) * 100
+     * 
+     * Important: Chargebacked transactions were originally approved, so we must
+     * include them in the denominator to get the true approval-based CB rate.
+     * 
+     * @param int $chargebacks Number of chargebacks
+     * @param int $approved Number of currently approved transactions
+     * @param int $chargebacked Number of chargebacked transactions (were approved before)
+     * @return float CB Rate percentage
      */
-    private function calculateCbRateApproved(int $chargebacks, int $approved): float
+    private function calculateCbRateApproved(int $chargebacks, int $approved, int $chargebacked = 0): float
     {
-        if ($approved > 0) {
-            return round(($chargebacks / $approved) * 100, 2);
+        // Total approved = currently approved + those that became chargebacks
+        $totalApproved = $approved + $chargebacked;
+        
+        if ($totalApproved > 0) {
+            return round(($chargebacks / $totalApproved) * 100, 2);
         }
         
-        // If no approved but has chargebacks, return 100%
+        // If no approved transactions at all but has chargebacks, return 100%
         return $chargebacks > 0 ? 100.00 : 0.00;
+    }
+
+    /**
+     * Calculate CB Rate vs Approved Amount.
+     * 
+     * Formula: chargeback_amount / (approved_amount + chargeback_amount) * 100
+     * 
+     * @param float $chargebackAmount Total chargeback amount
+     * @param float $approvedAmount Currently approved amount
+     * @return float CB Rate percentage by amount
+     */
+    private function calculateCbRateAmountApproved(float $chargebackAmount, float $approvedAmount): float
+    {
+        // Total approved amount = currently approved + chargebacked amounts
+        $totalApprovedAmount = $approvedAmount + $chargebackAmount;
+        
+        if ($totalApprovedAmount > 0) {
+            return round(($chargebackAmount / $totalApprovedAmount) * 100, 2);
+        }
+        
+        return $chargebackAmount > 0 ? 100.00 : 0.00;
     }
 
     public function getStats(?string $period = null, ?int $month = null, ?int $year = null, string $dateMode = self::DATE_MODE_TRANSACTION, ?string $model = null, ?int $empAccountId = null): array
@@ -122,8 +168,13 @@ class ChargebackStatsService
                     ? round(($row->chargebacks / $row->total) * 100, 2) 
                     : 0;
                 
-                // CB Rate vs Approved: chargebacks / approved (not approved + chargebacks)
-                $cbRateApproved = $this->calculateCbRateApproved((int) $row->chargebacks, (int) $row->approved);
+                // CB Rate vs Approved: chargebacks / (approved + chargebacks)
+                // Chargebacked transactions were approved before, so include them in denominator
+                $cbRateApproved = $this->calculateCbRateApproved(
+                    (int) $row->chargebacks, 
+                    (int) $row->approved,
+                    (int) $row->chargebacks
+                );
 
                 $alert = $cbRateTotal >= $threshold || $cbRateApproved >= $threshold;
             } else {
@@ -169,14 +220,20 @@ class ChargebackStatsService
                 ? round(($totals['chargebacks'] / $totals['total']) * 100, 2) 
                 : 0;
             
-            // CB Rate vs Approved: chargebacks / approved (not approved + chargebacks)
-            $totals['cb_rate_approved'] = $this->calculateCbRateApproved((int) $totals['chargebacks'], (int) $totals['approved']);
+            // CB Rate vs Approved: chargebacks / (approved + chargebacks)
+            $totals['cb_rate_approved'] = $this->calculateCbRateApproved(
+                (int) $totals['chargebacks'], 
+                (int) $totals['approved'],
+                (int) $totals['chargebacks']
+            );
             
             $totals['alert'] = $totals['cb_rate_total'] >= $threshold || $totals['cb_rate_approved'] >= $threshold;
             
-            $totals['cb_rate_amount_approved'] = $totals['approved_amount'] > 0 
-                ? round(($totals['chargeback_amount'] / $totals['approved_amount']) * 100, 2) 
-                : ($totals['chargeback_amount'] > 0 ? 100.00 : 0.00);
+            // CB Rate Amount vs Approved: chargeback_amount / (approved_amount + chargeback_amount)
+            $totals['cb_rate_amount_approved'] = $this->calculateCbRateAmountApproved(
+                (float) $totals['chargeback_amount'],
+                (float) $totals['approved_amount']
+            );
             
             $totals['cb_alert_amount_approved'] = $totals['cb_rate_amount_approved'] >= $threshold;
         } else {
@@ -399,8 +456,8 @@ class ChargebackStatsService
                 DB::raw("COALESCE(vop_logs.bank_name, 'Unknown') as bank_name"),
                 DB::raw('COUNT(*) as total'),
                 DB::raw("SUM(CASE WHEN billing_attempts.status = '".BillingAttempt::STATUS_APPROVED."' THEN 1 ELSE 0 END) as approved"),
-                DB::raw('SUM(billing_attempts.amount) as total_amount'),
                 DB::raw("SUM(CASE WHEN billing_attempts.status = '".BillingAttempt::STATUS_CHARGEBACKED."' THEN 1 ELSE 0 END) as chargebacks"),
+                DB::raw('SUM(billing_attempts.amount) as total_amount'),
                 DB::raw("SUM(CASE WHEN billing_attempts.status = '".BillingAttempt::STATUS_CHARGEBACKED."' THEN billing_attempts.amount ELSE 0 END) as chargeback_amount"),
             ])
             ->groupBy('vop_logs.bank_name')
@@ -434,8 +491,12 @@ class ChargebackStatsService
         foreach ($banks as $row) {
 
             if ($canCalculateRates) {
-                // CB Rate vs Approved: chargebacks / approved (not approved + chargebacks)
-                $cbBankRate = $this->calculateCbRateApproved((int) $row->chargebacks, (int) $row->approved);
+                // CB Rate vs Approved: chargebacks / (approved + chargebacks)
+                $cbBankRate = $this->calculateCbRateApproved(
+                    (int) $row->chargebacks, 
+                    (int) $row->approved,
+                    (int) $row->chargebacks
+                );
                 $cbBankRateAmount = $row->total_amount > 0 
                     ? round(($row->chargeback_amount / $row->total_amount) * 100, 2) 
                     : 0;
@@ -468,10 +529,11 @@ class ChargebackStatsService
         $result['totals']['chargeback_amount'] = round($result['totals']['chargeback_amount'], 2);
         
         if ($canCalculateRates) {
-            // CB Rate vs Approved: chargebacks / approved (not approved + chargebacks)
+            // CB Rate vs Approved: chargebacks / (approved + chargebacks)
             $result['totals']['cb_rate'] = $this->calculateCbRateApproved(
                 (int) $result['totals']['chargebacks'], 
-                (int) $result['totals']['approved']
+                (int) $result['totals']['approved'],
+                (int) $result['totals']['chargebacks']
             );
             
             $totalsAlertAmount = $result['totals']['total_amount'] > 0 
