@@ -204,4 +204,165 @@ class StatsControllerTest extends TestCase
         $response->assertStatus(422)
             ->assertJsonValidationErrors(['period']);
     }
+
+    public function test_chargeback_rates_excludes_xt33_and_xt73(): void
+    {
+        $profile = DebtorProfile::factory()->create();
+        $debtor = Debtor::factory()->create(['debtor_profile_id' => $profile->id]);
+
+        BillingAttempt::factory()->count(5)->create([
+            'debtor_id' => $debtor->id,
+            'debtor_profile_id' => $profile->id,
+            'status' => BillingAttempt::STATUS_APPROVED,
+            'amount' => 100,
+            'created_at' => now()->subHour(),
+        ]);
+
+        BillingAttempt::factory()->create([
+            'debtor_id' => $debtor->id,
+            'debtor_profile_id' => $profile->id,
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'chargeback_reason_code' => 'AM04',
+            'amount' => 100,
+            'created_at' => now()->subHour(),
+            'chargebacked_at' => now(),
+        ]);
+
+        BillingAttempt::factory()->create([
+            'debtor_id' => $debtor->id,
+            'debtor_profile_id' => $profile->id,
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'chargeback_reason_code' => 'XT33',
+            'amount' => 100,
+            'created_at' => now()->subHour(),
+            'chargebacked_at' => now(),
+        ]);
+
+        BillingAttempt::factory()->create([
+            'debtor_id' => $debtor->id,
+            'debtor_profile_id' => $profile->id,
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'chargeback_reason_code' => 'XT73',
+            'amount' => 100,
+            'created_at' => now()->subHour(),
+            'chargebacked_at' => now(),
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/stats/chargeback-rates?period=all');
+
+        $response->assertStatus(200);
+
+        $data = $response->json('data');
+        $cbCount = $data['totals']['chargeback_count'] ?? $data['totals']['chargebacks'] ?? $data['totals']['occurrences'] ?? 0;
+
+        $this->assertEquals(1, $cbCount, 'Should exclude XT33 and XT73 chargebacks');
+    }
+
+    public function test_chargeback_codes_excludes_xt33_and_xt73(): void
+    {
+        $profile = DebtorProfile::factory()->create();
+        $debtor = Debtor::factory()->create(['debtor_profile_id' => $profile->id]);
+
+        BillingAttempt::factory()->create([
+            'debtor_id' => $debtor->id,
+            'debtor_profile_id' => $profile->id,
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'chargeback_reason_code' => 'AM04',
+            'created_at' => now()->subHour(),
+            'chargebacked_at' => now(),
+        ]);
+
+        BillingAttempt::factory()->create([
+            'debtor_id' => $debtor->id,
+            'debtor_profile_id' => $profile->id,
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'chargeback_reason_code' => 'MS03',
+            'created_at' => now()->subHour(),
+            'chargebacked_at' => now(),
+        ]);
+
+        BillingAttempt::factory()->create([
+            'debtor_id' => $debtor->id,
+            'debtor_profile_id' => $profile->id,
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'chargeback_reason_code' => 'XT33',
+            'created_at' => now()->subHour(),
+            'chargebacked_at' => now(),
+        ]);
+
+        BillingAttempt::factory()->create([
+            'debtor_id' => $debtor->id,
+            'debtor_profile_id' => $profile->id,
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'chargeback_reason_code' => 'XT73',
+            'created_at' => now()->subHour(),
+            'chargebacked_at' => now(),
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/stats/chargeback-codes?period=all');
+
+        $response->assertStatus(200);
+        $data = $response->json('data');
+
+        $codes = collect($data['codes'] ?? $data);
+
+        $this->assertTrue($codes->contains('chargeback_code', 'AM04'));
+        $this->assertTrue($codes->contains('chargeback_code', 'MS03'));
+        $this->assertFalse($codes->contains('chargeback_code', 'XT33'), 'XT33 should be excluded');
+        $this->assertFalse($codes->contains('chargeback_code', 'XT73'), 'XT73 should be excluded');
+    }
+
+    public function test_chargeback_banks_excludes_xt33_and_xt73(): void
+    {
+        $profile = DebtorProfile::factory()->create();
+        $debtor = Debtor::factory()->create(['debtor_profile_id' => $profile->id, 'bic' => 'RABONL2UXXX']);
+
+        BillingAttempt::factory()->create([
+            'debtor_id' => $debtor->id,
+            'debtor_profile_id' => $profile->id,
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'chargeback_reason_code' => 'AM04',
+            'bic' => 'RABONL2UXXX',
+            'amount' => 100,
+            'created_at' => now()->subHour(),
+            'chargebacked_at' => now(),
+        ]);
+
+        BillingAttempt::factory()->create([
+            'debtor_id' => $debtor->id,
+            'debtor_profile_id' => $profile->id,
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'chargeback_reason_code' => 'XT33',
+            'bic' => 'RABONL2UXXX',
+            'amount' => 150,
+            'created_at' => now()->subHour(),
+            'chargebacked_at' => now(),
+        ]);
+
+        BillingAttempt::factory()->create([
+            'debtor_id' => $debtor->id,
+            'debtor_profile_id' => $profile->id,
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'chargeback_reason_code' => 'XT73',
+            'bic' => 'RABONL2UXXX',
+            'amount' => 200,
+            'created_at' => now()->subHour(),
+            'chargebacked_at' => now(),
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/stats/chargeback-banks?period=all');
+
+        $response->assertStatus(200);
+        $data = $response->json('data');
+
+        $banks = collect($data['banks'] ?? $data);
+        $this->assertCount(1, $banks);
+
+        $bank = $banks->first();
+        $this->assertEquals(100, $bank['total_amount'], 'Should exclude XT33 and XT73 amounts');
+        $this->assertEquals(1, $bank['total'], 'Should only count 1 chargeback');
+    }
 }

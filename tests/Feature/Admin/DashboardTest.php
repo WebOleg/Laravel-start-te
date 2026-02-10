@@ -763,4 +763,141 @@ class DashboardTest extends TestCase
             $response2->json('data.debtors.total')
         );
     }
+
+    public function test_dashboard_excludes_xt33_and_xt73_from_chargeback_calculations(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
+
+        BillingAttempt::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'status' => BillingAttempt::STATUS_APPROVED,
+            'amount' => 100,
+        ]);
+
+        BillingAttempt::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'chargeback_reason_code' => 'XT33',
+            'amount' => 50,
+        ]);
+
+        BillingAttempt::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'chargeback_reason_code' => 'XT73',
+            'amount' => 30,
+        ]);
+
+        BillingAttempt::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'chargeback_reason_code' => 'AM04',
+            'amount' => 100,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/dashboard');
+
+        $response->assertStatus(200);
+
+        $billing = $response->json('data.billing');
+        $this->assertEquals(1, $billing['by_status']['chargebacked']);
+        $this->assertEquals(100, $billing['total_chargeback_amount']);
+        $this->assertEquals(50, $billing['chargeback_rate']);
+    }
+
+    public function test_dashboard_calculates_recovery_metrics_excluding_xt33_xt73(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
+
+        BillingAttempt::factory()->count(3)->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'status' => BillingAttempt::STATUS_APPROVED,
+            'amount' => 100,
+        ]);
+
+        BillingAttempt::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'chargeback_reason_code' => 'XT33',
+            'amount' => 50,
+        ]);
+
+        BillingAttempt::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'chargeback_reason_code' => 'XT73',
+            'amount' => 30,
+        ]);
+
+        BillingAttempt::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'chargeback_reason_code' => 'AM04',
+            'amount' => 100,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/dashboard');
+
+        $response->assertStatus(200);
+
+        $debtors = $response->json('data.debtors');
+        $this->assertEquals(200, $debtors['recovered_amount']);
+        $this->assertEquals(41.67, $debtors['recovery_rate']);
+    }
+
+    public function test_dashboard_trends_exclude_xt33_xt73_chargebacks(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
+        $today = now()->format('Y-m-d');
+
+        BillingAttempt::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'chargeback_reason_code' => 'AM04',
+            'created_at' => $today,
+            'emp_created_at' => $today,
+        ]);
+
+        BillingAttempt::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'chargeback_reason_code' => 'XT33',
+            'created_at' => $today,
+            'emp_created_at' => $today,
+        ]);
+
+        BillingAttempt::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'chargeback_reason_code' => 'XT73',
+            'created_at' => $today,
+            'emp_created_at' => $today,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/dashboard');
+
+        $response->assertStatus(200);
+
+        $trends = $response->json('data.trends');
+        $todayTrend = collect($trends)->firstWhere('date', $today);
+
+        $this->assertEquals(1, $todayTrend['chargebacks']);
+    }
 }
