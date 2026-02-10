@@ -81,7 +81,14 @@ class ChargebackStatsService
         $threshold = config('tether.chargeback.alert_threshold', 25);
 
         $query = DB::table('billing_attempts')
-            ->leftJoin('debtors', 'billing_attempts.debtor_id', '=', 'debtors.id');
+            ->leftJoin('debtors', 'billing_attempts.debtor_id', '=', 'debtors.id')
+            ->where(function ($q) {
+                $excludedCodes = config('tether.chargeback.excluded_cb_reason_codes', []);
+                if (!empty($excludedCodes)) {
+                    $q->whereNotIn('billing_attempts.chargeback_reason_code', $excludedCodes)
+                      ->orWhereNull('billing_attempts.chargeback_reason_code');
+                }
+            });
 
         $this->applyDateFilter($query, $dateFilter);
         $this->applyModelFilter($query, $model);
@@ -322,7 +329,16 @@ class ChargebackStatsService
         $dateFilter = $this->buildDateFilter($period, $month, $year, $dateMode);
 
         $query = DB::table('billing_attempts')
-            ->where('status', BillingAttempt::STATUS_CHARGEBACKED);
+        ->where('status', BillingAttempt::STATUS_CHARGEBACKED);
+
+        // Exclude specific chargeback codes (but keep NULL since they'll be grouped)
+        $excludedCodes = config('tether.chargeback.excluded_cb_reason_codes', []);
+        if (!empty($excludedCodes)) {
+            $query->where(function ($q) use ($excludedCodes) {
+            $q->whereNotIn('chargeback_reason_code', $excludedCodes)
+              ->orWhereNull('chargeback_reason_code');
+            });
+        }
 
         $this->applyDateFilter($query, $dateFilter);
         $this->applyModelFilter($query, $model);
@@ -388,7 +404,14 @@ class ChargebackStatsService
             ->leftJoinSub($latestVopLogs, 'latest_vop', function ($join) {
                 $join->on('debtors.id', '=', 'latest_vop.debtor_id');
             })
-            ->leftJoin('vop_logs', 'latest_vop.latest_vop_log_id', '=', 'vop_logs.id');
+            ->leftJoin('vop_logs', 'latest_vop.latest_vop_log_id', '=', 'vop_logs.id')
+            ->where(function ($q) {
+                $excludedCodes = config('tether.chargeback.excluded_cb_reason_codes', []);
+                if (!empty($excludedCodes)) {
+                    $q->whereNotIn('billing_attempts.chargeback_reason_code', $excludedCodes)
+                      ->orWhereNull('billing_attempts.chargeback_reason_code');
+                }
+            });
 
         $this->applyDateFilter($query, $dateFilter);
         $this->applyModelFilter($query, $model);

@@ -219,4 +219,24 @@ class BillingAttempt extends Model
             ->where('status', self::STATUS_PENDING)
             ->where('created_at', '<', now()->subHours($hours));
     }
+
+    /**
+     * Exclude specific chargeback reason codes from queries.
+     * Used to filter out codes like XT33, XT77 from statistics.
+     */
+    public function scopeExcludeChargebackReasonCodes($query, array $codes = null)
+    {
+        if ($codes === null) {
+            $codes = config('tether.chargeback.excluded_reason_codes', []);
+        }
+
+        if (empty($codes)) {
+            return $query;
+        }
+
+        return $query->where(function ($q) use ($codes) {
+            $q->whereNotIn('chargeback_reason_code', $codes)
+              ->orWhereNull('chargeback_reason_code');
+        });
+    }
 }
