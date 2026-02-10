@@ -646,4 +646,238 @@ class BicAnalyticsControllerTest extends TestCase
         // Verify the filename includes the period
         $this->assertStringContainsString('7d', $response->headers->get('content-disposition'));
     }
+
+    public function test_bic_analytics_excludes_xt33_and_xt73_from_chargeback_count(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'bic' => 'RABONL2UXXX',
+        ]);
+
+        BillingAttempt::factory()->count(10)->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'bic' => 'RABONL2UXXX',
+            'status' => BillingAttempt::STATUS_APPROVED,
+            'amount' => 100,
+        ]);
+
+        BillingAttempt::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'bic' => 'RABONL2UXXX',
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'chargeback_reason_code' => 'AM04',
+            'amount' => 100,
+        ]);
+
+        BillingAttempt::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'bic' => 'RABONL2UXXX',
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'chargeback_reason_code' => 'XT33',
+            'amount' => 100,
+        ]);
+
+        BillingAttempt::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'bic' => 'RABONL2UXXX',
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'chargeback_reason_code' => 'XT73',
+            'amount' => 100,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/analytics/bic');
+
+        $response->assertStatus(200);
+
+        $bic = $response->json('data.bics.0');
+        
+        $this->assertEquals(1, $bic['chargeback_count'], 'Should exclude XT33 and XT73 chargebacks');
+        $this->assertEquals(11, $bic['total_transactions']);
+        $this->assertEquals(9.09, $bic['cb_rate_count']);
+    }
+
+    public function test_bic_analytics_excludes_xt33_and_xt73_from_volume_calculations(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'bic' => 'INGBNL2AXXX',
+        ]);
+
+        BillingAttempt::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'bic' => 'INGBNL2AXXX',
+            'status' => BillingAttempt::STATUS_APPROVED,
+            'amount' => 500,
+        ]);
+
+        BillingAttempt::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'bic' => 'INGBNL2AXXX',
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'chargeback_reason_code' => 'AM04',
+            'amount' => 100,
+        ]);
+
+        BillingAttempt::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'bic' => 'INGBNL2AXXX',
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'chargeback_reason_code' => 'XT33',
+            'amount' => 200,
+        ]);
+
+        BillingAttempt::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'bic' => 'INGBNL2AXXX',
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'chargeback_reason_code' => 'XT73',
+            'amount' => 150,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/analytics/bic');
+
+        $response->assertStatus(200);
+
+        $bic = $response->json('data.bics.0');
+        
+        $this->assertEquals(600, $bic['total_volume'], 'Should exclude XT33 and XT73 from volume');
+        $this->assertEquals(100, $bic['chargeback_volume']);
+        $this->assertEquals(16.67, $bic['cb_rate_volume']);
+    }
+
+    public function test_bic_analytics_show_excludes_xt33_and_xt73(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'bic' => 'DEUTESBBXXX',
+        ]);
+
+        BillingAttempt::factory()->count(5)->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'bic' => 'DEUTESBBXXX',
+            'status' => BillingAttempt::STATUS_APPROVED,
+            'amount' => 100,
+        ]);
+
+        BillingAttempt::factory()->count(2)->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'bic' => 'DEUTESBBXXX',
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'chargeback_reason_code' => 'MS03',
+            'amount' => 100,
+        ]);
+
+        BillingAttempt::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'bic' => 'DEUTESBBXXX',
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'chargeback_reason_code' => 'XT33',
+            'amount' => 100,
+        ]);
+
+        BillingAttempt::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'bic' => 'DEUTESBBXXX',
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'chargeback_reason_code' => 'XT73',
+            'amount' => 100,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/analytics/bic/DEUTESBBXXX');
+
+        $response->assertStatus(200);
+
+        $data = $response->json('data');
+        
+        $this->assertEquals(2, $data['chargeback_count']);
+        $this->assertEquals(7, $data['total_transactions']);
+        $this->assertEquals(28.57, $data['cb_rate_count']);
+    }
+
+    public function test_bic_analytics_totals_exclude_xt33_and_xt73(): void
+    {
+        $upload = Upload::factory()->create();
+        
+        $debtor1 = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'bic' => 'RABONL2UXXX',
+        ]);
+
+        BillingAttempt::factory()->count(5)->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor1->id,
+            'bic' => 'RABONL2UXXX',
+            'status' => BillingAttempt::STATUS_APPROVED,
+            'amount' => 100,
+        ]);
+
+        BillingAttempt::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor1->id,
+            'bic' => 'RABONL2UXXX',
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'chargeback_reason_code' => 'AM04',
+            'amount' => 100,
+        ]);
+
+        BillingAttempt::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor1->id,
+            'bic' => 'RABONL2UXXX',
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'chargeback_reason_code' => 'XT33',
+            'amount' => 100,
+        ]);
+
+        $debtor2 = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'bic' => 'INGBNL2AXXX',
+        ]);
+
+        BillingAttempt::factory()->count(3)->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor2->id,
+            'bic' => 'INGBNL2AXXX',
+            'status' => BillingAttempt::STATUS_APPROVED,
+            'amount' => 100,
+        ]);
+
+        BillingAttempt::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor2->id,
+            'bic' => 'INGBNL2AXXX',
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'chargeback_reason_code' => 'XT73',
+            'amount' => 100,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/analytics/bic');
+
+        $response->assertStatus(200);
+
+        $totals = $response->json('data.totals');
+        
+        $this->assertEquals(9, $totals['total_transactions']);
+        $this->assertEquals(1, $totals['chargeback_count']);
+        $this->assertEquals(900, $totals['total_volume']);
+    }
 }
