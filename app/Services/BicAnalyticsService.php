@@ -20,11 +20,6 @@ class BicAnalyticsService
     public const CACHE_TTL = 900;
     public const HIGH_RISK_THRESHOLD = 25.0;
 
-    //TODO: remove this 
-    public function __construct() {
-        $this->clearCache();
-    }
-
     /**
      * Get BIC analytics with caching.
      */
