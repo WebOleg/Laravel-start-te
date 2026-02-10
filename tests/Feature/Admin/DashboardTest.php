@@ -808,7 +808,7 @@ class DashboardTest extends TestCase
         $billing = $response->json('data.billing');
         $this->assertEquals(1, $billing['by_status']['chargebacked']);
         $this->assertEquals(100, $billing['total_chargeback_amount']);
-        $this->assertEquals(50, $billing['chargeback_rate']); // 1/(1+1) = 50% (1 approved, 1 counted chargeback)
+        $this->assertEquals(100, $billing['chargeback_rate']); // 1/1 = 100% (formula: chargebacks/(approved_that_became_chargebacks + chargebacks))
     }
 
     public function test_dashboard_calculates_recovery_metrics_excluding_xt33_xt73(): void
