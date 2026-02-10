@@ -16,6 +16,9 @@ class Upload extends Model
     public const STATUS_PENDING = 'pending';
     public const STATUS_PROCESSING = 'processing';
     public const STATUS_COMPLETED = 'completed';
+    public const STATUS_CANCELLING = 'cancelling';
+    public const STATUS_VOIDING = 'voiding';
+    public const STATUS_CANCELLED = 'cancelled';
     public const STATUS_FAILED = 'failed';
 
     public const JOB_IDLE = 'idle';
@@ -126,7 +129,7 @@ class Upload extends Model
         if ($this->emp_account_id) {
             return $this->empAccount;
         }
-        
+
         return EmpAccount::getActive();
     }
 
@@ -333,8 +336,8 @@ class Upload extends Model
             'status' => $this->bav_status ?? 'idle',
             'total' => $this->bav_total_count ?? 0,
             'processed' => $this->bav_processed_count ?? 0,
-            'percentage' => $this->bav_total_count > 0 
-                ? round(($this->bav_processed_count / $this->bav_total_count) * 100, 1) 
+            'percentage' => $this->bav_total_count > 0
+                ? round(($this->bav_processed_count / $this->bav_total_count) * 100, 1)
                 : 0,
             'started_at' => $this->bav_started_at?->toISOString(),
             'completed_at' => $this->bav_completed_at?->toISOString(),
@@ -347,7 +350,7 @@ class Upload extends Model
     public function getBavEligibleCount(): int
     {
         $supportedCountries = config('services.iban.bav_supported_countries', []);
-        
+
         return $this->debtors()
             ->whereHas('latestVopLog', function ($query) use ($supportedCountries) {
                 $query->where('result', 'verified')
@@ -365,7 +368,7 @@ class Upload extends Model
     public function getBavEligibleDebtorIds(?int $limit = null): array
     {
         $supportedCountries = config('services.iban.bav_supported_countries', []);
-        
+
         $query = $this->debtors()
             ->whereHas('latestVopLog', function ($q) use ($supportedCountries) {
                 $q->where('result', 'verified')
@@ -373,11 +376,11 @@ class Upload extends Model
                     ->where('bav_verified', false)
                     ->whereIn('country', $supportedCountries);
             });
-        
+
         if ($limit) {
             $query->limit($limit);
         }
-        
+
         return $query->pluck('id')->toArray();
     }
 

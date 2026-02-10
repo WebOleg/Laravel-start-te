@@ -76,6 +76,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('uploads/{upload}/billing-stats', [AdminBillingController::class, 'stats']);
         Route::post('billing-attempts/{billing_attempt}/retry', [AdminBillingAttemptController::class, 'retry']);
 
+        Route::post('billing/{upload}/cancel', [AdminBillingController::class, 'cancel']);
+        Route::post('billing/{upload}/void', [AdminBillingController::class, 'void']);
+
         Route::post('billing-attempts/{billing_attempt}/reconcile', [AdminReconciliationController::class, 'reconcileAttempt']);
         Route::post('uploads/{upload}/reconcile', [AdminReconciliationController::class, 'reconcileUpload']);
         Route::get('uploads/{upload}/reconciliation-stats', [AdminReconciliationController::class, 'uploadStats']);
