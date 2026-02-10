@@ -139,14 +139,14 @@ class ChargebackStatsTest extends TestCase
             ->getJson('/api/admin/stats/chargeback-rates');
 
         $response->assertOk();
-        
+
         $country = collect($response->json('data.countries'))->firstWhere('country', 'ES');
         $this->assertEquals(10, $country['total']);
         $this->assertEquals(8, $country['approved']);
         $this->assertEquals(2, $country['chargebacks']);
         $this->assertEquals(20, $country['cb_rate_total']);
-        // cb_rate_approved = chargebacks / approved = 2 / 8 = 25%
-        $this->assertEquals(25, $country['cb_rate_approved']);
+        // cb_rate_approved = chargebacks / (approved + chargebacks) = 2 / (8 + 2) = 20%
+        $this->assertEquals(20, $country['cb_rate_approved']);
     }
 
     public function test_chargeback_rates_triggers_alert_above_threshold(): void
@@ -470,7 +470,7 @@ class ChargebackStatsTest extends TestCase
         $this->assertEquals('transaction', $response2->json('data.date_mode'));
         $this->assertEquals(1, $response2->json('data.totals.chargebacks'));
     }
-    
+
     public function test_chargeback_rates_handles_leap_year_february(): void
     {
         $upload = Upload::factory()->create();
@@ -518,7 +518,7 @@ class ChargebackStatsTest extends TestCase
     {
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create();
-        
+
         VopLog::factory()->create([
             'debtor_id' => $debtor->id,
             'bank_name' => 'Deutsche Bank',
@@ -606,7 +606,7 @@ class ChargebackStatsTest extends TestCase
 
         $response->assertStatus(200);
         $data = $response->json('data');
-        
+
         $this->assertEquals('all', $data['period']);
         $this->assertEquals(2, $data['totals']['total']);
         $this->assertEquals(1, $data['totals']['chargebacks']);
@@ -651,7 +651,7 @@ class ChargebackStatsTest extends TestCase
 
         $response->assertStatus(200);
         $data = $response->json('data');
-        
+
         $this->assertEquals('24h', $data['period']);
         $bankNames = array_column($data['banks'], 'bank_name');
         $this->assertContains('Commerzbank', $bankNames);
@@ -682,7 +682,7 @@ class ChargebackStatsTest extends TestCase
 
         $response->assertStatus(200);
         $data = $response->json('data');
-        
+
         $this->assertEquals('30d', $data['period']);
     }
 
@@ -710,7 +710,7 @@ class ChargebackStatsTest extends TestCase
 
         $response->assertStatus(200);
         $data = $response->json('data');
-        
+
         $this->assertEquals('90d', $data['period']);
     }
 
@@ -751,9 +751,9 @@ class ChargebackStatsTest extends TestCase
         $response->assertStatus(200);
         $data = $response->json('data');
 
-        // CB rate = chargebacks / approved = 2 / 10 = 20%
-        $this->assertEqualsWithDelta(20.0, $data['banks'][0]['cb_rate'], 0.01);
-        $this->assertEqualsWithDelta(20.0, $data['totals']['cb_rate'], 0.01);
+        // CB rate = chargebacks / (approved + chargebacks) = 2 / (10 + 2) = 16.67%
+        $this->assertEqualsWithDelta(16.67, $data['banks'][0]['cb_rate'], 0.01);
+        $this->assertEqualsWithDelta(16.67, $data['totals']['cb_rate'], 0.01);
     }
 
     public function test_chargeback_banks_multiple_aggregated_correctly(): void
@@ -813,30 +813,30 @@ class ChargebackStatsTest extends TestCase
 
         $response->assertStatus(200);
         $data = $response->json('data');
-        
+
         $this->assertCount(2, $data['banks']);
-        
+
         $deutscheBank = collect($data['banks'])->firstWhere('bank_name', 'Deutsche Bank');
         $commerzbank = collect($data['banks'])->firstWhere('bank_name', 'Commerzbank');
-        
+
         $this->assertNotNull($deutscheBank);
         $this->assertNotNull($commerzbank);
-        
+
         $this->assertEquals(400.0, $deutscheBank['total_amount']);
         $this->assertEquals(1, $deutscheBank['chargebacks']);
-        // CB rate = chargebacks / approved = 1 / 3 = 33.33%
-        $this->assertEqualsWithDelta(33.33, $deutscheBank['cb_rate'], 0.01);
-        
+        // CB rate = chargebacks / (approved + chargebacks) = 1 / (3 + 1) = 25%
+        $this->assertEqualsWithDelta(25.0, $deutscheBank['cb_rate'], 0.01);
+
         $this->assertEquals(400.0, $commerzbank['total_amount']);
         $this->assertEquals(2, $commerzbank['chargebacks']);
-        // CB rate = chargebacks / approved = 2 / 2 = 100%
-        $this->assertEqualsWithDelta(100.0, $commerzbank['cb_rate'], 0.01);
+        // CB rate = chargebacks / (approved + chargebacks) = 2 / (2 + 2) = 50%
+        $this->assertEqualsWithDelta(50.0, $commerzbank['cb_rate'], 0.01);
     }
 
     public function test_chargeback_banks_response_is_cached(): void
     {
         Cache::flush();
-        
+
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create();
 
@@ -873,7 +873,7 @@ class ChargebackStatsTest extends TestCase
     public function test_chargeback_banks_all_time_and_period_have_separate_cache(): void
     {
         Cache::flush();
-        
+
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create();
 
@@ -919,7 +919,7 @@ class ChargebackStatsTest extends TestCase
 
         $response->assertStatus(200);
         $data = $response->json('data');
-        
+
         $this->assertEmpty($data['banks']);
         $this->assertEquals(0, $data['totals']['total']);
         $this->assertEquals(0, $data['totals']['chargebacks']);
@@ -1007,7 +1007,7 @@ class ChargebackStatsTest extends TestCase
 
         $response->assertStatus(200);
         $data = $response->json('data');
-        
+
         $this->assertCount(1, $data['banks']);
         $this->assertEquals(700.0, $data['banks'][0]['total_amount']);
         $this->assertEquals(2, $data['banks'][0]['chargebacks']);
@@ -1120,7 +1120,7 @@ class ChargebackStatsTest extends TestCase
     public function test_chargeback_banks_cache_separates_by_month_year(): void
     {
         Cache::flush();
-        
+
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create();
 
@@ -1223,7 +1223,7 @@ class ChargebackStatsTest extends TestCase
 
         $response->assertStatus(200);
         $this->assertEquals('all', $response->json('data.period'));
-        
+
         $codes = array_column($response->json('data.codes'), 'chargeback_code');
         $this->assertCount(2, $codes);
         $this->assertContains('CB_OLD', $codes);
@@ -1258,7 +1258,7 @@ class ChargebackStatsTest extends TestCase
 
         $response->assertStatus(200);
         $this->assertEquals('24h', $response->json('data.period'));
-        
+
         $codes = array_column($response->json('data.codes'), 'chargeback_code');
         $this->assertCount(1, $codes);
         $this->assertContains('CB001', $codes);
@@ -1269,7 +1269,7 @@ class ChargebackStatsTest extends TestCase
     {
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create();
-        
+
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
@@ -1299,7 +1299,7 @@ class ChargebackStatsTest extends TestCase
 
         $response->assertStatus(200);
         $this->assertEquals('7d', $response->json('data.period'));
-        
+
         $codes = array_column($response->json('data.codes'), 'chargeback_code');
         $this->assertCount(2, $codes);
         $this->assertContains('CB001', $codes);
@@ -1311,7 +1311,7 @@ class ChargebackStatsTest extends TestCase
     {
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create();
-        
+
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
@@ -1349,7 +1349,7 @@ class ChargebackStatsTest extends TestCase
 
         $response->assertStatus(200);
         $this->assertEquals('30d', $response->json('data.period'));
-        
+
         $codes = array_column($response->json('data.codes'), 'chargeback_code');
         $this->assertCount(3, $codes);
         $this->assertContains('CB001', $codes);
@@ -1362,7 +1362,7 @@ class ChargebackStatsTest extends TestCase
     {
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create();
-        
+
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
@@ -1408,7 +1408,7 @@ class ChargebackStatsTest extends TestCase
 
         $response->assertStatus(200);
         $this->assertEquals('90d', $response->json('data.period'));
-        
+
         $codes = array_column($response->json('data.codes'), 'chargeback_code');
         $this->assertCount(4, $codes);
         $this->assertContains('CB001', $codes);
@@ -1429,7 +1429,7 @@ class ChargebackStatsTest extends TestCase
     public function test_chargeback_codes_different_periods_have_separate_cache(): void
     {
         Cache::flush();
-        
+
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create();
 
@@ -1462,7 +1462,7 @@ class ChargebackStatsTest extends TestCase
     {
         $response = $this->actingAs($this->user)
             ->getJson('/api/admin/stats/chargeback-codes');
-        
+
         $response->assertJsonStructure([
             'data' => [
                 'period',
@@ -1529,7 +1529,7 @@ class ChargebackStatsTest extends TestCase
             ->getJson('/api/admin/stats/chargeback-codes');
 
         $data = $response->json('data');
-        
+
         $this->assertEquals(400.00, $data['totals']['total_amount']);
         $this->assertEquals(2, $data['totals']['occurrences']);
     }
@@ -1537,7 +1537,7 @@ class ChargebackStatsTest extends TestCase
     public function test_chargeback_codes_cache_separates_by_date_mode(): void
     {
         Cache::flush();
-        
+
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create();
 
