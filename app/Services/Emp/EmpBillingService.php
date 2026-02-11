@@ -436,4 +436,58 @@ class EmpBillingService
             default => BillingAttempt::STATUS_ERROR,
         };
     }
+
+    /**
+     * Process a single void attempt.
+     */
+    public function voidAttempt(BillingAttempt $attempt): bool
+    {
+        $client = $this->defaultClient;
+        if ($attempt->emp_account_id) {
+            $account = EmpAccount::find($attempt->emp_account_id);
+            if ($account) {
+                $client = new EmpClient($account);
+            }
+        }
+
+        $voidTransactionId = sprintf('void_%d_%s', $attempt->id, Str::random(8));
+
+        // Send Void Request
+        $response = $client->voidTransaction(
+            $attempt->unique_id,
+            $voidTransactionId,
+            $attempt->unique_id
+        );
+
+        $status = $response['status'] ?? 'error';
+
+        // Handle Success
+        if ($status === 'approved') {
+            // Update Attempt
+            $attempt->update([
+                'status' => BillingAttempt::STATUS_VOIDED,
+                'meta' => array_merge($attempt->meta ?? [], [
+                    'voided_at' => now()->toIso8601String(),
+                    'void_unique_id' => $response['unique_id'] ?? null,
+                    'void_response' => $response
+                ])
+            ]);
+
+            // Reset Debtor to Uploaded so they can be billed again if necessary
+            $attempt->debtor->update([
+                'status' => Debtor::STATUS_UPLOADED
+            ]);
+
+            Log::info("Transaction voided successfully", ['attempt_id' => $attempt->id]);
+            return true;
+        }
+
+        // Handle Failure
+        Log::warning("Void rejected by gateway", [
+            'attempt_id' => $attempt->id,
+            'response' => $response
+        ]);
+
+        return false;
+    }
 }
