@@ -9,6 +9,7 @@ namespace App\Services;
 use App\Models\Debtor;
 use App\Models\Upload;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 
 class DebtorValidationService
 {
@@ -17,7 +18,8 @@ class DebtorValidationService
 
     public function __construct(
         private IbanValidator $ibanValidator,
-        private BlacklistService $blacklistService
+        private BlacklistService $blacklistService,
+        private IbanApiService $ibanApiService
     ) {}
 
     public function validateDebtor(Debtor $debtor): array
@@ -31,6 +33,7 @@ class DebtorValidationService
         $errors = array_merge($errors, $this->validateEmail($debtor));
         $errors = array_merge($errors, $this->validateCountry($debtor));
         $errors = array_merge($errors, $this->validateEncoding($debtor));
+        $this->resolveBicFromIban($debtor);
         $errors = array_merge($errors, $this->validateBlacklist($debtor));
 
         return $errors;
@@ -255,7 +258,37 @@ class DebtorValidationService
     }
 
     /**
-     * Validate against blacklist (IBAN + name + email).
+     * Resolve BIC from IBAN if debtor has no BIC.
+     * Uses IBAN Suite API (Unlimited credits) with local cache.
+     */
+    protected function resolveBicFromIban(Debtor $debtor): void
+    {
+        if (!empty($debtor->bic) || empty($debtor->iban)) {
+            return;
+        }
+
+        try {
+            $bic = $this->ibanApiService->getBic($debtor->iban);
+
+            if (!empty($bic)) {
+                $debtor->bic = $bic;
+                $debtor->save();
+
+                Log::info('DebtorValidation: BIC resolved from IBAN', [
+                    'debtor_id' => $debtor->id,
+                    'bic' => $bic,
+                ]);
+            }
+        } catch (\Throwable $e) {
+            Log::warning('DebtorValidation: BIC resolve failed', [
+                'debtor_id' => $debtor->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Validate against blacklist (IBAN + name + email + BIC).
      */
     protected function validateBlacklist(Debtor $debtor): array
     {

@@ -125,7 +125,7 @@ class BicAnalyticsControllerTest extends TestCase
             ->assertJsonPath('data.bics.0.chargeback_count', 1);
 
         $data = $response->json('data.bics.0');
-        // Formula: chargebacks / total = 1/10 × 100 = 10%
+        // Formula: chargebacks / (approved + chargebacks) = 1/(9+1) × 100 = 10%
         $this->assertEquals(10, $data['cb_rate_count']);
     }
 
@@ -161,7 +161,7 @@ class BicAnalyticsControllerTest extends TestCase
             ->assertJsonPath('data.high_risk_count', 1);
 
         $data = $response->json('data.bics.0');
-        // Formula: chargebacks / total = 5/10 × 100 = 50%
+        // Formula: chargebacks / (approved + chargebacks) = 5/(5+5) × 100 = 50%
         $this->assertEquals(50, $data['cb_rate_count']);
     }
 
@@ -699,7 +699,7 @@ class BicAnalyticsControllerTest extends TestCase
         
         $this->assertEquals(1, $bic['chargeback_count'], 'Should exclude XT33 and XT73 chargebacks');
         $this->assertEquals(13, $bic['total_transactions']);
-        $this->assertEquals(7.69, $bic['cb_rate_count']); // 1/13 * 100 (only AM04 counted)
+        $this->assertEquals(9.09, $bic['cb_rate_count']); // cb / (approved + cb) = 1 / (10 + 1) × 100 = 9.09%
     }
 
     public function test_bic_analytics_excludes_xt33_and_xt73_from_volume_calculations(): void
@@ -754,7 +754,7 @@ class BicAnalyticsControllerTest extends TestCase
         
         $this->assertEquals(950, $bic['total_volume']);
         $this->assertEquals(100, $bic['chargeback_volume']); // Only AM04 amount
-        $this->assertEquals(10.53, $bic['cb_rate_volume']); // 100/950 * 100
+        $this->assertEquals(16.67, $bic['cb_rate_volume']); // cb_vol / (approved_vol + cb_vol) = 100 / (500 + 100) × 100 = 16.67%
     }
 
     public function test_bic_analytics_show_excludes_xt33_and_xt73(): void
@@ -809,7 +809,7 @@ class BicAnalyticsControllerTest extends TestCase
         
         $this->assertEquals(2, $data['chargeback_count']);
         $this->assertEquals(9, $data['total_transactions']);
-        $this->assertEquals(22.22, $data['cb_rate_count']); // 2/9 * 100 (only MS03 counted)
+        $this->assertEquals(28.57, $data['cb_rate_count']); // cb / (approved + cb) = 2 / (5 + 2) × 100 = 28.57%
     }
 
     public function test_bic_analytics_totals_exclude_xt33_and_xt73(): void

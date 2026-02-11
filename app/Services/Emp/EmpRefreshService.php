@@ -90,6 +90,7 @@ class EmpRefreshService
         $rows = [];
         $uniqueIds = [];
         $newDataByUniqueId = [];
+        $chargebackedUniqueIds = [];
         $now = now();
         $terminalToken = $this->client->getTerminalToken();
         
@@ -103,11 +104,16 @@ class EmpRefreshService
             $transactionId = $tx['transaction_id'] ?? null;
             $status = $this->mapStatus($tx['status'] ?? 'unknown');
             $amount = isset($tx['amount']) ? ((float) $tx['amount']) / 100 : 0;
+            $empCreatedAt = isset($tx['timestamp']) ? Carbon::parse($tx['timestamp']) : null;
             
             $newDataByUniqueId[$uniqueId] = [
                 'status' => $status,
                 'amount' => $amount,
             ];
+
+            if ($status === BillingAttempt::STATUS_CHARGEBACKED) {
+                $chargebackedUniqueIds[$uniqueId] = $empCreatedAt ?? $now;
+            }
             
             $rows[] = [
                 'unique_id' => $uniqueId,
@@ -117,11 +123,11 @@ class EmpRefreshService
                 'currency' => $tx['currency'] ?? 'EUR',
                 'bic' => null,
                 'mid_reference' => $terminalToken,
-                'emp_account_id' => $empAccountId,  // Add this line
+                'emp_account_id' => $empAccountId,
                 'error_code' => $tx['code'] ?? $tx['reason_code'] ?? null,
                 'error_message' => $tx['message'] ?? null,
                 'technical_message' => $tx['technical_message'] ?? null,
-                'emp_created_at' => isset($tx['timestamp']) ? Carbon::parse($tx['timestamp']) : null,
+                'emp_created_at' => $empCreatedAt,
                 'processed_at' => $now,
                 'response_payload' => json_encode($tx),
                 'attempt_number' => 1,
@@ -163,6 +169,20 @@ class EmpRefreshService
                 ['unique_id'],
                 ['status', 'amount', 'currency', 'error_code', 'error_message', 'technical_message', 'emp_created_at', 'processed_at', 'response_payload', 'updated_at', 'last_reconciled_at', 'mid_reference', 'emp_account_id']
             );
+
+            // Set chargebacked_at for records where it's NULL (don't overwrite webhook values)
+            if (!empty($chargebackedUniqueIds)) {
+                $cbUpdated = BillingAttempt::whereIn('unique_id', array_keys($chargebackedUniqueIds))
+                    ->where('status', BillingAttempt::STATUS_CHARGEBACKED)
+                    ->whereNull('chargebacked_at')
+                    ->update(['chargebacked_at' => $now]);
+
+                if ($cbUpdated > 0) {
+                    Log::info('EMP Refresh: set chargebacked_at for records missing it', [
+                        'updated_count' => $cbUpdated,
+                    ]);
+                }
+            }
             
             Log::debug('EMP Refresh: batch upserted', [
                 'total' => count($rows),
@@ -226,14 +246,27 @@ class EmpRefreshService
                 $existing->update(['last_reconciled_at' => now()]);
                 return 'unchanged';
             }
+
+            // Set chargebacked_at if transitioning to chargebacked and not already set
+            if ($data['status'] === BillingAttempt::STATUS_CHARGEBACKED && !$existing->chargebacked_at) {
+                $data['chargebacked_at'] = now();
+            }
+
             $existing->update($data);
             return 'updated';
         }
 
-        BillingAttempt::create(array_merge($data, [
+        $createData = array_merge($data, [
             'transaction_id' => $transactionId ?: 'emp_import_' . $uniqueId,
             'attempt_number' => 1,
-        ]));
+        ]);
+
+        // Set chargebacked_at for new chargebacked records
+        if ($data['status'] === BillingAttempt::STATUS_CHARGEBACKED) {
+            $createData['chargebacked_at'] = isset($tx['timestamp']) ? Carbon::parse($tx['timestamp']) : now();
+        }
+
+        BillingAttempt::create($createData);
 
         return 'inserted';
     }

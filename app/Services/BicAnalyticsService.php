@@ -3,6 +3,9 @@
 /**
  * Service for BIC (Bank Identifier Code) analytics.
  * Provides aggregated transaction metrics per bank for risk monitoring.
+ *
+ * CB Rate formula: chargebacks / (approved + chargebacks) × 100
+ * Date filtering: COALESCE(emp_created_at, created_at)
  */
 
 namespace App\Services;
@@ -54,7 +57,7 @@ class BicAnalyticsService
         $excludedCbCodes = config('tether.chargeback.excluded_cb_reason_codes', []);
 
         $query = DB::table('billing_attempts')
-            ->whereBetween('created_at', [$start, $end])
+            ->whereRaw('COALESCE(emp_created_at, created_at) BETWEEN ? AND ?', [$start, $end])
             ->whereNotNull('bic')
             ->where('bic', '!=', '');
 
@@ -128,7 +131,7 @@ class BicAnalyticsService
 
         $query = DB::table('billing_attempts')
             ->where('bic', $bic)
-            ->whereBetween('created_at', [$start, $end]);
+            ->whereRaw('COALESCE(emp_created_at, created_at) BETWEEN ? AND ?', [$start, $end]);
 
         if ($billingModel) {
             $query->where('billing_model', $billingModel);
@@ -188,8 +191,8 @@ class BicAnalyticsService
         $quotedCodes = array_map(fn($code) => "'" . addslashes($code) . "'", $excludedCodes);
         $excludeList = implode(', ', $quotedCodes);
 
-        return "SUM(CASE WHEN status = '" . BillingAttempt::STATUS_CHARGEBACKED . "' 
-                AND (chargeback_reason_code IS NULL OR chargeback_reason_code = '' OR chargeback_reason_code NOT IN ({$excludeList})) 
+        return "SUM(CASE WHEN status = '" . BillingAttempt::STATUS_CHARGEBACKED . "'
+                AND (chargeback_reason_code IS NULL OR chargeback_reason_code = '' OR chargeback_reason_code NOT IN ({$excludeList}))
                 THEN 1 ELSE 0 END)";
     }
 
@@ -205,8 +208,8 @@ class BicAnalyticsService
         $quotedCodes = array_map(fn($code) => "'" . addslashes($code) . "'", $excludedCodes);
         $excludeList = implode(', ', $quotedCodes);
 
-        return "SUM(CASE WHEN status = '" . BillingAttempt::STATUS_CHARGEBACKED . "' 
-                AND (chargeback_reason_code IS NULL OR chargeback_reason_code = '' OR chargeback_reason_code NOT IN ({$excludeList})) 
+        return "SUM(CASE WHEN status = '" . BillingAttempt::STATUS_CHARGEBACKED . "'
+                AND (chargeback_reason_code IS NULL OR chargeback_reason_code = '' OR chargeback_reason_code NOT IN ({$excludeList}))
                 THEN amount ELSE 0 END)";
     }
 
@@ -248,9 +251,8 @@ class BicAnalyticsService
     /**
      * Process a single BIC row into analytics data.
      *
-     * KPIs (bank standard):
-     * - cb_rate_count: chargebacks / approved_count × 100
-     * - cb_rate_volume: chargeback_volume / approved_volume × 100
+     * CB Rate formula: chargebacks / (approved + chargebacks) × 100
+     * This accounts for the fact that chargebacked transactions were originally approved.
      */
     private function processBicRow(object $row, float $threshold): array
     {
@@ -261,12 +263,14 @@ class BicAnalyticsService
         $approvedVolume = (float) ($row->approved_volume ?? 0);
         $chargebackVolume = (float) $row->chargeback_volume;
 
-        $cbRateCount = $chargebackCount > 0
-            ? round(($chargebackCount / $totalTxCount) * 100, 2)
+        $cbDenominator = $approvedCount + $chargebackCount;
+        $cbRateCount = ($cbDenominator > 0)
+            ? round(($chargebackCount / $cbDenominator) * 100, 2)
             : 0;
 
-        $cbRateVolume = $chargebackVolume > 0
-            ? round(($chargebackVolume / $totalTxVolume) * 100, 2)
+        $cbVolumeDenominator = $approvedVolume + $chargebackVolume;
+        $cbRateVolume = ($cbVolumeDenominator > 0)
+            ? round(($chargebackVolume / $cbVolumeDenominator) * 100, 2)
             : 0;
 
         $country = $this->extractCountryFromBic($row->bic);
@@ -274,13 +278,13 @@ class BicAnalyticsService
         return [
             'bic' => $row->bic,
             'bank_country' => $country,
-            'total_transactions' => (int) $row->total_transactions,
+            'total_transactions' => $totalTxCount,
             'approved_count' => $approvedCount,
             'declined_count' => (int) $row->declined_count,
             'chargeback_count' => $chargebackCount,
             'error_count' => (int) ($row->error_count ?? 0),
             'pending_count' => (int) ($row->pending_count ?? 0),
-            'total_volume' => round((float) $row->total_volume, 2),
+            'total_volume' => round($totalTxVolume, 2),
             'approved_volume' => round($approvedVolume, 2),
             'chargeback_volume' => round($chargebackVolume, 2),
             'cb_rate_count' => $cbRateCount,
@@ -332,9 +336,7 @@ class BicAnalyticsService
     /**
      * Calculate final rates for totals.
      *
-     * KPIs (bank standard):
-     * - cb_rate_count: chargebacks / approved_count × 100
-     * - cb_rate_volume: chargeback_volume / approved_volume × 100
+     * CB Rate formula: chargebacks / (approved + chargebacks) × 100
      */
     private function finalizeTotals(array &$totals, float $threshold): void
     {
@@ -342,12 +344,14 @@ class BicAnalyticsService
         $totals['approved_volume'] = round($totals['approved_volume'], 2);
         $totals['chargeback_volume'] = round($totals['chargeback_volume'], 2);
 
-        $totals['cb_rate_count'] = $totals['chargeback_count'] > 0
-            ? round(($totals['chargeback_count'] / $totals['total_transactions']) * 100, 2)
+        $cbDenominator = $totals['approved_count'] + $totals['chargeback_count'];
+        $totals['cb_rate_count'] = ($cbDenominator > 0)
+            ? round(($totals['chargeback_count'] / $cbDenominator) * 100, 2)
             : 0;
 
-        $totals['cb_rate_volume'] = $totals['chargeback_volume'] > 0
-            ? round(($totals['chargeback_volume'] / $totals['total_volume']) * 100, 2)
+        $cbVolumeDenominator = $totals['approved_volume'] + $totals['chargeback_volume'];
+        $totals['cb_rate_volume'] = ($cbVolumeDenominator > 0)
+            ? round(($totals['chargeback_volume'] / $cbVolumeDenominator) * 100, 2)
             : 0;
 
         $totals['is_high_risk'] = $totals['cb_rate_count'] >= $threshold || $totals['cb_rate_volume'] >= $threshold;

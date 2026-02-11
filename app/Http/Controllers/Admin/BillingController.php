@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Jobs\ProcessBillingJob;
+use App\Jobs\VoidUploadJob;
 use App\Models\BillingAttempt;
 use App\Models\Debtor;
 use App\Models\DebtorProfile;
@@ -16,6 +17,78 @@ use Illuminate\Database\Query\Builder;
 
 class BillingController extends Controller
 {
+    /**
+     * Void all successful transactions for an upload via Queue.
+     */
+    public function void(Upload $upload): JsonResponse
+    {
+        // Time window
+        $lastActivity = $upload->billing_completed_at ?? $upload->billing_started_at;
+        if ($lastActivity && $lastActivity->diffInHours(now()) > 24) {
+            return response()->json([
+                'message' => 'Cannot void transactions older than 24 hours. Please use Refund instead.',
+            ], 422);
+        }
+
+        // Is anything actually billable?
+        $count = BillingAttempt::where('upload_id', $upload->id)
+            ->whereIn('status', [
+                BillingAttempt::STATUS_APPROVED,
+                BillingAttempt::STATUS_PENDING
+            ])
+            ->whereNotNull('unique_id')
+            ->count();
+
+        if ($count === 0) {
+            return response()->json([
+                'message' => 'No eligible transactions found to void.',
+            ], 422);
+        }
+
+        // Dispatch Job
+        VoidUploadJob::dispatch($upload);
+
+        // Update UI Status
+        $upload->update([
+            'billing_status' => Upload::STATUS_VOIDING,
+            'status' => Upload::STATUS_VOIDING
+        ]);
+
+        return response()->json([
+            'message' => "Void process queued for {$count} transactions.",
+            'data' => [
+                'queued_count' => $count
+            ]
+        ], 202);
+    }
+
+    /**
+     * Cancel an active billing sync.
+     * Sets a signal flag that running jobs check to terminate execution.
+     */
+    public function cancel(Upload $upload): JsonResponse
+    {
+        $lockKey = "billing_sync_stop_{$upload->id}";
+
+        // Set the Kill Switch (Valid for 60 minutes)
+        Cache::put($lockKey, true, 3600);
+
+        // Mark upload status immediately for UI feedback
+        $upload->update([
+            'billing_status' => Upload::STATUS_CANCELLING,
+            'status' => Upload::STATUS_CANCELLING
+        ]);
+
+        return response()->json([
+            'message' => 'Termination signal sent. The sync will stop shortly.',
+            'data' => [
+                'upload_id' => $upload->id,
+                'billing_status' => $upload->id,
+                'signal_sent_at' => now()->toIso8601String(),
+            ]
+        ]);
+    }
+
     /**
      * Start billing process for upload (async).
      * Returns 202 Accepted - client should poll stats endpoint.

@@ -41,6 +41,34 @@ class ProcessBillingChunkJob implements ShouldQueue
         $this->onQueue('billing');
     }
 
+
+    /**
+     * Check if the kill switch cache key exists.
+     */
+    private function shouldStop(): bool
+    {
+        if (!$this->uploadId) {
+            return false;
+        }
+        return Cache::has("billing_sync_stop_{$this->uploadId}");
+    }
+
+    /**
+     * Actions to take when stopping.
+     */
+    private function terminateBatch(): void
+    {
+        Log::info("Sync Terminated by User", [
+            'upload_id' => $this->uploadId,
+            'timestamp' => now()->toIso8601String()
+        ]);
+
+        // Cancel the batch
+        if ($this->batch()) {
+            $this->batch()->cancel();
+        }
+    }
+
     public function handle(EmpBillingService $billingService): void
     {
         if ($this->batch()?->cancelled()) {
@@ -55,6 +83,11 @@ class ProcessBillingChunkJob implements ShouldQueue
                 'model' => $this->billingModel,
             ]);
             $this->release(60);
+            return;
+        }
+
+        if ($this->shouldStop()) {
+            $this->terminateBatch();
             return;
         }
 

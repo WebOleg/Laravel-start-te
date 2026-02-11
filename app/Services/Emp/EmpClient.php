@@ -68,7 +68,7 @@ class EmpClient
 
         // Try to load from active EmpAccount first
         $activeAccount = EmpAccount::getActive();
-        
+
         if ($activeAccount) {
             $this->endpoint = $activeAccount->endpoint;
             $this->username = $activeAccount->username;
@@ -283,7 +283,7 @@ class EmpClient
     {
         $xml = new \SimpleXMLElement('<?xml version="1.0" encoding="UTF-8"?><chargeback_request/>');
         $xml->addChild('original_transaction_unique_id', $uniqueId);
-        
+
         Log::info('Chargeback detail XML built', [
             'unique_id' => $uniqueId,
             'xml' => $xml->asXML(),
@@ -435,5 +435,37 @@ class EmpClient
     {
         $this->initialize();
         return $this->terminalToken;
+    }
+
+
+    /**
+     * Send Void transaction request.
+     * Voids a transaction that has been authorised but not yet settled (usually same day).
+     * * @param string $uniqueId The EMP Gateway ID of the transaction to void.
+     * @param string $newTransactionId Unique ID for this specific void request.
+     * @param string $originalTransactionId The merchant transaction ID of the original sale (reference_id).
+     */
+    public function voidTransaction(string $uniqueId, string $newTransactionId, string $originalTransactionId): array
+    {
+        $this->initialize();
+        $xml = $this->buildVoidXml($uniqueId, $newTransactionId, $originalTransactionId);
+
+        // Voids are processed via the standard process endpoint
+        return $this->sendRequest('/process/' . $this->terminalToken, $xml);
+    }
+
+    private function buildVoidXml(string $uniqueId, string $newTransactionId, string $originalTransactionId): string
+    {
+        $xml = new \SimpleXMLElement('<?xml version="1.0" encoding="UTF-8"?><payment_transaction/>');
+
+        $xml->addChild('transaction_type', 'void');
+        $xml->addChild('unique_id', $uniqueId);
+        $xml->addChild('transaction_id', $newTransactionId);
+        $xml->addChild('reference_id', $originalTransactionId);
+
+        $xml->addChild('usage', 'Void Request');
+        $xml->addChild('remote_ip', request()->ip() ?? '127.0.0.1');
+
+        return $xml->asXML();
     }
 }
