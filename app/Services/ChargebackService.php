@@ -155,7 +155,7 @@ class ChargebackService
 
         // Calculate percentages
         $totalChargebacks = $upload->total_chargebacks ?? 0;
-        $totalRecords = $upload->valid_count ?? $upload->total_records ?? 1;
+        $totalRecords = $upload->valid_count ?: ($upload->total_records ?: 1);
 
         $reasonsWithPercentages = $reasons->map(function ($reason) use ($totalChargebacks, $totalRecords) {
             return [
@@ -195,7 +195,7 @@ class ChargebackService
     /**
      * Get individual billing attempts for a specific chargeback reason code
      */
-    public function getUploadChargebackRecordsByCode(Upload $upload, string $code, int $perPage = 20)
+    public function getUploadChargebackRecordsByCode(Upload $upload, string $code, int $perPage = 100)
     {
         return BillingAttempt::with([
             'debtor:id,first_name,last_name,email,iban',
