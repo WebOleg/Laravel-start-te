@@ -29,12 +29,14 @@ class ExportCleanUsersJob implements ShouldQueue
     private string $jobId;
     private int $limit;
     private int $minDays;
+    private string $mode;
 
-    public function __construct(string $jobId, int $limit, int $minDays = 30)
+    public function __construct(string $jobId, int $limit, int $minDays = 30, string $mode = 'broad')
     {
         $this->jobId = $jobId;
         $this->limit = $limit;
         $this->minDays = $minDays;
+        $this->mode = $mode;
         $this->onQueue('exports');
     }
 
@@ -44,6 +46,7 @@ class ExportCleanUsersJob implements ShouldQueue
             'job_id' => $this->jobId,
             'limit' => $this->limit,
             'min_days' => $this->minDays,
+            'mode' => $this->mode,
         ]);
 
         $this->updateStatus('processing', 0);
@@ -58,9 +61,8 @@ class ExportCleanUsersJob implements ShouldQueue
                 ->whereNotNull('debtor_id')
                 ->distinct();
 
-            // Build query WITHOUT limit - we'll enforce it manually
             $query = BillingAttempt::query()
-                ->with('debtor:id,first_name,last_name,iban')
+                ->with('debtor:id,first_name,last_name,iban,bic')
                 ->select('id', 'debtor_id', 'amount', 'currency')
                 ->where('status', BillingAttempt::STATUS_APPROVED)
                 ->where('attempt_number', 1)
@@ -69,18 +71,24 @@ class ExportCleanUsersJob implements ShouldQueue
                 ->whereNotIn('debtor_id', $chargebackedSubquery)
                 ->oldest('emp_created_at');
 
+            if ($this->mode === 'strict') {
+                $debtorsWithMultiple = BillingAttempt::select('debtor_id')
+                    ->where('status', BillingAttempt::STATUS_APPROVED)
+                    ->whereNotNull('debtor_id')
+                    ->groupBy('debtor_id')
+                    ->havingRaw('COUNT(*) >= 2');
+
+                $query->whereIn('debtor_id', $debtorsWithMultiple);
+            }
+
             $written = 0;
 
-            // Create temp file
             $tempFile = tempnam(sys_get_temp_dir(), 'clean_users_');
             $handle = fopen($tempFile, 'w');
 
-            // Write CSV header
-            fputcsv($handle, ['name', 'iban', 'amount', 'currency']);
+            fputcsv($handle, ['first_name', 'last_name', 'iban', 'bic', 'amount', 'currency']);
 
-            // Process with lazy() for memory efficiency, manual limit check
             foreach ($query->lazy(1000) as $attempt) {
-                // Stop when limit reached
                 if ($written >= $this->limit) {
                     break;
                 }
@@ -91,15 +99,16 @@ class ExportCleanUsersJob implements ShouldQueue
                 }
 
                 fputcsv($handle, [
-                    trim($debtor->first_name . ' ' . $debtor->last_name),
+                    $debtor->first_name ?? '',
+                    $debtor->last_name ?? '',
                     $debtor->iban,
+                    $debtor->bic ?? '',
                     number_format($attempt->amount, 2, '.', ''),
                     $attempt->currency ?? 'EUR',
                 ]);
 
                 $written++;
 
-                // Update progress every 1000 records
                 if ($written % 1000 === 0) {
                     $progress = round(($written / $this->limit) * 100);
                     $this->updateStatus('processing', min($progress, 99), $written);
@@ -108,7 +117,6 @@ class ExportCleanUsersJob implements ShouldQueue
 
             fclose($handle);
 
-            // Upload to S3 (MinIO)
             Storage::disk('s3')->put($path, file_get_contents($tempFile), 'private');
             unlink($tempFile);
 
@@ -125,6 +133,7 @@ class ExportCleanUsersJob implements ShouldQueue
                 'job_id' => $this->jobId,
                 'processed' => $written,
                 'size' => $size,
+                'mode' => $this->mode,
             ]);
 
         } catch (\Exception $e) {
@@ -161,6 +170,7 @@ class ExportCleanUsersJob implements ShouldQueue
             'processed' => $processed,
             'limit' => $this->limit,
             'min_days' => $this->minDays,
+            'mode' => $this->mode,
             'updated_at' => now()->toISOString(),
         ], $extra), now()->addHours(24));
     }
