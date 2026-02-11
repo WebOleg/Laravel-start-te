@@ -13,12 +13,12 @@ class BicBlacklistTest extends TestCase
     public function test_exact_bic_match_returns_true(): void
     {
         BicBlacklist::create([
-            'bic' => 'BDFEFR1234XXXX',
+            'bic' => 'BDFEFRPPXXX',
             'is_prefix' => false,
             'source' => BicBlacklist::SOURCE_MANUAL,
         ]);
 
-        $this->assertTrue(BicBlacklist::isBlacklisted('BDFEFR1234XXXX'));
+        $this->assertTrue(BicBlacklist::isBlacklisted('BDFEFRPPXXX'));
     }
 
     public function test_exact_bic_match_is_case_insensitive(): void
