@@ -24,7 +24,9 @@ jobs:
           host: ${{ secrets.API_NODE_1_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script_stop: true
           script: |
+            set -euo pipefail
             cd /opt/tether-laravel
             sudo -u deploy git stash || true
             sudo -u deploy git clean -fd || true
@@ -51,7 +53,9 @@ jobs:
           host: ${{ secrets.API_NODE_2_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script_stop: true
           script: |
+            set -euo pipefail
             cd /opt/tether-laravel
             sudo -u deploy git stash || true
             sudo -u deploy git clean -fd || true
@@ -77,7 +81,9 @@ jobs:
           host: ${{ secrets.WORKER_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script_stop: true
           script: |
+            set -euo pipefail
             cd /opt/tether-laravel
             sudo -u deploy git stash || true
             sudo -u deploy git clean -fd || true
