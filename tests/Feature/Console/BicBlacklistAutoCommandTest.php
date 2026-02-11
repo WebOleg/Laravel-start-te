@@ -156,17 +156,27 @@ class BicBlacklistAutoCommandTest extends TestCase
         $profile = DebtorProfile::factory()->create();
         $debtor = Debtor::factory()->create(['debtor_profile_id' => $profile->id]);
 
-        // Exactly 10 transactions (needs >=10) with 81% CB
-        $this->createBillingAttempts($debtor, 'BOUNDARY3', 2, 8); // 80%
-
-        // Add one more chargeback to make it 2 approved + 9 CB = 11 total, but start with 10
-        $this->createBillingAttempts($debtor, 'BOUNDARY4', 2, 8); // Exactly 10, 80%
+        // Exactly 9 transactions (needs >=10) with 89% CB rate
+        // Should NOT be blacklisted because 9 < 10
+        $this->createBillingAttempts($debtor, 'BOUNDARY3', 1, 8); // 9 total, 88.89% CB
 
         $this->artisan('bic-blacklist:auto --period=30')
             ->assertExitCode(0);
 
-        // Should NOT be blacklisted (80% is not >80%)
+        // Should NOT be blacklisted (9 transactions is not >=10)
         $this->assertDatabaseMissing('bic_blacklists', [
+            'bic' => 'BOUNDARY3',
+        ]);
+
+        // Now test with exactly 10 transactions and 81% CB rate
+        // Should BE blacklisted because 10 >= 10 and 81% > 80%
+        $this->createBillingAttempts($debtor, 'BOUNDARY4', 2, 9); // 11 total, 81.82% CB
+
+        $this->artisan('bic-blacklist:auto --period=30')
+            ->assertExitCode(0);
+
+        // SHOULD be blacklisted (11 >= 10 and 81.82% > 80%)
+        $this->assertDatabaseHas('bic_blacklists', [
             'bic' => 'BOUNDARY4',
         ]);
     }
