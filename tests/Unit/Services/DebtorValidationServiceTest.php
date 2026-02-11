@@ -236,4 +236,160 @@ class DebtorValidationServiceTest extends TestCase
 
         $this->assertNotContains('Amount must be at least 1.00', $errors);
     }
+
+    public function test_resolve_bic_from_iban_when_bic_is_empty(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'first_name' => 'John',
+            'last_name' => 'Doe',
+            'iban' => 'DE89370400440532013000',
+            'bic' => null,
+            'amount' => 100,
+        ]);
+
+        $mockIbanApiService = $this->mock(\App\Services\IbanApiService::class);
+        $mockIbanApiService->shouldReceive('getBic')
+            ->once()
+            ->with('DE89370400440532013000')
+            ->andReturn('COBADEFFXXX');
+
+        $service = app(DebtorValidationService::class);
+        $errors = $service->validateDebtor($debtor);
+
+        $debtor->refresh();
+        $this->assertEquals('COBADEFFXXX', $debtor->bic);
+    }
+
+    public function test_resolve_bic_from_iban_skips_when_bic_exists(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'first_name' => 'John',
+            'last_name' => 'Doe',
+            'iban' => 'DE89370400440532013000',
+            'bic' => 'EXISTINGBIC',
+            'amount' => 100,
+        ]);
+
+        $mockIbanApiService = $this->mock(\App\Services\IbanApiService::class);
+        $mockIbanApiService->shouldNotReceive('getBic');
+
+        $service = app(DebtorValidationService::class);
+        $errors = $service->validateDebtor($debtor);
+
+        $debtor->refresh();
+        $this->assertEquals('EXISTINGBIC', $debtor->bic);
+    }
+
+    public function test_resolve_bic_from_iban_handles_null_response(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'first_name' => 'John',
+            'last_name' => 'Doe',
+            'iban' => 'DE89370400440532013000',
+            'bic' => null,
+            'amount' => 100,
+        ]);
+
+        $mockIbanApiService = $this->mock(\App\Services\IbanApiService::class);
+        $mockIbanApiService->shouldReceive('getBic')
+            ->once()
+            ->with('DE89370400440532013000')
+            ->andReturn(null);
+
+        $service = app(DebtorValidationService::class);
+        $errors = $service->validateDebtor($debtor);
+
+        $debtor->refresh();
+        $this->assertNull($debtor->bic);
+    }
+
+    public function test_resolve_bic_from_iban_handles_empty_string_response(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'first_name' => 'John',
+            'last_name' => 'Doe',
+            'iban' => 'DE89370400440532013000',
+            'bic' => null,
+            'amount' => 100,
+        ]);
+
+        $mockIbanApiService = $this->mock(\App\Services\IbanApiService::class);
+        $mockIbanApiService->shouldReceive('getBic')
+            ->once()
+            ->with('DE89370400440532013000')
+            ->andReturn('');
+
+        $service = app(DebtorValidationService::class);
+        $errors = $service->validateDebtor($debtor);
+
+        $debtor->refresh();
+        $this->assertNull($debtor->bic);
+    }
+
+    public function test_resolve_bic_from_iban_handles_exception(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'first_name' => 'John',
+            'last_name' => 'Doe',
+            'iban' => 'DE89370400440532013000',
+            'bic' => null,
+            'amount' => 100,
+        ]);
+
+        $mockIbanApiService = $this->mock(\App\Services\IbanApiService::class);
+        $mockIbanApiService->shouldReceive('getBic')
+            ->once()
+            ->with('DE89370400440532013000')
+            ->andThrow(new \Exception('API connection failed'));
+
+        $service = app(DebtorValidationService::class);
+        $errors = $service->validateDebtor($debtor);
+
+        $debtor->refresh();
+        $this->assertNull($debtor->bic);
+        // Test should not fail - exception is caught and logged
+    }
+
+    public function test_resolve_bic_from_iban_with_different_countries(): void
+    {
+        $testCases = [
+            ['iban' => 'FR1420041010050500013M02606', 'expected_bic' => 'BNPAFRPPXXX'],
+            ['iban' => 'NL91ABNA0417164300', 'expected_bic' => 'ABNANL2AXXX'],
+            ['iban' => 'BE68539007547034', 'expected_bic' => 'GEBABEBB'],
+        ];
+
+        foreach ($testCases as $testCase) {
+            $upload = Upload::factory()->create();
+            $debtor = Debtor::factory()->create([
+                'upload_id' => $upload->id,
+                'first_name' => 'John',
+                'last_name' => 'Doe',
+                'iban' => $testCase['iban'],
+                'bic' => null,
+                'amount' => 100,
+            ]);
+
+            $mockIbanApiService = $this->mock(\App\Services\IbanApiService::class);
+            $mockIbanApiService->shouldReceive('getBic')
+                ->once()
+                ->with($testCase['iban'])
+                ->andReturn($testCase['expected_bic']);
+
+            $service = app(DebtorValidationService::class);
+            $errors = $service->validateDebtor($debtor);
+
+            $debtor->refresh();
+            $this->assertEquals($testCase['expected_bic'], $debtor->bic, "Failed for IBAN: {$testCase['iban']}");
+        }
+    }
 }
