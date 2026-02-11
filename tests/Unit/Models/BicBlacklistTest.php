@@ -137,21 +137,29 @@ class BicBlacklistTest extends TestCase
     public function test_exact_match_takes_precedence_over_prefix(): void
     {
         // Both exact and prefix exist - exact should be checked first
-        BicBlacklist::create([
+        $exactEntry = BicBlacklist::create([
             'bic' => 'BDFEFR',
             'is_prefix' => false,
             'source' => BicBlacklist::SOURCE_MANUAL,
         ]);
 
-        BicBlacklist::create([
+        $prefixEntry = BicBlacklist::create([
             'bic' => 'BDFE',
             'is_prefix' => true,
             'source' => BicBlacklist::SOURCE_MANUAL,
         ]);
 
-        // Both should match
-        $this->assertTrue(BicBlacklist::isBlacklisted('BDFEFR'));
-        $this->assertTrue(BicBlacklist::isBlacklisted('BDFEFRPPXXX'));
+        // Verify exact match is returned (proves precedence)
+        $match = BicBlacklist::findMatch('BDFEFR');
+        $this->assertNotNull($match);
+        $this->assertEquals($exactEntry->id, $match->id);
+        $this->assertFalse($match->is_prefix);
+
+        // Verify prefix match is used when exact doesn't exist
+        $prefixMatch = BicBlacklist::findMatch('BDFEFRPPXXX');
+        $this->assertNotNull($prefixMatch);
+        $this->assertEquals($prefixEntry->id, $prefixMatch->id);
+        $this->assertTrue($prefixMatch->is_prefix);
     }
 
     public function test_stats_snapshot_is_stored_as_array(): void
