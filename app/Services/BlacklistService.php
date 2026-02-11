@@ -7,6 +7,7 @@
 namespace App\Services;
 
 use App\Models\Blacklist;
+use App\Models\BicBlacklist;
 use App\Models\Debtor;
 
 class BlacklistService
@@ -52,13 +53,18 @@ class BlacklistService
 
     /**
      * Check if BIC is blacklisted.
+     * Checks both bic_blacklists table (exact + prefix) and legacy blacklists table.
      */
     public function isBicBlacklisted(string $bic): bool
     {
         if (empty($bic)) {
             return false;
         }
-        
+
+        if (BicBlacklist::isBlacklisted($bic)) {
+            return true;
+        }
+
         return Blacklist::whereRaw('LOWER(bic) = ?', [strtolower($bic)])->exists();
     }
 
@@ -79,7 +85,6 @@ class BlacklistService
             'reasons' => [],
         ];
 
-        // Extract data from Debtor model or array
         if ($debtor instanceof Debtor) {
             $iban = $debtor->iban;
             $firstName = $debtor->first_name ?? '';
@@ -94,25 +99,21 @@ class BlacklistService
             $bic = $debtor['bic'] ?? '';
         }
 
-        // Check IBAN
         if (!empty($iban) && $this->isBlacklisted($iban)) {
             $result['iban'] = true;
             $result['reasons'][] = 'IBAN is blacklisted';
         }
 
-        // Check name
         if (!empty($firstName) && !empty($lastName) && $this->isNameBlacklisted($firstName, $lastName)) {
             $result['name'] = true;
             $result['reasons'][] = 'Name is blacklisted';
         }
 
-        // Check email
         if (!empty($email) && $this->isEmailBlacklisted($email)) {
             $result['email'] = true;
             $result['reasons'][] = 'Email is blacklisted';
         }
 
-        // Check BIC
         if (!empty($bic) && $this->isBicBlacklisted($bic)) {
             $result['bic'] = true;
             $result['reasons'][] = 'BIC is blacklisted';
