@@ -80,9 +80,17 @@ class ChargebackService
      */
     public function getUploadChargebackReasons(Upload $upload, array $filters = []): array
     {
-        // Get upload statistics
+        // Get upload statistics - total_records from billing attempts
         $upload->loadCount([
-            'debtors as total_records',
+            'billingAttempts as total_records' => function ($q) {
+                $q->whereIn('status', [
+                    BillingAttempt::STATUS_APPROVED,
+                    BillingAttempt::STATUS_CHARGEBACKED,
+                    BillingAttempt::STATUS_DECLINED,
+                    BillingAttempt::STATUS_VOIDED,
+                    BillingAttempt::STATUS_ERROR,
+                ]);
+            },
             'debtors as valid_count' => function ($q) {
                 $q->where('validation_status', 'valid');
             },
@@ -128,8 +136,8 @@ class ChargebackService
         $reasonsQuery = BillingAttempt::select([
             'chargeback_reason_code as code',
             DB::raw('MAX(chargeback_reason_description) as reason'),
-            DB::raw('COUNT(*) as cbk_count'),
-            DB::raw('SUM(amount) as cbk_amount'),
+            DB::raw('COUNT(*) as cb_count'),
+            DB::raw('SUM(amount) as cb_amount'),
             DB::raw('MAX(chargebacked_at) as last_occurrence'),
         ])
         ->where('upload_id', $upload->id)
@@ -150,26 +158,27 @@ class ChargebackService
 
         $reasons = $reasonsQuery
             ->groupBy('chargeback_reason_code')  // Group ONLY by code
-            ->orderByDesc('cbk_count')
+            ->orderByDesc('cb_count')
             ->get();
 
         // Calculate percentages
         $totalChargebacks = $upload->total_chargebacks ?? 0;
-        $totalRecords = $upload->valid_count ?: ($upload->total_records ?: 1);
+        $totalRecords = $upload->total_records ?: 1; // Use billing attempts count instead of debtors
 
         $reasonsWithPercentages = $reasons->map(function ($reason) use ($totalChargebacks, $totalRecords) {
             return [
                 'code' => $reason->code,
                 'reason' => $reason->reason,
-                'cbk_count' => (int) $reason->cbk_count,
-                'cbk_amount' => (float) $reason->cbk_amount,
-                'cbk_percentage' => $totalChargebacks > 0
-                    ? round(($reason->cbk_count / $totalChargebacks) * 100, 2)
+                'cb_count' => (int) $reason->cb_count,
+                'cb_amount' => (float) $reason->cb_amount,
+                'cb_percentage' => $totalChargebacks > 0
+                    ? round(($reason->cb_count / $totalChargebacks) * 100, 2)
                     : 0,
                 'total_percentage' => $totalRecords > 0
-                    ? round(($reason->cbk_count / $totalRecords) * 100, 2)
+                    ? round(($reason->cb_count / $totalRecords) * 100, 2)
                     : 0,
                 'last_occurrence' => $reason->last_occurrence,
+                'total_records' => $totalRecords ?? 0
             ];
         });
 
@@ -181,7 +190,7 @@ class ChargebackService
             'total_chargebacks' => $totalChargebacks,
             'chargeback_amount' => (float) ($upload->chargeback_amount ?? 0),
             'approved_amount' => (float) ($upload->approved_amount ?? 0),
-            'cbk_rate' => ($upload->billed_count + $totalChargebacks) > 0
+            'cb_rate' => ($upload->billed_count + $totalChargebacks) > 0
                 ? round(($totalChargebacks / ($upload->billed_count + $totalChargebacks)) * 100, 2)
                 : 0,
         ];
