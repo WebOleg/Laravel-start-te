@@ -33,13 +33,13 @@ class ChargebackController extends Controller
     {
         $request->validate([
             'emp_account_id' => 'nullable|integer|exists:emp_accounts,id',
-            'date_from' => 'nullable|date',
-            'date_to' => 'nullable|date|after_or_equal:date_from',
+            'start_date' => 'nullable|date',
+            'end_date' => 'nullable|date|after_or_equal:date_from',
         ]);
 
         $data = $this->chargebackService->getUploadChargebackReasons(
             $upload,
-            $request->only(['emp_account_id', 'date_from', 'date_to'])
+            $request->only(['emp_account_id', 'start_date', 'end_date'])
         );
 
         return response()->json(['data' => $data]);

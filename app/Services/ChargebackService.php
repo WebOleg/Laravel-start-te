@@ -80,7 +80,31 @@ class ChargebackService
      */
     public function getUploadChargebackReasons(Upload $upload, array $filters = []): array
     {
-        // Get upload statistics - total_records from billing attempts
+        $this->loadUploadCounts($upload);
+
+        $approvedStats = $this->getApprovedStats($upload->id);
+        $chargebackStats = $this->getChargebackStats($upload->id, $filters);
+        $reasons = $this->getChargebackReasonBreakdown($upload->id, $filters);
+
+        $reasonsWithPercentages = $this->calculateReasonPercentages(
+            $reasons,
+            $chargebackStats->count ?? 0,
+            $upload->total_records ?: 1
+        );
+
+        $summary = $this->buildUploadSummary($upload, $approvedStats, $chargebackStats);
+
+        return [
+            'summary' => $summary,
+            'reasons' => $reasonsWithPercentages,
+        ];
+    }
+
+    /**
+     * Load basic upload counts (total records and valid debtors)
+     */
+    private function loadUploadCounts(Upload $upload): void
+    {
         $upload->loadCount([
             'billingAttempts as total_records' => function ($q) {
                 $q->whereIn('status', [
@@ -94,78 +118,80 @@ class ChargebackService
             'debtors as valid_count' => function ($q) {
                 $q->where('validation_status', 'valid');
             },
-            'billingAttempts as billed_count' => function ($q) {
-                $q->where('status', BillingAttempt::STATUS_APPROVED);
-            },
-            'billingAttempts as total_chargebacks' => function ($q) use ($filters) {
-                $q->where('status', BillingAttempt::STATUS_CHARGEBACKED);
-                if (!empty($filters['emp_account_id'])) {
-                    $q->where('emp_account_id', $filters['emp_account_id']);
-                }
-                if (!empty($filters['date_from'])) {
-                    $q->whereDate('chargebacked_at', '>=', $filters['date_from']);
-                }
-                if (!empty($filters['date_to'])) {
-                    $q->whereDate('chargebacked_at', '<=', $filters['date_to']);
-                }
-            },
         ]);
+    }
 
-        $upload->loadSum([
-            'billingAttempts as approved_amount' => function ($q) {
-                $q->where('status', BillingAttempt::STATUS_APPROVED);
-            }
-        ], 'amount');
+    /**
+     * Get approved billing attempts statistics (count and sum)
+     */
+    private function getApprovedStats(int $uploadId): object
+    {
+        return BillingAttempt::where('upload_id', $uploadId)
+            ->where('status', BillingAttempt::STATUS_APPROVED)
+            ->selectRaw('COUNT(*) as count, COALESCE(SUM(amount), 0) as sum')
+            ->first();
+    }
 
-        $upload->loadSum([
-            'billingAttempts as chargeback_amount' => function ($q) use ($filters) {
-                $q->where('status', BillingAttempt::STATUS_CHARGEBACKED);
-                if (!empty($filters['emp_account_id'])) {
-                    $q->where('emp_account_id', $filters['emp_account_id']);
-                }
-                if (!empty($filters['date_from'])) {
-                    $q->whereDate('chargebacked_at', '>=', $filters['date_from']);
-                }
-                if (!empty($filters['date_to'])) {
-                    $q->whereDate('chargebacked_at', '<=', $filters['date_to']);
-                }
-            }
-        ], 'amount');
+    /**
+     * Get chargeback statistics with optional filters (count and sum)
+     */
+    private function getChargebackStats(int $uploadId, array $filters = []): object
+    {
+        $query = BillingAttempt::where('upload_id', $uploadId)
+            ->where('status', BillingAttempt::STATUS_CHARGEBACKED);
 
-        // Get reason breakdown
-        $reasonsQuery = BillingAttempt::select([
+        $this->applyChargebackFilters($query, $filters);
+
+        return $query
+            ->selectRaw('COUNT(*) as count, COALESCE(SUM(amount), 0) as sum')
+            ->first();
+    }
+
+    /**
+     * Get detailed chargeback reason breakdown
+     */
+    private function getChargebackReasonBreakdown(int $uploadId, array $filters = []): \Illuminate\Support\Collection
+    {
+        $query = BillingAttempt::select([
             'chargeback_reason_code as code',
             DB::raw('MAX(chargeback_reason_description) as reason'),
             DB::raw('COUNT(*) as cb_count'),
             DB::raw('SUM(amount) as cb_amount'),
             DB::raw('MAX(chargebacked_at) as last_occurrence'),
         ])
-        ->where('upload_id', $upload->id)
-        ->where('status', BillingAttempt::STATUS_CHARGEBACKED)
-        ->orderBy('chargeback_reason_code', 'asc');
+        ->where('upload_id', $uploadId)
+        ->where('status', BillingAttempt::STATUS_CHARGEBACKED);
 
-        if (!empty($filters['emp_account_id'])) {
-            $reasonsQuery->where('emp_account_id', $filters['emp_account_id']);
-        }
+        $this->applyChargebackFilters($query, $filters);
 
-        if (!empty($filters['date_from'])) {
-            $reasonsQuery->whereDate('chargebacked_at', '>=', $filters['date_from']);
-        }
-
-        if (!empty($filters['date_to'])) {
-            $reasonsQuery->whereDate('chargebacked_at', '<=', $filters['date_to']);
-        }
-
-        $reasons = $reasonsQuery
-            ->groupBy('chargeback_reason_code')  // Group ONLY by code
+        return $query
+            ->groupBy('chargeback_reason_code')
             ->orderByDesc('cb_count')
             ->get();
+    }
 
-        // Calculate percentages
-        $totalChargebacks = $upload->total_chargebacks ?? 0;
-        $totalRecords = $upload->total_records ?: 1; // Use billing attempts count instead of debtors
+    /**
+     * Apply common chargeback filters to a query
+     */
+    private function applyChargebackFilters($query, array $filters): void
+    {
+        if (!empty($filters['emp_account_id'])) {
+            $query->where('emp_account_id', $filters['emp_account_id']);
+        }
+        if (!empty($filters['start_date'])) {
+            $query->whereDate('chargebacked_at', '>=', $filters['start_date']);
+        }
+        if (!empty($filters['end_date'])) {
+            $query->whereDate('chargebacked_at', '<=', $filters['end_date']);
+        }
+    }
 
-        $reasonsWithPercentages = $reasons->map(function ($reason) use ($totalChargebacks, $totalRecords) {
+    /**
+     * Calculate percentages for each chargeback reason
+     */
+    private function calculateReasonPercentages($reasons, int $totalChargebacks, int $totalRecords): array
+    {
+        return $reasons->map(function ($reason) use ($totalChargebacks, $totalRecords) {
             return [
                 'code' => $reason->code,
                 'reason' => $reason->reason,
@@ -178,26 +204,29 @@ class ChargebackService
                     ? round(($reason->cb_count / $totalRecords) * 100, 2)
                     : 0,
                 'last_occurrence' => $reason->last_occurrence,
-                'total_records' => $totalRecords ?? 0
+                'total_records' => $totalRecords
             ];
-        });
+        })->toArray();
+    }
 
-        // Summary
-        $summary = [
-            'total_records' => $upload->total_records ?? 0,
-            'valid_count' => $upload->valid_count ?? 0,
-            'billed_count' => $upload->billed_count ?? 0,
-            'total_chargebacks' => $totalChargebacks,
-            'chargeback_amount' => (float) ($upload->chargeback_amount ?? 0),
-            'approved_amount' => (float) ($upload->approved_amount ?? 0),
-            'cb_rate' => ($upload->billed_count + $totalChargebacks) > 0
-                ? round(($totalChargebacks / ($upload->billed_count + $totalChargebacks)) * 100, 2)
-                : 0,
-        ];
+    /**
+     * Build summary statistics for upload chargebacks
+     */
+    private function buildUploadSummary(Upload $upload, object $approvedStats, object $chargebackStats): array
+    {
+        $billedCount = $approvedStats->count ?? 0;
+        $totalChargebacks = $chargebackStats->count ?? 0;
 
         return [
-            'summary' => $summary,
-            'reasons' => $reasonsWithPercentages,
+            'total_records' => $upload->total_records ?? 0,
+            'valid_count' => $upload->valid_count ?? 0,
+            'billed_count' => $billedCount,
+            'total_chargebacks' => $totalChargebacks,
+            'cb_amount' => (float) ($chargebackStats->sum ?? 0),
+            'approved_amount' => (float) ($approvedStats->sum ?? 0),
+            'cb_rate' => ($billedCount + $totalChargebacks) > 0
+                ? round(($totalChargebacks / ($billedCount + $totalChargebacks)) * 100, 2)
+                : 0,
         ];
     }
 
