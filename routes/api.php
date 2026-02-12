@@ -54,6 +54,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('uploads/{upload}/validate', [AdminUploadController::class, 'validate']);
         Route::get('uploads/{upload}/validation-stats', [AdminUploadController::class, 'validationStats']);
         Route::post('uploads/{upload}/filter-chargebacks', [AdminUploadController::class, 'filterChargebacks']);
+        Route::get('uploads/search', [AdminUploadController::class, 'search']);
         Route::apiResource('uploads', AdminUploadController::class)->only(['index', 'show', 'store', 'destroy']);
 
         Route::get('uploads/{upload}/vop-stats', [AdminVopController::class, 'stats']);
@@ -97,10 +98,10 @@ Route::middleware('auth:sanctum')->group(function () {
         });
 
         Route::prefix('chargebacks')->group(function () {
-            Route::get('', [ChargebackController::class, 'index']);
+            Route::get('/', [ChargebackController::class, 'index']);
             Route::get('/codes', [ChargebackController::class, 'codes']);
-            Route::get('/uploads/{upload}/reasons', [ChargebackController::class, 'uploadReasons']);
-            Route::get('/uploads/{upload}/reasons/{code}/records', [ChargebackController::class, 'uploadReasonRecords']);
+            Route::get('/upload/{upload}', [ChargebackController::class, 'uploadReasons']);
+            Route::get('/upload/{upload}/{code}/records', [ChargebackController::class, 'uploadReasonRecords']);
         });
 
         Route::get('debtors/orphans/count', [AdminDebtorController::class, 'getOrphanedCount']);

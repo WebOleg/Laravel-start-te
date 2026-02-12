@@ -22,6 +22,7 @@ use App\Jobs\ProcessValidationJob;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
@@ -210,7 +211,6 @@ class UploadController extends Controller
     {
         $query = $upload->debtors()->with(['latestBillingAttempt', 'debtorProfile']);
 
-
         if ($request->filled('debtor_type') && $request->input('debtor_type') !== 'all') {
             $type = $request->input('debtor_type');
 
@@ -286,10 +286,10 @@ class UploadController extends Controller
             SUM(CASE WHEN debtor_profiles.billing_model = ? THEN 1 ELSE 0 END) as recovery,
             SUM(CASE WHEN debtor_profiles.billing_model = ? OR debtors.debtor_profile_id IS NULL THEN 1 ELSE 0 END) as legacy
         ", [
-                DebtorProfile::MODEL_FLYWHEEL,
-                DebtorProfile::MODEL_RECOVERY,
-                DebtorProfile::MODEL_LEGACY
-            ])
+            DebtorProfile::MODEL_FLYWHEEL,
+            DebtorProfile::MODEL_RECOVERY,
+            DebtorProfile::MODEL_LEGACY
+        ])
             ->toBase()
             ->first();
 
@@ -414,6 +414,34 @@ class UploadController extends Controller
         ]);
     }
 
+    public function search(Request $request): JsonResponse
+    {
+        $request->validate([
+            'query' => 'nullable|string|min:1|max:60',
+        ]);
+
+        $query = $request->input('query', '');
+
+        // Create cache key based on search query
+        $cacheKey = 'upload_search:' . md5(strtolower(trim($query)));
+
+        // Track this cache key in a manifest for later invalidation
+        $this->trackCacheKey($cacheKey);
+
+        // Cache for 5 minutes (300 seconds)
+        $uploads = Cache::remember($cacheKey, 300, function () use ($query) {
+            return Upload::where('filename', 'like', "%{$query}%")
+                ->orWhere('original_filename', 'like', "%{$query}%")
+                ->latest()
+                ->take(5)
+                ->get();
+        });
+
+        return response()->json([
+            'data' => UploadResource::collection($uploads),
+        ]);
+    }
+
     private function shouldProcessAsync($file): bool
     {
         $extension = strtolower($file->getClientOriginalExtension());
@@ -440,5 +468,19 @@ class UploadController extends Controller
 
         $processed = $upload->processed_records + $upload->failed_records;
         return round(($processed / $upload->total_records) * 100, 2);
+    }
+
+    /**
+     * Track cache key for later invalidation.
+     */
+    private function trackCacheKey(string $key): void
+    {
+        $keys = Cache::get('upload_search_keys', []);
+        
+        if (!in_array($key, $keys)) {
+            $keys[] = $key;
+            // Store manifest with 1 day TTL
+            Cache::put('upload_search_keys', $keys, 86400);
+        }
     }
 }
