@@ -94,6 +94,8 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/accounts/active', [EmpAccountController::class, 'active']);
             Route::post('/accounts/{empAccount}/activate', [EmpAccountController::class, 'setActive']);
             Route::get('/accounts/{empAccount}/stats', [EmpAccountController::class, 'stats']);
+            Route::put('/accounts/{empAccount}/cap', [EmpAccountController::class, 'updateCap']);
+            Route::get('/caps', [EmpAccountController::class, 'caps']);
         });
 
         Route::prefix('chargebacks')->group(function () {
