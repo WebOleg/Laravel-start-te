@@ -30,13 +30,15 @@ class ExportCleanUsersJob implements ShouldQueue
     private int $limit;
     private int $minDays;
     private string $mode;
+    private ?int $accountId;
 
-    public function __construct(string $jobId, int $limit, int $minDays = 30, string $mode = 'broad')
+    public function __construct(string $jobId, int $limit, int $minDays = 30, string $mode = 'broad', ?int $accountId = null)
     {
         $this->jobId = $jobId;
         $this->limit = $limit;
         $this->minDays = $minDays;
         $this->mode = $mode;
+        $this->accountId = $accountId;
         $this->onQueue('exports');
     }
 
@@ -47,12 +49,12 @@ class ExportCleanUsersJob implements ShouldQueue
             'limit' => $this->limit,
             'min_days' => $this->minDays,
             'mode' => $this->mode,
+            'account_id' => $this->accountId,
         ]);
 
         $this->updateStatus('processing', 0);
 
         try {
-            $cutoffDate = now()->subDays($this->minDays);
             $filename = 'clean_users_' . now()->format('Y-m-d_His') . '.csv';
             $path = 'exports/' . $this->jobId . '/' . $filename;
 
@@ -61,15 +63,24 @@ class ExportCleanUsersJob implements ShouldQueue
                 ->whereNotNull('debtor_id')
                 ->distinct();
 
+            $recentlyChargedSubquery = BillingAttempt::select('debtor_id')
+                ->where('emp_created_at', '>=', now()->subDays($this->minDays))
+                ->whereNotNull('debtor_id')
+                ->distinct();
+
             $query = BillingAttempt::query()
                 ->with('debtor:id,first_name,last_name,iban,bic')
                 ->select('id', 'debtor_id', 'amount', 'currency')
                 ->where('status', BillingAttempt::STATUS_APPROVED)
                 ->where('attempt_number', 1)
-                ->where('emp_created_at', '<=', $cutoffDate)
                 ->whereNotNull('debtor_id')
                 ->whereNotIn('debtor_id', $chargebackedSubquery)
+                ->whereNotIn('debtor_id', $recentlyChargedSubquery)
                 ->oldest('emp_created_at');
+
+            if ($this->accountId) {
+                $query->where('emp_account_id', $this->accountId);
+            }
 
             if ($this->mode === 'strict') {
                 $debtorsWithMultiple = BillingAttempt::select('debtor_id')
@@ -134,6 +145,7 @@ class ExportCleanUsersJob implements ShouldQueue
                 'processed' => $written,
                 'size' => $size,
                 'mode' => $this->mode,
+                'account_id' => $this->accountId,
             ]);
 
         } catch (\Exception $e) {
@@ -171,6 +183,7 @@ class ExportCleanUsersJob implements ShouldQueue
             'limit' => $this->limit,
             'min_days' => $this->minDays,
             'mode' => $this->mode,
+            'account_id' => $this->accountId,
             'updated_at' => now()->toISOString(),
         ], $extra), now()->addHours(24));
     }

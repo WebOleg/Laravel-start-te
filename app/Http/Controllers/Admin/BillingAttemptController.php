@@ -11,6 +11,7 @@ use App\Http\Resources\BillingAttemptResource;
 use App\Jobs\ExportCleanUsersJob;
 use App\Models\BillingAttempt;
 use App\Models\DebtorProfile;
+use App\Models\EmpAccount;
 use App\Services\Emp\EmpBillingService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -122,26 +123,28 @@ class BillingAttemptController extends Controller
      * Get stats for clean users.
      * Mode: broad (>=1 approved charge) or strict (>=2 approved charges).
      * Lifetime CB exclusion: anyone who EVER had a chargeback is excluded.
+     * Not charged in last X days: excludes debtors with any charge in last min_days.
      */
     public function cleanUsersStats(Request $request): JsonResponse
     {
         $request->validate([
             'min_days' => 'nullable|integer|min:1|max:365',
             'mode' => 'nullable|in:broad,strict',
+            'account_id' => 'nullable|integer',
         ]);
 
         $minDays = (int) $request->input('min_days', 30);
         $mode = $request->input('mode', 'broad');
-        $cutoffDate = now()->subDays($minDays);
+        $accountId = $request->input('account_id');
 
-        $count = $this->buildCleanUsersQuery($cutoffDate, $mode)->count();
+        $count = $this->buildCleanUsersQuery($minDays, $mode, $accountId)->count();
 
         return response()->json([
             'data' => [
                 'count' => $count,
                 'min_days' => $minDays,
                 'mode' => $mode,
-                'cutoff_date' => $cutoffDate->toDateString(),
+                'account_id' => $accountId,
                 'streaming_threshold' => self::STREAMING_THRESHOLD,
             ],
         ]);
@@ -156,19 +159,19 @@ class BillingAttemptController extends Controller
             'limit' => 'required|integer|min:1|max:100000',
             'min_days' => 'nullable|integer|min:1|max:365',
             'mode' => 'nullable|in:broad,strict',
+            'account_id' => 'nullable|integer',
         ]);
 
         $limit = (int) $request->input('limit');
         $minDays = (int) $request->input('min_days', 30);
         $mode = $request->input('mode', 'broad');
+        $accountId = $request->input('account_id');
 
-        // For small exports - use streaming
         if ($limit <= self::STREAMING_THRESHOLD) {
-            return $this->streamCleanUsers($limit, $minDays, $mode);
+            return $this->streamCleanUsers($limit, $minDays, $mode, $accountId);
         }
 
-        // For large exports - use background job
-        return $this->queueCleanUsersExport($limit, $minDays, $mode);
+        return $this->queueCleanUsersExport($limit, $minDays, $mode, $accountId);
     }
 
     /**
@@ -184,7 +187,6 @@ class BillingAttemptController extends Controller
             ], 404);
         }
 
-        // Add download URL if completed
         if ($status['status'] === 'completed' && isset($status['path'])) {
             $status['download_url'] = route('admin.clean-users.download', ['jobId' => $jobId]);
         }
@@ -229,17 +231,16 @@ class BillingAttemptController extends Controller
     /**
      * Stream small export directly.
      */
-    private function streamCleanUsers(int $limit, int $minDays, string $mode = 'broad'): StreamedResponse
+    private function streamCleanUsers(int $limit, int $minDays, string $mode = 'broad', ?int $accountId = null): StreamedResponse
     {
-        $cutoffDate = now()->subDays($minDays);
         $filename = 'clean_users_' . now()->format('Y-m-d_His') . '.csv';
 
-        return response()->streamDownload(function () use ($cutoffDate, $limit, $mode) {
+        return response()->streamDownload(function () use ($limit, $minDays, $mode, $accountId) {
             $handle = fopen('php://output', 'w');
 
             fputcsv($handle, ['first_name', 'last_name', 'iban', 'bic', 'amount', 'currency']);
 
-            $query = $this->buildCleanUsersQuery($cutoffDate, $mode)
+            $query = $this->buildCleanUsersQuery($minDays, $mode, $accountId)
                 ->with('debtor:id,first_name,last_name,iban,bic')
                 ->select('id', 'debtor_id', 'amount', 'currency')
                 ->limit($limit);
@@ -270,7 +271,7 @@ class BillingAttemptController extends Controller
     /**
      * Queue large export as background job.
      */
-    private function queueCleanUsersExport(int $limit, int $minDays, string $mode = 'broad'): JsonResponse
+    private function queueCleanUsersExport(int $limit, int $minDays, string $mode = 'broad', ?int $accountId = null): JsonResponse
     {
         $jobId = Str::uuid()->toString();
 
@@ -281,10 +282,11 @@ class BillingAttemptController extends Controller
             'limit' => $limit,
             'min_days' => $minDays,
             'mode' => $mode,
+            'account_id' => $accountId,
             'created_at' => now()->toISOString(),
         ], now()->addHours(24));
 
-        ExportCleanUsersJob::dispatch($jobId, $limit, $minDays, $mode);
+        ExportCleanUsersJob::dispatch($jobId, $limit, $minDays, $mode, $accountId);
 
         return response()->json([
             'data' => [
@@ -297,22 +299,32 @@ class BillingAttemptController extends Controller
 
     /**
      * Build optimized query for clean users.
-     * Broad: >=1 approved charge, no lifetime CB.
-     * Strict: >=2 approved charges, no lifetime CB.
+     * Logic: approved charge + no lifetime CB + not charged in last X days.
+     * Broad: >=1 approved charge.
+     * Strict: >=2 approved charges.
      */
-    private function buildCleanUsersQuery(\Carbon\Carbon $cutoffDate, string $mode = 'broad')
+    private function buildCleanUsersQuery(int $minDays, string $mode = 'broad', ?int $accountId = null)
     {
         $chargebackedSubquery = BillingAttempt::select('debtor_id')
             ->where('status', BillingAttempt::STATUS_CHARGEBACKED)
             ->whereNotNull('debtor_id')
             ->distinct();
 
+        $recentlyChargedSubquery = BillingAttempt::select('debtor_id')
+            ->where('emp_created_at', '>=', now()->subDays($minDays))
+            ->whereNotNull('debtor_id')
+            ->distinct();
+
         $query = BillingAttempt::query()
             ->where('status', BillingAttempt::STATUS_APPROVED)
             ->where('attempt_number', 1)
-            ->where('emp_created_at', '<=', $cutoffDate)
             ->whereNotNull('debtor_id')
-            ->whereNotIn('debtor_id', $chargebackedSubquery);
+            ->whereNotIn('debtor_id', $chargebackedSubquery)
+            ->whereNotIn('debtor_id', $recentlyChargedSubquery);
+
+        if ($accountId) {
+            $query->where('emp_account_id', $accountId);
+        }
 
         if ($mode === 'strict') {
             $debtorsWithMultiple = BillingAttempt::select('debtor_id')
