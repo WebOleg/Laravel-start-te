@@ -11,6 +11,7 @@
 namespace App\Services;
 
 use App\Models\BillingAttempt;
+use App\Models\BicBlacklist;
 use App\Models\DebtorProfile;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -290,6 +291,7 @@ class BicAnalyticsService
             'cb_rate_count' => $cbRateCount,
             'cb_rate_volume' => $cbRateVolume,
             'is_high_risk' => $cbRateCount >= $threshold || $cbRateVolume >= $threshold,
+            'is_blacklisted' => BicBlacklist::isBlacklisted($row->bic),
         ];
     }
 
