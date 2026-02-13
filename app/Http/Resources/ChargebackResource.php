@@ -27,6 +27,7 @@ class ChargebackResource extends JsonResource
             'processed_at' => $this->processed_at,
             'emp_created_at' => $this->emp_created_at,
             'chargebacked_at' => $this->chargebacked_at,
+            'transaction_id' => $this->transaction_id,
             'debtor' => $this->debtor ? [
                 'id' => $this->debtor->id,
                 'first_name' => $this->debtor->first_name,
