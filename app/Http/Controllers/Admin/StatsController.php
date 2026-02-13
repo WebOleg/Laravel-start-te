@@ -1,7 +1,9 @@
 <?php
+
 /**
  * Controller for statistics endpoints.
  */
+
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
@@ -82,5 +84,28 @@ class StatsController extends Controller
         $banks = $this->chargebackStatsService->getChargebackBanks($period, $month, $year, $dateMode, $model, $empAccountId);
 
         return response()->json(['data' => $banks]);
+    }
+
+    public function pricePoints(Request $request): JsonResponse
+    {
+        $request->validate([
+            'period' => 'nullable|string|in:24h,7d,30d,90d,all',
+            'month' => 'nullable|integer|min:1|max:12',
+            'year' => 'nullable|integer|min:2020|max:2100',
+            'date_mode' => 'nullable|string|in:transaction,chargeback',
+            'model' => 'nullable|string',
+            'emp_account_id' => 'nullable|integer|exists:emp_accounts,id',
+        ]);
+
+        $period = $request->input('period', '30d');
+        $month = $request->input('month');
+        $year = $request->input('year');
+        $dateMode = $request->input('date_mode', ChargebackStatsService::DATE_MODE_TRANSACTION);
+        $model = $request->input('model');
+        $empAccountId = $request->input('emp_account_id');
+
+        $stats = $this->chargebackStatsService->getPricePointStats($period, $month, $year, $dateMode, $model, $empAccountId);
+
+        return response()->json(['data' => $stats]);
     }
 }
