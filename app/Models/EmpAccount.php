@@ -26,11 +26,13 @@ class EmpAccount extends Model
         'is_active',
         'sort_order',
         'notes',
+        'monthly_cap',
     ];
 
     protected $casts = [
         'is_active' => 'boolean',
         'sort_order' => 'integer',
+        'monthly_cap' => 'decimal:2',
     ];
 
     protected $hidden = [
@@ -101,7 +103,7 @@ class EmpAccount extends Model
     public function setAsActive(): bool
     {
         static::query()->update(['is_active' => false]);
-        
+
         return $this->update(['is_active' => true]);
     }
 

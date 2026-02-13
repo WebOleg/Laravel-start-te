@@ -167,7 +167,7 @@ class EmpRefreshService
             BillingAttempt::upsert(
                 $rows,
                 ['unique_id'],
-                ['status', 'amount', 'currency', 'error_code', 'error_message', 'technical_message', 'emp_created_at', 'processed_at', 'response_payload', 'updated_at', 'last_reconciled_at', 'mid_reference', 'emp_account_id']
+                ['status', 'amount', 'currency', 'error_code', 'error_message', 'technical_message', 'emp_created_at', 'processed_at', 'response_payload', 'last_reconciled_at', 'mid_reference', 'emp_account_id']
             );
 
             // Set chargebacked_at for records where it's NULL (don't overwrite webhook values)
@@ -243,7 +243,9 @@ class EmpRefreshService
 
         if ($existing) {
             if ($existing->status === $data['status']) {
-                $existing->update(['last_reconciled_at' => now()]);
+                // Use Query Builder to avoid touching updated_at on unchanged records
+                BillingAttempt::where('id', $existing->id)
+                    ->update(['last_reconciled_at' => now()]);
                 return 'unchanged';
             }
 

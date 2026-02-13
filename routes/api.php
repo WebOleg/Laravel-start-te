@@ -41,6 +41,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('stats/chargeback-rates', [AdminStatsController::class, 'chargebackRates']);
         Route::get('stats/chargeback-codes', [AdminStatsController::class, 'chargebackCodes']);
         Route::get('stats/chargeback-banks', [AdminStatsController::class, 'chargebackBanks']);
+        Route::get('stats/price-points', [AdminStatsController::class, 'pricePoints']);
 
         Route::prefix('analytics/bic')->group(function () {
             Route::get('/', [AdminBicAnalyticsController::class, 'index']);
@@ -95,6 +96,8 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/accounts/active', [EmpAccountController::class, 'active']);
             Route::post('/accounts/{empAccount}/activate', [EmpAccountController::class, 'setActive']);
             Route::get('/accounts/{empAccount}/stats', [EmpAccountController::class, 'stats']);
+            Route::put('/accounts/{empAccount}/cap', [EmpAccountController::class, 'updateCap']);
+            Route::get('/caps', [EmpAccountController::class, 'caps']);
         });
 
         Route::prefix('chargebacks')->group(function () {

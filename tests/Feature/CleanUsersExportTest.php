@@ -35,7 +35,7 @@ class CleanUsersExportTest extends TestCase
                 'data' => [
                     'count',
                     'min_days',
-                    'cutoff_date',
+                    'account_id',
                     'streaming_threshold',
                 ],
             ]);

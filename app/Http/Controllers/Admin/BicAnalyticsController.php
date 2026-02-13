@@ -107,6 +107,8 @@ class BicAnalyticsController extends Controller
             fputcsv($handle, [
                 'BIC',
                 'Country',
+                'Currency',
+                'Amount',
                 'Total Transactions',
                 'Approved',
                 'Declined',
@@ -125,6 +127,8 @@ class BicAnalyticsController extends Controller
                 fputcsv($handle, [
                     $bic['bic'],
                     $bic['bank_country'],
+                    $bic['currency'],
+                    $bic['amount'],
                     $bic['total_transactions'],
                     $bic['approved_count'],
                     $bic['declined_count'],
