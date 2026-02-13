@@ -134,6 +134,9 @@ class UploadController extends Controller
 
             $empAccountId = $request->input('emp_account_id');
 
+            // Capture the lock flag
+            $applyGlobalLock = $request->boolean('apply_global_lock');
+
             $preValidation = $this->preValidationService->validate($file);
             if (!$preValidation['valid']) {
                 return response()->json([
@@ -142,14 +145,15 @@ class UploadController extends Controller
                 ], 422);
             }
 
-            $forceAsync = $request->boolean('async', false);
+            $forceAsync = $request->boolean('async');
 
             if ($forceAsync || $this->shouldProcessAsync($file)) {
                 $result = $this->uploadService->processAsync(
                     $file,
                     $request->user()?->id,
                     $billingModel,
-                    $empAccountId
+                    $empAccountId,
+                    $applyGlobalLock
                 );
 
                 return response()->json([
@@ -165,7 +169,8 @@ class UploadController extends Controller
                 $file,
                 $request->user()?->id,
                 $billingModel,
-                $empAccountId
+                $empAccountId,
+                $applyGlobalLock
             );
 
             return response()->json([

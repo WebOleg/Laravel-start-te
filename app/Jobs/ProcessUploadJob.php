@@ -8,6 +8,7 @@ namespace App\Jobs;
 
 use App\Models\Upload;
 use App\Services\DebtorImportService;
+use App\Services\FileUploadService;
 use App\Services\SpreadsheetParserService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
@@ -64,6 +65,33 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
             // Update total records count immediately
             $this->upload->update(['total_records' => count($rows)]);
 
+            $meta = $this->upload->meta ?? [];
+
+            if (!empty($meta['apply_global_lock'])) {
+                $lockResult = FileUploadService::filterCrossAccountIbans(
+                    $rows,
+                    $this->upload->emp_account_id,
+                    $this->columnMapping
+                );
+
+                $rows = $lockResult['rows'];
+
+                // Update meta with skipped counts/errors
+                $currentMeta = $this->upload->meta ?? [];
+                $currentMeta['skipped_locked'] = $lockResult['excluded_count'];
+                $currentMeta['errors'] = array_merge(
+                    $currentMeta['errors'] ?? [],
+                    array_slice($lockResult['errors'], 0, 50)
+                );
+
+                $this->upload->update(['meta' => $currentMeta]);
+
+                Log::info("Global Lock Applied in Async Job", [
+                    'upload_id' => $this->upload->id,
+                    'excluded' => $lockResult['excluded_count']
+                ]);
+            }
+
             if (count($rows) > self::BATCH_THRESHOLD) {
                 $this->processWithBatching($rows);
                 return;
@@ -71,6 +99,19 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
 
             // For small files, process directly via Service
             $result = $importer->importRows($this->upload, $rows, $this->columnMapping, false, 1);
+
+            // Adjust skipped counts if lock logic ran
+            if (!empty($meta['apply_global_lock'])) {
+                $lockedCount = $lockResult['excluded_count'] ?? 0;
+
+                if (!isset($result['skipped']) || !is_array($result['skipped'])) {
+                    $result['skipped'] = ['total' => 0, 'skipped_locked' => 0];
+                }
+
+                $result['skipped']['skipped_locked'] = ($result['skipped']['skipped_locked'] ?? 0) + $lockedCount;
+                $result['skipped']['total'] = ($result['skipped']['total'] ?? 0) + $lockedCount;
+            }
+
             $importer->finalizeUpload($this->upload, $result);
 
             Log::info("ProcessUploadJob completed directly", [
