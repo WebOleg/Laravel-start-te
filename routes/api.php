@@ -46,6 +46,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::prefix('analytics/bic')->group(function () {
             Route::get('/', [AdminBicAnalyticsController::class, 'index']);
             Route::get('/export', [AdminBicAnalyticsController::class, 'export']);
+            Route::get('/price-points', [AdminBicAnalyticsController::class, 'pricePoints']);
             Route::post('/clear-cache', [AdminBicAnalyticsController::class, 'clearCache']);
             Route::get('/{bic}', [AdminBicAnalyticsController::class, 'show']);
         });

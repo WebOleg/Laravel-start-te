@@ -38,6 +38,35 @@ class BicAnalyticsController extends Controller
         return response()->json(['data' => $data]);
     }
 
+
+    /**
+     * Get price point breakdown for a specific BIC.
+     * Useful to see if CBKs are tied to specific amounts (e.g., 1.99 vs 99.99).
+     */
+    public function pricePoints(Request $request): JsonResponse
+    {
+        $request->validate([
+            'bic' => 'required|string', // BIC is validated here now
+            'period' => 'nullable|in:7d,30d,60d,90d',
+            'model' => 'nullable|string|in:' . implode(',', DebtorProfile::BILLING_MODELS),
+            'emp_account_id' => 'nullable|integer|exists:emp_accounts,id',
+        ]);
+
+        $bic = $request->input('bic'); // Get BIC from the query string
+        $period = $request->input('period', BicAnalyticsService::DEFAULT_PERIOD);
+        $billingModel = $request->input('model');
+        $empAccountId = $request->input('emp_account_id');
+
+        $data = $this->bicAnalyticsService->getBicPricePointBreakdown(
+            $bic,
+            $period,
+            $billingModel,
+            $empAccountId
+        );
+
+        return response()->json(['data' => $data]);
+    }
+
     /**
      * Get analytics for a specific BIC.
      */

@@ -22,7 +22,7 @@ class BicAnalyticsService
     public const PERIODS = ['7d', '30d', '60d', '90d'];
     public const DEFAULT_PERIOD = '30d';
     public const CACHE_TTL = 900;
-    public const HIGH_RISK_THRESHOLD = 25.0;
+    public const HIGH_RISK_THRESHOLD = 35.0;
 
     /**
      * Get BIC analytics with caching.
@@ -37,9 +37,67 @@ class BicAnalyticsService
     {
         $cacheKey = $this->buildCacheKey($period, $startDate, $endDate, $billingModel, $empAccountId);
 
-        return Cache::remember($cacheKey, self::CACHE_TTL, function () use ($period, $startDate, $endDate, $billingModel, $empAccountId) {
+//        return Cache::remember($cacheKey, self::CACHE_TTL, function () use ($period, $startDate, $endDate, $billingModel, $empAccountId) {
             return $this->calculateAnalytics($period, $startDate, $endDate, $billingModel, $empAccountId);
-        });
+//        });
+    }
+
+    /**
+     * Get breakdown of analytics for a specific BIC grouped by Price Point (Amount).
+     */
+    public function getBicPricePointBreakdown(
+        string $bic,
+        string $period = self::DEFAULT_PERIOD,
+        ?string $billingModel = null,
+        ?int $empAccountId = null
+    ): array {
+        [$start, $end] = $this->resolveDateRange($period, null, null);
+        $threshold = config('tether.chargeback.alert_threshold', self::HIGH_RISK_THRESHOLD);
+        $excludedCbCodes = config('tether.chargeback.excluded_cb_reason_codes', []);
+
+        $query = DB::table('billing_attempts')
+            ->where('bic', $bic)
+            ->whereRaw('COALESCE(emp_created_at, created_at) BETWEEN ? AND ?', [$start, $end]);
+
+        if ($billingModel) {
+            $query->where('billing_model', $billingModel);
+        }
+
+        if ($empAccountId) {
+            $query->where('emp_account_id', $empAccountId);
+        }
+
+        $chargebackCountCase = $this->buildChargebackCountCase($excludedCbCodes);
+        $chargebackVolumeCase = $this->buildChargebackVolumeCase($excludedCbCodes);
+
+        // Grouping by Amount and Currency
+        $results = $query->groupBy('amount', 'currency')
+            ->select([
+                'amount',
+                'currency',
+                DB::raw('COUNT(*) as total_transactions'),
+                DB::raw("SUM(CASE WHEN status = '" . BillingAttempt::STATUS_APPROVED . "' THEN 1 ELSE 0 END) as approved_count"),
+                DB::raw("SUM(CASE WHEN status = '" . BillingAttempt::STATUS_DECLINED . "' THEN 1 ELSE 0 END) as declined_count"),
+                DB::raw($chargebackCountCase . ' as chargeback_count'),
+                DB::raw('SUM(amount) as total_volume'),
+                DB::raw("SUM(CASE WHEN status = '" . BillingAttempt::STATUS_APPROVED . "' THEN amount ELSE 0 END) as approved_volume"),
+                DB::raw($chargebackVolumeCase . ' as chargeback_volume'),
+            ])
+            ->orderBy('amount', 'desc')
+            ->get();
+
+        $segments = [];
+        foreach ($results as $row) {
+            // We reuse the processBicRow logic by casting the row to include the BIC
+            $row->bic = $bic;
+            $segments[] = $this->processBicRow($row, $threshold);
+        }
+
+        return [
+            'bic' => $bic,
+            'period' => $period,
+            'segments' => $segments
+        ];
     }
 
     /**
@@ -74,11 +132,9 @@ class BicAnalyticsService
         $chargebackVolumeCase = $this->buildChargebackVolumeCase($excludedCbCodes);
 
         // GROUP BY BIC, Currency, and Amount to segment price points
-        $query->groupBy('bic', 'currency', 'amount')
+        $query->groupBy('bic')
             ->select([
                 'bic',
-                'currency',
-                'amount',
                 DB::raw('COUNT(*) as total_transactions'),
                 DB::raw("SUM(CASE WHEN status = '" . BillingAttempt::STATUS_APPROVED . "' THEN 1 ELSE 0 END) as approved_count"),
                 DB::raw("SUM(CASE WHEN status = '" . BillingAttempt::STATUS_DECLINED . "' THEN 1 ELSE 0 END) as declined_count"),
