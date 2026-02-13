@@ -42,7 +42,7 @@ class ChargebackController extends Controller
             $request->only(['emp_account_id', 'start_date', 'end_date'])
         );
 
-        return response()->json(['data' => $data]);
+        return response()->json($data);
     }
 
     /**
@@ -57,7 +57,7 @@ class ChargebackController extends Controller
         $records = $this->chargebackService->getUploadChargebackRecordsByCode(
             $upload,
             $code,
-            $request->input('per_page', 20)
+            $request->input('per_page', 100)
         );
 
         return ChargebackResource::collection($records);
