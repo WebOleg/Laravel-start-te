@@ -235,16 +235,23 @@ class ChargebackService
      */
     public function getUploadChargebackRecordsByCode(Upload $upload, string $code, int $perPage = 100)
     {
-        return BillingAttempt::with([
+        $query = BillingAttempt::with([
             'debtor:id,first_name,last_name,email,iban',
             'debtor.latestVopLog:vop_logs.id,vop_logs.debtor_id,vop_logs.bank_name,vop_logs.country',
             'empAccount:id,name,slug'
         ])
         ->where('upload_id', $upload->id)
-        ->where('status', BillingAttempt::STATUS_CHARGEBACKED)
-        ->where('chargeback_reason_code', $code)
-        ->latest('chargebacked_at')
-        ->paginate($perPage);
+        ->where('status', BillingAttempt::STATUS_CHARGEBACKED);
+
+        if ($code === null || $code === 'null') {
+            $query->whereNull('chargeback_reason_code');
+        } else {
+            $query->where('chargeback_reason_code', $code);
+        }
+
+        return $query
+            ->latest('chargebacked_at')
+            ->paginate($perPage);
     }
 
     private function createChargeback(BillingAttempt $billingAttempt, string $source, array $data): ?Chargeback
