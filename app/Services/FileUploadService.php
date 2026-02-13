@@ -8,12 +8,14 @@ namespace App\Services;
 
 use App\Enums\BillingModel;
 use App\Jobs\ProcessUploadJob;
+use App\Models\BillingAttempt;
 use App\Models\EmpAccount;
 use App\Models\Upload;
 use App\Traits\ParsesDebtorData;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use Illuminate\Support\Facades\DB;
 
 class FileUploadService
 {
@@ -106,7 +108,8 @@ class FileUploadService
         UploadedFile $file,
         ?int $userId = null,
         BillingModel $billingModel = BillingModel::Legacy,
-        ?int $empAccountId = null
+        ?int $empAccountId = null,
+        bool $applyGlobalLock = false
     ): array {
         $parsed = $this->parser->parse($file);
         $storedPath = $this->storeFile($file);
@@ -116,7 +119,8 @@ class FileUploadService
             $parsed['total_rows'],
             $userId,
             $billingModel,
-            $empAccountId
+            $empAccountId,
+            $applyGlobalLock
         );
 
         $columnMapping = $this->buildColumnMapping($parsed['headers']);
@@ -142,7 +146,8 @@ class FileUploadService
         UploadedFile $file,
         ?int $userId = null,
         BillingModel $billingModel = BillingModel::Legacy,
-        ?int $empAccountId = null
+        ?int $empAccountId = null,
+        bool $applyGlobalLock = false
     ): array {
         $parsed = $this->parser->parse($file);
         $storedPath = $this->storeFile($file);
@@ -152,7 +157,8 @@ class FileUploadService
             $parsed['total_rows'],
             $userId,
             $billingModel,
-            $empAccountId
+            $empAccountId,
+            $applyGlobalLock
         );
 
         $columnMapping = $this->buildColumnMapping($parsed['headers']);
@@ -161,11 +167,42 @@ class FileUploadService
             'headers' => $parsed['headers'],
         ]);
 
+        $rows = $parsed['rows'];
+        $globalLockErrors = [];
+        $skippedCount = 0;
+
+        // Apply Global Lock Logic
+        if ($applyGlobalLock) {
+            $lockResult = self::filterCrossAccountIbans(
+                $rows,
+                $upload->emp_account_id,
+                $columnMapping
+            );
+            $rows = $lockResult['rows'];
+            $globalLockErrors = $lockResult['errors'];
+            $skippedCount = $lockResult['excluded_count'];
+        }
+
         $result = $this->debtorImportService->importRows(
             $upload,
-            $parsed['rows'],
+            $rows,
             $columnMapping
         );
+
+        $result['errors'] = array_merge($globalLockErrors, $result['errors']);
+
+        // Ensure skipped is an array
+        if (!isset($result['skipped']) || !is_array($result['skipped'])) {
+            $result['skipped'] = [
+                'total' => 0,
+                'skipped_locked' => 0
+            ];
+        }
+
+        // Merge lock exclusion errors
+        $result['errors'] = array_merge($globalLockErrors, $result['errors']);
+
+        $result['skipped']['total'] = ($result['skipped']['total'] ?? 0) + $skippedCount;
 
         $this->finalizeUpload($upload, $result);
 
@@ -175,6 +212,86 @@ class FileUploadService
             'failed' => $result['failed'],
             'skipped' => $result['skipped'],
             'errors' => $result['errors'],
+        ];
+    }
+
+    /**
+     * Filters rows containing IBANs paid on other accounts.
+     * Static to avoid circular dependency in ProcessUploadJob.
+     */
+    public static function filterCrossAccountIbans(array $rows, ?int $currentEmpAccountId, array $columnMapping): array
+    {
+        if ($currentEmpAccountId === null) {
+            return ['rows' => $rows, 'excluded_count' => 0, 'errors' => []];
+        }
+
+        // Identify the IBAN column key from the mapping
+        $ibanHeader = null;
+        foreach ($columnMapping as $header => $field) {
+            if ($field === 'iban') {
+                $ibanHeader = $header;
+                break;
+            }
+        }
+
+        if (!$ibanHeader) {
+            return ['rows' => $rows, 'excluded_count' => 0, 'errors' => []];
+        }
+
+        // Extract IBANs for batch query
+        $ibans = [];
+        foreach ($rows as $row) {
+            if (!empty($row[$ibanHeader])) {
+                $ibans[] = $row[$ibanHeader];
+            }
+        }
+
+        if (empty($ibans)) {
+            return ['rows' => $rows, 'excluded_count' => 0, 'errors' => []];
+        }
+
+        // Query for locked IBANs: Paid (Approved) status AND different Emp Account
+        $lockedIbans = DB::table('debtors')
+            ->join('billing_attempts', 'debtors.id', '=', 'billing_attempts.debtor_id')
+            ->join('uploads', 'debtors.upload_id', '=', 'uploads.id')
+            ->where('billing_attempts.status', BillingAttempt::STATUS_APPROVED)
+            ->where('uploads.emp_account_id', '!=', $currentEmpAccountId)
+            ->whereIn('debtors.iban', $ibans)
+            ->distinct()
+            ->pluck('uploads.emp_account_id', 'debtors.iban') // Key: IBAN, Value: AccountID
+            ->toArray();
+
+        if (empty($lockedIbans)) {
+            return ['rows' => $rows, 'excluded_count' => 0, 'errors' => []];
+        }
+
+        $filteredRows = [];
+        $errors = [];
+        $excludedCount = 0;
+
+        foreach ($rows as $row) {
+            $iban = $row[$ibanHeader] ?? null;
+
+            if ($iban && isset($lockedIbans[$iban])) {
+                $originalAccount = $lockedIbans[$iban];
+                $msg = "Locked to Account {$originalAccount}";
+
+                $errors[] = [
+                    'row' => $row,
+                    'error' => $msg,
+                    'iban' => $iban
+                ];
+                $excludedCount++;
+                continue;
+            }
+
+            $filteredRows[] = $row;
+        }
+
+        return [
+            'rows' => $filteredRows,
+            'excluded_count' => $excludedCount,
+            'errors' => $errors
         ];
     }
 
@@ -218,9 +335,9 @@ class FileUploadService
         int $totalRows,
         ?int $userId,
         BillingModel $billingModel,
-        ?int $empAccountId = null
+        ?int $empAccountId = null,
+        bool $applyGlobalLock = false
     ): Upload {
-        // If no emp_account_id provided, use the active account
         if ($empAccountId === null) {
             $activeAccount = EmpAccount::getActive();
             $empAccountId = $activeAccount?->id;
@@ -239,6 +356,9 @@ class FileUploadService
             'processed_records' => 0,
             'failed_records' => 0,
             'uploaded_by' => $userId,
+            'meta' => [
+                'apply_global_lock' => $applyGlobalLock
+            ]
         ]);
     }
 
