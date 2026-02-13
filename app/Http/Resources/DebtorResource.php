@@ -3,24 +3,21 @@
  * API resource for Debtor model.
  */
 namespace App\Http\Resources;
-
 use App\Services\IbanValidator;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
-
 class DebtorResource extends JsonResource
 {
     public function toArray(Request $request): array
     {
         $ibanValidator = app(IbanValidator::class);
-
         $bankReference = $this->whenLoaded('latestVopLog', function () {
             return $this->latestVopLog?->bankReference;
         });
-
         return [
             'id' => $this->id,
             'upload_id' => $this->upload_id,
+            'iban' => $this->iban,
             'iban_masked' => $this->iban ? $ibanValidator->mask($this->iban) : null,
             'iban_valid' => $this->iban_valid,
             'first_name' => $this->first_name,
@@ -52,6 +49,9 @@ class DebtorResource extends JsonResource
             'raw_data' => $this->raw_data,
             'bank_name_reference' => $this->getBankNameReference($bankReference),
             'bank_country_iso_reference' => $this->getBankCountryReference($bankReference),
+            'emp_account_name' => $this->whenLoaded('latestBillingAttempt', function () {
+                return $this->latestBillingAttempt?->empAccount?->name;
+            }),
             'created_at' => $this->created_at->toISOString(),
             'updated_at' => $this->updated_at->toISOString(),
             'upload' => new UploadResource($this->whenLoaded('upload')),
@@ -60,30 +60,24 @@ class DebtorResource extends JsonResource
             'debtor_profile' => new DebtorProfileResource($this->whenLoaded('debtorProfile'))
         ];
     }
-
     private function getBankNameReference($bankReference): ?string
     {
         if ($bankReference instanceof \App\Models\BankReference) {
             return $bankReference->bank_name;
         }
-
         if ($this->relationLoaded('latestVopLog') && $this->latestVopLog) {
             return $this->latestVopLog->bank_name;
         }
-
         return null;
     }
-
     private function getBankCountryReference($bankReference): ?string
     {
         if ($bankReference instanceof \App\Models\BankReference) {
             return $bankReference->country_iso;
         }
-
         if ($this->relationLoaded('latestVopLog') && $this->latestVopLog) {
             return $this->latestVopLog->country;
         }
-
         return null;
     }
 }

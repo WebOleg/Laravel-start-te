@@ -51,7 +51,7 @@ class DebtorController extends Controller
             'upload',
             'debtorProfile',
             'latestVopLog.bankReference',
-            'latestBillingAttempt',
+            'latestBillingAttempt.empAccount',
         ]);
 
         if ($request->has('upload_id')) {
@@ -119,10 +119,11 @@ class DebtorController extends Controller
     {
         $debtor->load([
             'upload',
+            'debtorProfile',
             'vopLogs.bankReference',
             'billingAttempts',
             'latestVopLog.bankReference',
-            'latestBillingAttempt',
+            'latestBillingAttempt.empAccount',
         ]);
 
         return new DebtorResource($debtor);
@@ -224,7 +225,7 @@ class DebtorController extends Controller
         // Validate and Refresh
         $this->validationService->validateAndUpdate($debtor);
 
-        $debtor->load(['upload', 'debtorProfile', 'latestVopLog.bankReference', 'latestBillingAttempt']);
+        $debtor->load(['upload', 'debtorProfile', 'latestVopLog.bankReference', 'latestBillingAttempt.empAccount']);
 
         return new DebtorResource($debtor);
     }
