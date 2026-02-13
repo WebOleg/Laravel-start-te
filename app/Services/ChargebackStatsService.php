@@ -315,6 +315,7 @@ class ChargebackStatsService
                     Cache::forget("chargeback_stats_{$period}{$modeSuffix}_{$modelKey}");
                     Cache::forget("chargeback_codes_{$period}{$modeSuffix}_{$modelKey}");
                     Cache::forget("chargeback_banks_{$period}{$modeSuffix}_{$modelKey}");
+                    Cache::forget("price_points_{$period}{$modeSuffix}_{$modelKey}");
                 }
             }
         }
@@ -507,5 +508,126 @@ class ChargebackStatsService
         }
 
         return $result;
+    }
+
+    /**
+     * Get price point statistics with CB rates per amount.
+     */
+    public function getPricePointStats(?string $period = null, ?int $month = null, ?int $year = null, string $dateMode = self::DATE_MODE_TRANSACTION, ?string $model = null, ?int $empAccountId = null): array
+    {
+        $period = $period ?? '30d';
+        $cacheKey = $this->getCacheKey('price_points', $period, $month, $year, $dateMode, $model, $empAccountId);
+        $ttl = config('tether.chargeback.cache_ttl', 900);
+
+        return Cache::remember($cacheKey, $ttl, fn () => $this->calculatePricePointStats($period, $month, $year, $dateMode, $model, $empAccountId));
+    }
+
+    private function calculatePricePointStats(?string $period, ?int $month = null, ?int $year = null, string $dateMode = self::DATE_MODE_TRANSACTION, ?string $model = null, ?int $empAccountId = null): array
+    {
+        $dateFilter = $this->buildDateFilter($period, $month, $year, $dateMode);
+        $threshold = config('tether.chargeback.alert_threshold', 25);
+
+        $query = DB::table('billing_attempts')
+            ->where(function ($q) {
+                $excludedCodes = config('tether.chargeback.excluded_cb_reason_codes', []);
+                if (!empty($excludedCodes)) {
+                    $q->whereNotIn('billing_attempts.chargeback_reason_code', $excludedCodes)
+                      ->orWhereNull('billing_attempts.chargeback_reason_code');
+                }
+            });
+
+        $this->applyDateFilter($query, $dateFilter);
+        $this->applyModelFilter($query, $model);
+        $this->applyEmpAccountFilter($query, $empAccountId);
+
+        $rows = $query
+            ->groupBy('billing_attempts.amount')
+            ->select([
+                'billing_attempts.amount as price_point',
+                DB::raw('COUNT(*) as total'),
+                DB::raw("SUM(CASE WHEN billing_attempts.status = '" . BillingAttempt::STATUS_APPROVED . "' THEN 1 ELSE 0 END) as approved"),
+                DB::raw("SUM(CASE WHEN billing_attempts.status = '" . BillingAttempt::STATUS_DECLINED . "' THEN 1 ELSE 0 END) as declined"),
+                DB::raw("SUM(CASE WHEN billing_attempts.status = '" . BillingAttempt::STATUS_ERROR . "' THEN 1 ELSE 0 END) as errors"),
+                DB::raw("SUM(CASE WHEN billing_attempts.status = '" . BillingAttempt::STATUS_CHARGEBACKED . "' THEN 1 ELSE 0 END) as chargebacks"),
+                DB::raw("SUM(CASE WHEN billing_attempts.status = '" . BillingAttempt::STATUS_APPROVED . "' THEN billing_attempts.amount ELSE 0 END) as approved_volume"),
+                DB::raw("SUM(CASE WHEN billing_attempts.status = '" . BillingAttempt::STATUS_CHARGEBACKED . "' THEN billing_attempts.amount ELSE 0 END) as chargeback_volume"),
+            ])
+            ->orderBy('billing_attempts.amount')
+            ->get();
+
+        $canCalculateRates = $dateMode !== self::DATE_MODE_CHARGEBACK;
+
+        $pricePoints = [];
+        $totals = [
+            'total' => 0,
+            'approved' => 0,
+            'declined' => 0,
+            'errors' => 0,
+            'chargebacks' => 0,
+            'approved_volume' => 0,
+            'chargeback_volume' => 0,
+        ];
+
+        foreach ($rows as $row) {
+            $cbRateApproved = null;
+            $alert = false;
+
+            if ($canCalculateRates) {
+                $cbRateApproved = $this->calculateCbRateApproved(
+                    (int) $row->chargebacks,
+                    (int) $row->approved
+                );
+                $alert = $cbRateApproved >= $threshold;
+            }
+
+            $pricePoints[] = [
+                'price_point' => round((float) $row->price_point, 2),
+                'total' => (int) $row->total,
+                'approved' => (int) $row->approved,
+                'declined' => (int) $row->declined,
+                'errors' => (int) $row->errors,
+                'chargebacks' => (int) $row->chargebacks,
+                'approved_volume' => round((float) $row->approved_volume, 2),
+                'chargeback_volume' => round((float) $row->chargeback_volume, 2),
+                'cb_rate' => $cbRateApproved,
+                'alert' => $alert,
+            ];
+
+            $totals['total'] += (int) $row->total;
+            $totals['approved'] += (int) $row->approved;
+            $totals['declined'] += (int) $row->declined;
+            $totals['errors'] += (int) $row->errors;
+            $totals['chargebacks'] += (int) $row->chargebacks;
+            $totals['approved_volume'] += (float) $row->approved_volume;
+            $totals['chargeback_volume'] += (float) $row->chargeback_volume;
+        }
+
+        $totals['approved_volume'] = round($totals['approved_volume'], 2);
+        $totals['chargeback_volume'] = round($totals['chargeback_volume'], 2);
+
+        if ($canCalculateRates) {
+            $totals['cb_rate'] = $this->calculateCbRateApproved(
+                (int) $totals['chargebacks'],
+                (int) $totals['approved']
+            );
+            $totals['alert'] = $totals['cb_rate'] >= $threshold;
+        } else {
+            $totals['cb_rate'] = null;
+            $totals['alert'] = false;
+        }
+
+        return [
+            'period' => $month && $year ? 'monthly' : $period,
+            'model' => $model ?? 'all',
+            'emp_account_id' => $empAccountId,
+            'start_date' => $dateFilter['start']?->toIso8601String(),
+            'end_date' => $dateFilter['end']?->toIso8601String(),
+            'month' => $month,
+            'year' => $year,
+            'date_mode' => $dateMode,
+            'threshold' => $threshold,
+            'price_points' => $pricePoints,
+            'totals' => $totals,
+        ];
     }
 }

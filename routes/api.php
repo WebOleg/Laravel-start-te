@@ -41,6 +41,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('stats/chargeback-rates', [AdminStatsController::class, 'chargebackRates']);
         Route::get('stats/chargeback-codes', [AdminStatsController::class, 'chargebackCodes']);
         Route::get('stats/chargeback-banks', [AdminStatsController::class, 'chargebackBanks']);
+        Route::get('stats/price-points', [AdminStatsController::class, 'pricePoints']);
 
         Route::prefix('analytics/bic')->group(function () {
             Route::get('/', [AdminBicAnalyticsController::class, 'index']);
