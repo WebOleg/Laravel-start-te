@@ -43,7 +43,7 @@ class BicAnalyticsService
     }
 
     /**
-     * Calculate BIC analytics.
+     * Calculate BIC analytics grouped by BIC and Amount.
      */
     public function calculateAnalytics(
         string $period,
@@ -70,13 +70,15 @@ class BicAnalyticsService
             $query->where('emp_account_id', $empAccountId);
         }
 
-        // Build chargeback case statements with exclusions
         $chargebackCountCase = $this->buildChargebackCountCase($excludedCbCodes);
         $chargebackVolumeCase = $this->buildChargebackVolumeCase($excludedCbCodes);
 
-        $query->groupBy('bic')
+        // GROUP BY BIC, Currency, and Amount to segment price points
+        $query->groupBy('bic', 'currency', 'amount')
             ->select([
                 'bic',
+                'currency',
+                'amount',
                 DB::raw('COUNT(*) as total_transactions'),
                 DB::raw("SUM(CASE WHEN status = '" . BillingAttempt::STATUS_APPROVED . "' THEN 1 ELSE 0 END) as approved_count"),
                 DB::raw("SUM(CASE WHEN status = '" . BillingAttempt::STATUS_DECLINED . "' THEN 1 ELSE 0 END) as declined_count"),
@@ -101,6 +103,7 @@ class BicAnalyticsService
 
         $this->finalizeTotals($totals, $threshold);
 
+        // Sort by Chargeback Count desc to highlight problematic segments first
         usort($bics, fn ($a, $b) => $b['chargeback_count'] <=> $a['chargeback_count']);
 
         $highRiskCount = count(array_filter($bics, fn ($b) => $b['is_high_risk']));
@@ -226,9 +229,9 @@ class BicAnalyticsService
         $accountSuffix = $empAccountId ? "_acc{$empAccountId}" : "";
 
         if ($startDate && $endDate) {
-            return "bic_analytics_custom_{$startDate}_{$endDate}{$suffix}{$accountSuffix}";
+            return "bic_analytics_custom_v2_{$startDate}_{$endDate}{$suffix}{$accountSuffix}";
         }
-        return "bic_analytics_{$period}{$suffix}{$accountSuffix}";
+        return "bic_analytics_v2_{$period}{$suffix}{$accountSuffix}";
     }
 
     private function resolveDateRange(string $period, ?string $startDate, ?string $endDate): array
@@ -279,6 +282,9 @@ class BicAnalyticsService
         return [
             'bic' => $row->bic,
             'bank_country' => $country,
+            // Price point segmentation
+            'currency' => $row->currency ?? 'EUR',
+            'amount' => isset($row->amount) ? (float)$row->amount : 0.00,
             'total_transactions' => $totalTxCount,
             'approved_count' => $approvedCount,
             'declined_count' => (int) $row->declined_count,
