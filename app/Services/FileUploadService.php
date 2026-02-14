@@ -189,8 +189,6 @@ class FileUploadService
             $columnMapping
         );
 
-        $result['errors'] = array_merge($globalLockErrors, $result['errors']);
-
         // Ensure skipped is an array
         if (!isset($result['skipped']) || !is_array($result['skipped'])) {
             $result['skipped'] = [
@@ -393,16 +391,21 @@ class FileUploadService
             ? Upload::STATUS_COMPLETED
             : ($result['created'] > 0 ? Upload::STATUS_COMPLETED : Upload::STATUS_FAILED);
 
+
+        $currentMeta = $upload->meta ?? [];
+
+        $newMeta = [
+            'errors' => array_slice($result['errors'], 0, 100),
+            'skipped' => $result['skipped'],
+            'skipped_rows' => array_slice($result['skipped_rows'] ?? [], 0, 100),
+        ];
+
         $upload->update([
             'status' => $status,
             'processed_records' => $result['created'],
             'failed_records' => $result['failed'],
             'processing_completed_at' => now(),
-            'meta' => [
-                'errors' => array_slice($result['errors'], 0, 100),
-                'skipped' => $result['skipped'],
-                'skipped_rows' => array_slice($result['skipped_rows'], 0, 100),
-            ],
+            'meta' => array_merge($currentMeta, $newMeta),
         ]);
     }
 }

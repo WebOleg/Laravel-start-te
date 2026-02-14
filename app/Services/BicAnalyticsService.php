@@ -37,9 +37,9 @@ class BicAnalyticsService
     {
         $cacheKey = $this->buildCacheKey($period, $startDate, $endDate, $billingModel, $empAccountId);
 
-//        return Cache::remember($cacheKey, self::CACHE_TTL, function () use ($period, $startDate, $endDate, $billingModel, $empAccountId) {
+        return Cache::remember($cacheKey, self::CACHE_TTL, function () use ($period, $startDate, $endDate, $billingModel, $empAccountId) {
             return $this->calculateAnalytics($period, $startDate, $endDate, $billingModel, $empAccountId);
-//        });
+        });
     }
 
     /**

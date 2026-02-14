@@ -906,4 +906,151 @@ class BicAnalyticsControllerTest extends TestCase
         $this->assertEquals(1, $totals['chargeback_count']);
         $this->assertEquals(1100, $totals['total_volume']);
     }
+
+    public function test_price_points_returns_breakdown_grouped_by_amount(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'bic' => 'TESTBIC123',
+        ]);
+
+        // Scenario 1: Price Point 19.99 (Target BIC)
+        // 3 Approved, 1 Chargeback -> Total 4, CB Rate 25%
+        BillingAttempt::factory()->count(3)->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'bic' => 'TESTBIC123',
+            'status' => BillingAttempt::STATUS_APPROVED,
+            'amount' => 19.99,
+        ]);
+        BillingAttempt::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'bic' => 'TESTBIC123',
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'amount' => 19.99,
+        ]);
+
+        // Scenario 2: Price Point 49.99 (Target BIC)
+        // 2 Approved -> Total 2
+        BillingAttempt::factory()->count(2)->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'bic' => 'TESTBIC123',
+            'status' => BillingAttempt::STATUS_APPROVED,
+            'amount' => 49.99,
+        ]);
+
+        // Scenario 3: Noise (Different BIC, Same Amount)
+        // Should NOT be included
+        BillingAttempt::factory()->create([
+            'upload_id' => $upload->id,
+            'bic' => 'OTHERBIC999',
+            'status' => BillingAttempt::STATUS_APPROVED,
+            'amount' => 19.99,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/analytics/bic/price-points?bic=TESTBIC123');
+
+        $response->assertStatus(200)
+            ->assertJsonPath('data.bic', 'TESTBIC123')
+            ->assertJsonCount(2, 'data.segments'); // Expect 2 distinct price points
+
+        $segments = $response->json('data.segments');
+
+        // Check 19.99 Group
+        // Note: floating point comparison requires care, using simple search here
+        $point19 = collect($segments)->first(fn($item) => abs($item['amount'] - 19.99) < 0.01);
+
+        $this->assertNotNull($point19, '19.99 price point not found');
+        $this->assertEquals(4, $point19['total_transactions']);
+        $this->assertEquals(25, $point19['cb_rate_count']); // 1 / 4 * 100
+
+        // Check 49.99 Group
+        $point49 = collect($segments)->first(fn($item) => abs($item['amount'] - 49.99) < 0.01);
+
+        $this->assertNotNull($point49, '49.99 price point not found');
+        $this->assertEquals(2, $point49['total_transactions']);
+    }
+
+    public function test_price_points_validates_required_bic(): void
+    {
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/analytics/bic/price-points'); // Missing ?bic=
+
+        $response->assertStatus(422)
+            ->assertJsonValidationErrors(['bic']);
+    }
+
+    public function test_price_points_respects_filters(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'bic' => 'TESTBIC123',
+        ]);
+
+        // Old transaction (60 days ago) - Should be excluded by 7d filter
+        BillingAttempt::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'bic' => 'TESTBIC123',
+            'status' => BillingAttempt::STATUS_APPROVED,
+            'amount' => 100,
+            'created_at' => now()->subDays(60),
+        ]);
+
+        // Recent transaction (2 days ago) - Should be included
+        BillingAttempt::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'bic' => 'TESTBIC123',
+            'status' => BillingAttempt::STATUS_APPROVED,
+            'amount' => 100,
+            'created_at' => now()->subDays(2),
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/analytics/bic/price-points?bic=TESTBIC123&period=7d');
+
+        $response->assertStatus(200);
+
+        $segments = $response->json('data.segments');
+
+        $this->assertCount(1, $segments);
+        $this->assertEquals(1, $segments[0]['total_transactions']);
+    }
+
+    public function test_price_points_sorts_by_amount_descending(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'bic' => 'TESTBIC123',
+        ]);
+
+        BillingAttempt::factory()->create([
+            'bic' => 'TESTBIC123',
+            'amount' => 10.00,
+            'status' => BillingAttempt::STATUS_APPROVED
+        ]);
+
+        BillingAttempt::factory()->create([
+            'bic' => 'TESTBIC123',
+            'amount' => 50.00,
+            'status' => BillingAttempt::STATUS_APPROVED
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/analytics/bic/price-points?bic=TESTBIC123');
+
+        $response->assertStatus(200);
+
+        $segments = $response->json('data.segments');
+
+        $this->assertEquals(50.00, $segments[0]['amount']);
+        $this->assertEquals(10.00, $segments[1]['amount']);
+    }
 }
