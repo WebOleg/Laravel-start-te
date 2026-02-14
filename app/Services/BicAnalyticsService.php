@@ -33,7 +33,7 @@ class BicAnalyticsService
         ?string $endDate = null,
         ?string $billingModel = null,
         ?int $empAccountId = null
-    ): aray
+    ): array
     {
         $cacheKey = $this->buildCacheKey($period, $startDate, $endDate, $billingModel, $empAccountId);
 
@@ -43,7 +43,64 @@ class BicAnalyticsService
     }
 
     /**
-     * Calculate BIC analytics grouped by BIC and Amount.
+     * Get breakdown of analytics for a specific BIC grouped by Price Point (Amount).
+     * Useful to see if CBKs are tied to specific amounts (e.g., 1.99 vs 99.99).
+     */
+    public function getBicPricePointBreakdown(
+        string $bic,
+        string $period = self::DEFAULT_PERIOD,
+        ?string $billingModel = null,
+        ?int $empAccountId = null
+    ): array {
+        [$start, $end] = $this->resolveDateRange($period, null, null);
+        $threshold = config('tether.chargeback.alert_threshold', self::HIGH_RISK_THRESHOLD);
+        $excludedCbCodes = config('tether.chargeback.excluded_cb_reason_codes', []);
+
+        $query = DB::table('billing_attempts')
+            ->where('bic', $bic)
+            ->whereRaw('COALESCE(emp_created_at, created_at) BETWEEN ? AND ?', [$start, $end]);
+
+        if ($billingModel) {
+            $query->where('billing_model', $billingModel);
+        }
+
+        if ($empAccountId) {
+            $query->where('emp_account_id', $empAccountId);
+        }
+
+        $chargebackCountCase = $this->buildChargebackCountCase($excludedCbCodes);
+        $chargebackVolumeCase = $this->buildChargebackVolumeCase($excludedCbCodes);
+
+        $results = $query->groupBy('amount', 'currency')
+            ->select([
+                'amount',
+                'currency',
+                DB::raw('COUNT(*) as total_transactions'),
+                DB::raw("SUM(CASE WHEN status = '" . BillingAttempt::STATUS_APPROVED . "' THEN 1 ELSE 0 END) as approved_count"),
+                DB::raw("SUM(CASE WHEN status = '" . BillingAttempt::STATUS_DECLINED . "' THEN 1 ELSE 0 END) as declined_count"),
+                DB::raw($chargebackCountCase . ' as chargeback_count'),
+                DB::raw('SUM(amount) as total_volume'),
+                DB::raw("SUM(CASE WHEN status = '" . BillingAttempt::STATUS_APPROVED . "' THEN amount ELSE 0 END) as approved_volume"),
+                DB::raw($chargebackVolumeCase . ' as chargeback_volume'),
+            ])
+            ->orderBy('amount', 'desc')
+            ->get();
+
+        $segments = [];
+        foreach ($results as $row) {
+            $row->bic = $bic;
+            $segments[] = $this->processBicRow($row, $threshold);
+        }
+
+        return [
+            'bic' => $bic,
+            'period' => $period,
+            'segments' => $segments,
+        ];
+    }
+
+    /**
+     * Calculate BIC analytics grouped by BIC.
      */
     public function calculateAnalytics(
         string $period,
@@ -73,12 +130,9 @@ class BicAnalyticsService
         $chargebackCountCase = $this->buildChargebackCountCase($excludedCbCodes);
         $chargebackVolumeCase = $this->buildChargebackVolumeCase($excludedCbCodes);
 
-        // GROUP BY BIC, Currency, and Amount to segment price points
-        $query->groupBy('bic', 'currency', 'amount')
+        $query->groupBy('bic')
             ->select([
                 'bic',
-                'currency',
-                'amount',
                 DB::raw('COUNT(*) as total_transactions'),
                 DB::raw("SUM(CASE WHEN status = '" . BillingAttempt::STATUS_APPROVED . "' THEN 1 ELSE 0 END) as approved_count"),
                 DB::raw("SUM(CASE WHEN status = '" . BillingAttempt::STATUS_DECLINED . "' THEN 1 ELSE 0 END) as declined_count"),
@@ -103,7 +157,6 @@ class BicAnalyticsService
 
         $this->finalizeTotals($totals, $threshold);
 
-        // Sort by Chargeback Count desc to highlight problematic segments first
         usort($bics, fn ($a, $b) => $b['chargeback_count'] <=> $a['chargeback_count']);
 
         $highRiskCount = count(array_filter($bics, fn ($b) => $b['is_high_risk']));
@@ -260,7 +313,7 @@ class BicAnalyticsService
      */
     private function processBicRow(object $row, float $threshold): array
     {
-        $totalTxCount = (int) $ow->total_transactions;
+        $totalTxCount = (int) $row->total_transactions;
         $totalTxVolume = (float) $row->total_volume;
         $approvedCount = (int) $row->approved_count;
         $chargebackCount = (int) $row->chargeback_count;
@@ -282,7 +335,6 @@ class BicAnalyticsService
         return [
             'bic' => $row->bic,
             'bank_country' => $country,
-            // Price point segmentation
             'currency' => $row->currency ?? 'EUR',
             'amount' => isset($row->amount) ? (float)$row->amount : 0.00,
             'total_transactions' => $totalTxCount,
@@ -359,7 +411,7 @@ class BicAnalyticsService
 
         $cbVolumeDenominator = $totals['approved_volume'] + $totals['chargeback_volume'];
         $totals['cb_rate_volume'] = ($cbVolumeDenominator > 0)
-            ? round(($totals['chargeback_volume'] / $cbVolumeDenominato) * 100, 2)
+            ? round(($totals['chargeback_volume'] / $cbVolumeDenominator) * 100, 2)
             : 0;
 
         $totals['is_high_risk'] = $totals['cb_rate_count'] >= $threshold || $totals['cb_rate_volume'] >= $threshold;
