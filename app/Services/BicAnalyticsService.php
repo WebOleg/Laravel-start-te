@@ -359,7 +359,7 @@ class BicAnalyticsService
 
         $cbVolumeDenominator = $totals['approved_volume'] + $totals['chargeback_volume'];
         $totals['cb_rate_volume'] = ($cbVolumeDenominator > 0)
-            ? round(($totals['chargeback_volume'] / $cbVolumeDenominator) * 100, 2)
+            ? round(($totals['chargeback_volume'] / $cbVolumeDenominato) * 100, 2)
             : 0;
 
         $totals['is_high_risk'] = $totals['cb_rate_count'] >= $threshold || $totals['cb_rate_volume'] >= $threshold;
