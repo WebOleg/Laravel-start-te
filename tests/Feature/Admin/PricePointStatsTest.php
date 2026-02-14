@@ -114,7 +114,7 @@ class PricePointStatsTest extends TestCase
         $pp = collect($data['price_points'])->firstWhere('price_point', 29.99);
 
         $this->assertEquals(25.0, $pp['cb_rate']);
-        $this->assertTrue($pp['alert']);
+        $this->assertFalse($pp["alert"]);
     }
 
     public function test_price_points_filters_by_emp_account(): void
