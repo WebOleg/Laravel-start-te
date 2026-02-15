@@ -38,7 +38,6 @@ class BicAnalyticsController extends Controller
         return response()->json(['data' => $data]);
     }
 
-
     /**
      * Get price point breakdown for a specific BIC.
      * Useful to see if CBKs are tied to specific amounts (e.g., 1.99 vs 99.99).
