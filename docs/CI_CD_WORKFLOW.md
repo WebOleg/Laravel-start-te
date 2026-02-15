@@ -6,7 +6,7 @@ Complete guide for the development and deployment workflow at Tether.
 
 ## Overview
 
-Feature Branch → Staging Branch → Main Branch
+Feature Branch → Develop Branch → Staging Branch → Main Branch
 ↓ ↓ ↓
 Your code Auto-deploy Manual confirm
 to staging to production
@@ -59,7 +59,8 @@ npm run build
 ## Branch Structure
 
 | Branch      | Server                            | Deploy Type                 |
-| ----------- | --------------------------------- | --------------------------- |
+| ----------- |-----------------------------------| --------------------------- |
+| `develop`   | Develop (199.217.98.92)           | **Automatic** on push       |
 | `staging`   | Staging (137.184.105.172)         | **Automatic** on push       |
 | `main`      | Production (testingiscool.online) | **Manual** confirm required |
 | `feature/*` | -                                 | Development branches        |
@@ -69,55 +70,57 @@ npm run build
 ---
 
 ## Visual Flow
-
+```
 ┌─────────────────────────────────────────────────────────────────┐
-│ │
-│ feature/your-feature │
-│ │ │
-│ │ PR (Pull Request) │
-│ │ │
-│ ▼ │
-│ ┌────────────┐ │
-│ │ Run Tests │ │
-│ │ Backend: │ php artisan test │
-│ │ Frontend: │ npm run build │
-│ └─────┬──────┘ │
-│ │ │
-│ │ Tests pass ✅ │
-│ ▼ │
-│ ┌──────────┐ ┌─────────────────────────┐ │
-│ │ staging │ ──────► │ Staging Server │ │
-│ │ branch │ AUTO │ http://137.184.105.172 │ │
-│ └────┬─────┘ DEPLOY └─────────────────────────┘ │
-│ │ │
-│ │ PR + Merge │
-│ │ │
-│ ▼ │
-│ ┌────────────┐ │
-│ │ Run Tests │ (again for safety) │
-│ └─────┬──────┘ │
-│ │ │
-│ │ Tests pass ✅ │
-│ ▼ │
-│ ┌──────────┐ ┌─────────────────────────┐ │
-│ │ main │ ──────► │ Production Server │ │
-│ │ branch │ MANUAL │ testingiscool.online │ │
-│ └──────────┘ CONFIRM └─────────────────────────┘ │
-│ │
+│                                                                 │
+│   feature/your-feature                                          │
+│           │                                                     │
+│           │  PR (Pull Request)                                  │
+│           │                                                     │
+│           ▼                                                     │
+│    ┌────────────┐                                               │
+│    │ Run Tests  │                                               │
+│    │ Backend:   │ php artisan test                              │
+│    │ Frontend:  │ npm run build                                 │
+│    └─────┬──────┘                                               │
+│          │                                                      │
+│          │  Tests pass ✅                                       │
+│          ▼                                                      │
+│    ┌──────────┐        ┌─────────────────────────┐              │
+│    │ develop  │─────►  │     Develop Server      │              │
+│    │ branch   │ AUTO   │   http://199.217.98.92  │              │
+│    └────┬─────┘ DEPLOY └─────────────────────────┘              │
+│         │                                                       │
+│         │  PR + Merge                                           │
+│         │                                                       │
+│         ▼                                                       │
+│    ┌──────────┐        ┌─────────────────────────┐              │
+│    │ staging  │─────►  │     Staging Server      │              │
+│    │ branch   │ AUTO   │ http://137.184.105.172  │              │
+│    └────┬─────┘ DEPLOY └─────────────────────────┘              │
+│         │                                                       │
+│         │  PR + Merge                                           │
+│         │                                                       │
+│         ▼                                                       │
+│    ┌──────────┐         ┌─────────────────────────┐             │
+│    │  main    │─────►   │    Production Server    │             │
+│    │  branch  │ MANUAL  │   testingiscool.online  │             │
+│    └──────────┘ CONFIRM └─────────────────────────┘             │
+│                                                                 │
 └─────────────────────────────────────────────────────────────────┘
-
+```
 ---
 
 ## Step-by-Step Workflow
 
 ### Step 1: Create Feature Branch
 
-Always start from the `staging` branch:
+Always start from the `develop` branch:
 
 # Update staging branch
 
-git checkout staging
-git pull origin staging
+git checkout develop
+git pull origin develop
 
 # Create your feature branch
 
@@ -173,24 +176,36 @@ git commit -m "docs(blacklist): add CLI documentation"
 
 ---
 
-### Step 3: Pull Request to Staging
-
-When your feature is ready:
+### Step 3: Pull Request to Develop
+When your feature is ready for initial testing:
 
 1. **Push your latest changes:**
 
-    git push origin feature/your-feature-name
+    - git push origin feature/your-feature-name
 
 2. **Create Pull Request on GitHub:**
 
-    - Go to the repository
-    - Click "Compare & pull request"
-    - Set base branch: `staging`
-    - Set compare branch: `feature/your-feature-name`
-    - Add description of your changes
+    - Set base branch: develop
+
+    - Set compare branch: feature/your-feature-name
+
     - Click "Create pull request"
 
-3. **Wait for tests:**
+3. **Merge**
+
+**What happens after merge:**
+Merge to develop branch → Auto Deploy → Live on Develop Server (http://199.217.98.92/admin)
+
+### Step 4: Pull Request to Staging
+
+Once verified on Develop:
+
+1. **Create Pull Request:**
+
+   - Set base branch: staging
+   - Set compare branch: develop (or your feature branch if strict)
+
+2. **Wait for tests:**
 
     - GitHub Actions runs automatically
     - **Backend:** `php artisan test` (unit & feature tests)
@@ -198,7 +213,7 @@ When your feature is ready:
     - ❌ Red = tests failed, fix the issues
     - ✅ Green = tests passed, ready to merge
 
-4. **Merge the PR:**
+3. **Merge the PR:**
     - Click "Merge pull request"
     - Delete the feature branch (optional)
 
@@ -215,7 +230,7 @@ http://137.184.105.172
 
 ---
 
-### Step 4: Test on Staging
+### Step 5: Test on Staging
 
 Before promoting to production:
 
@@ -236,7 +251,7 @@ Before promoting to production:
 
 ---
 
-### Step 5: Pull Request to Main (Production)
+### Step 6: Pull Request to Main (Production)
 
 When staging is tested and approved:
 
@@ -258,7 +273,7 @@ When staging is tested and approved:
 
 ---
 
-### Step 6: Deploy to Production (Manual)
+### Step 7: Deploy to Production (Manual)
 
 After merging to main, **deployment requires manual confirmation**:
 
@@ -353,67 +368,51 @@ npx tsc --noEmit
 
 ### Scenario 1: New Feature
 
-# 1. Start from staging
+# 1. Start from develop
 
-git checkout staging
-git pull origin staging
+git checkout develop
+git pull origin develop
 
 # 2. Create feature branch
 
-git checkout -b feature/analytics-dashboard
+    git checkout -b feature/analytics-dashboard
 
 # 3. Develop and commit
 
-git add .
-git commit -m "feat(analytics): add chargeback rate chart"
-git push origin feature/analytics-dashboard
+    git add .
+    git commit -m "feat(analytics): add chargeback rate chart"
+    git push origin feature/analytics-dashboard
 
-# 4. GitHub: Create PR
-
-# staging ← feature/analytics-dashboard
-
-# Wait for tests ✅
-
-# Merge
-
-# 5. Test on staging
-
-# http://137.184.105.172/admin
-
-# Everything works? ✅
-
-# 6. GitHub: Create PR
-
-# main ← staging
-
-# Merge
-
+# 4. PR to develop → Merge
+    http://199.217.98.92/admin (Test here first)
+# 5. PR to staging → Merge
+    http://137.184.105.172/admin (Final QA)
+# 6. PR to main → Merge
 # 7. GitHub → Actions → Run workflow
-
-# Production deployed ✅
+    Production deployed ✅
 
 ---
 
 ### Scenario 2: Bug Fix
 
-# 1. Start from staging
+# 1. Start from develop
 
-git checkout staging
-git pull origin staging
+    git checkout develop
+    git pull origin develop
 
 # 2. Create fix branch
 
-git checkout -b fix/webhook-event-parsing
+    git checkout -b fix/webhook-event-parsing
 
 # 3. Fix the bug
 
-git add .
-git commit -m "fix(webhook): use event param for chargebacks"
-git push origin fix/webhook-event-parsing
+    git add .
+    git commit -m "fix(webhook): use event param for chargebacks"
+    git push origin fix/webhook-event-parsing
 
-# 4. PR to staging → Merge → Test
-
-# 5. PR to main → Merge → Manual deploy
+# 4. PR to develop → Merge → Test on Develop
+# 5. PR to staging → Merge → Test on Staging
+# 6. PR to main → Merge → Manual deploy
 
 ---
 
@@ -423,18 +422,18 @@ For critical issues that need immediate fix:
 
 # 1. Start from main (not staging!)
 
-git checkout main
-git pull origin main
+    git checkout main
+    git pull origin main
 
 # 2. Create hotfix branch
 
-git checkout -b hotfix/critical-login-error
+    git checkout -b hotfix/critical-login-error
 
 # 3. Fix the issue
 
-git add .
-git commit -m "fix(auth): resolve 500 error on login"
-git push origin hotfix/critical-login-error
+    git add .
+    git commit -m "fix(auth): resolve 500 error on login"
+    git push origin hotfix/critical-login-error
 
 # 4. PR directly to main
 
@@ -446,9 +445,9 @@ git push origin hotfix/critical-login-error
 
 # 6. Sync staging with main
 
-git checkout staging
-git merge main
-git push origin staging
+    git checkout staging
+    git merge main
+    git push origin staging
 
 ---
 
@@ -488,22 +487,16 @@ npm run build
 git commit -m "feat(ui): add UI for new endpoint"
 git push origin feature/new-ui
 
-# PR to staging → Merge
+# PR to develop → merge
+# === TEST ON DEVELOP ===
+# Verify http://199.217.98.92/admin
 
-# === TEST TOGETHER ===
-
-# Test on staging that both work together
-
-# === PRODUCTION ===
-
+# === PROMOTE ===
+# PR develop → staging (both repos)
 # PR staging → main (both repos)
-
 # Deploy Backend FIRST
-
 # Deploy Frontend SECOND
-
 **Important:** Always deploy backend before frontend when both have changes.
-
 ---
 
 ## Quick Reference
@@ -512,7 +505,7 @@ git push origin feature/new-ui
 
 | Action         | Command                            |
 | -------------- | ---------------------------------- |
-| Update staging | `git checkout staging && git pull` |
+| Update develop | `git checkout develop && git pull` |
 | Create branch  | `git checkout -b feature/name`     |
 | Push branch    | `git push origin feature/name`     |
 | Switch branch  | `git checkout branch-name`         |
@@ -534,7 +527,8 @@ git push origin feature/new-ui
 ### URLs
 
 | Environment | URL                                |
-| ----------- | ---------------------------------- |
+| ----------- |------------------------------------|
+| Develop     | http://199.217.98.92/admin         |
 | Staging     | http://137.184.105.172/admin       |
 | Production  | https://testingiscool.online/admin |
 
@@ -551,17 +545,15 @@ git push origin feature/new-ui
 
 ### ✅ Do
 
--   Create feature branch for every task
--   Run tests locally before pushing
--   Test on staging before production
--   Use conventional commit messages
--   Deploy backend before frontend
--   Deploy during working hours (for monitoring)
--   Write clear PR descriptions
+- Start feature branches from develop.
+- Test on Develop server before promoting to Staging.
+- Run tests locally before pushing.
+- Deploy backend before frontend.
+- Write clear PR descriptions.
 
 ### ❌ Don't
 
--   Push directly to `main` or `staging`
+-   Push directly to `main` , `staging` or `develop`
 -   Merge with failing tests
 -   Deploy on Friday evening
 -   Skip staging testing
@@ -604,61 +596,109 @@ git push origin feature/new-ui
 
 ## Summary Flowchart
 
-START
-│
-▼
-Create feature branch from staging
-│
-▼
-Develop & commit changes
-│
-▼
-Run tests locally
-│ Backend: php artisan test
-│ Frontend: npm run build
-│
-▼
-Push to feature branch
-│
-▼
-Create PR: staging ← feature
-│
-▼
-CI Tests pass? ─── NO ──► Fix issues
-│ │
-YES │
-│◄───────────────────────────┘
-▼
-Merge to staging
-│
-▼
-AUTO-DEPLOY to staging server
-│
-▼
-Test on staging
-│
-▼
-Working? ─── NO ──► Create fix branch
-│ │
-YES │
-│◄──────────────────────┘
-▼
-Create PR: main ← staging
-│
-▼
-Merge to main
-│
-▼
-GitHub Actions → MANUAL CONFIRM
-│
-▼
-Click "Run workflow"
-│
-▼
-PRODUCTION DEPLOYED ✅
-│
-▼
-END
+```
++-------------------------+
+|          START          |
++-----------+-------------+
+            |
+            v
++-------------------------+
+| Create Feature Branch   |
+|     (from develop)      |
++-----------+-------------+
+            |
+            v
++-------------------------+
+|   Develop & Commit      |
++-----------+-------------+
+            |
+            v
++-------------------------+
+|   Run Tests Locally     |
++-----------+-------------+
+            |
+            v
++-------------------------+
+|  Push to Feature Branch |
++-----------+-------------+
+            |
+            v
++-------------------------+
+| Create PR:              |
+| develop <--- feature    |
++-----------+-------------+
+            |
+            v
+      +-----+-----+
+      | Pass CI?  |
+      +-----+-----+
+      |     |
+   NO |     | YES
+      v     v
++-------+ +-------------------------+
+| Fix   | |    Merge to develop     |
++-------+ +-----------+-------------+
+                      |
+                      v
+          +-------------------------+
+          | AUTO-DEPLOY to Develop  |
+          |    (199.217.98.92)      |
+          +-----------+-------------+
+                      |
+                      v
+          +-------------------------+
+          |     Test on Develop     |
+          +-----------+-------------+
+                      |
+                      v
+          +-------------------------+
+          | Create PR:              |
+          | staging <--- develop    |
+          +-----------+-------------+
+                      |
+                      v
+          +-------------------------+
+          |    Merge to staging     |
+          +-----------+-------------+
+                      |
+                      v
+          +-------------------------+
+          | AUTO-DEPLOY to Staging  |
+          |    (137.184.105.172)    |
+          +-----------+-------------+
+                      |
+                      v
+          +-------------------------+
+          |     Test on Staging     |
+          +-----------+-------------+
+                      |
+                      v
+          +-------------------------+
+          | Create PR:              |
+          | main <--- staging       |
+          +-----------+-------------+
+                      |
+                      v
+          +-------------------------+
+          |      Merge to main      |
+          +-----------+-------------+
+                      |
+                      v
+          +-------------------------+
+          |    GitHub Actions:      |
+          |     MANUAL CONFIRM      |
+          +-----------+-------------+
+                      |
+                      v
+          +-------------------------+
+          |  PRODUCTION DEPLOYED ✅ |
+          +-----------+-------------+
+                      |
+                      v
+                  +-------+
+                  |  END  |
+                  +-------+
+```
 
 ---
 

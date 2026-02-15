@@ -1,7 +1,7 @@
 services:
   app:
     build:
-      context: ..
+      context: .
       dockerfile: Dockerfile
     container_name: tether_app
     restart: unless-stopped
@@ -16,7 +16,7 @@ services:
 
   horizon:
     build:
-      context: ..
+      context: .
       dockerfile: Dockerfile
     container_name: tether_horizon
     restart: unless-stopped
@@ -34,7 +34,7 @@ services:
 
   queue:
     build:
-      context: ..
+      context: .
       dockerfile: Dockerfile
     container_name: tether_queue
     restart: unless-stopped
