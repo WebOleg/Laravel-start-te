@@ -1,0 +1,103 @@
+name: Deploy Backend (Develop)
+
+on:
+  push:
+    branches: ["develop"]
+
+concurrency:
+  group: deploy-backend-develop
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy backend via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEV_HOST }}
+          username: ${{ secrets.DEV_USER }}
+          key: ${{ secrets.DEV_SSH_KEY }}
+          port: ${{ secrets.DEV_SSH_PORT || 22 }}
+          script: |
+            set -euo pipefail
+
+            # --- Configuration ---
+            REPO_DIR="/opt/tether-laravel/backend"
+            # Ensure this file exists in your repo, or change to docker-compose.yml
+            COMPOSE="docker compose -f docker-compose.develop.yml"
+
+            cd "$REPO_DIR"
+
+            echo "== whoami =="; whoami; id
+            echo "== repo perms =="; ls -ld . .git .git/objects .git/objects/pack || true
+
+            # Prevent parallel deploys on the server
+            exec 9> .deploy.lock
+            flock -n 9 || { echo "Another deploy is already running on this server."; exit 1; }
+
+            # Avoid "dubious ownership" warnings
+            git config --global --add safe.directory "$REPO_DIR" || true
+
+            # Fail fast if repo ownership is wrong
+            EXPECT_OWNER="${USER}:${USER}"
+            ACT_OWNER="$(stat -c '%U:%G' .git)"
+            echo "== owner check == expected: ${EXPECT_OWNER}, actual: ${ACT_OWNER}"
+            if [ "$ACT_OWNER" != "$EXPECT_OWNER" ]; then
+              echo "ERROR: .git is owned by '${ACT_OWNER}', expected '${EXPECT_OWNER}'."
+              echo "Fix once on server (interactive SSH):"
+              echo "  sudo chown -R ${EXPECT_OWNER} ${REPO_DIR}"
+              exit 1
+            fi
+
+            # Clean possible stale git locks
+            rm -f .git/index.lock .git/packed-refs.lock .git/objects/pack/*.lock || true
+
+            # Retry fetch in case of transient network hiccups
+            for i in 1 2 3; do
+              if git fetch --all --prune; then
+                break
+              fi
+              echo "git fetch failed (attempt $i). retrying..."
+              sleep 2
+            done
+
+            # Ensure we are exactly at origin/develop
+            git checkout -B develop origin/develop
+            git reset --hard origin/develop
+
+            # --- Docker ---
+            $COMPOSE build
+            $COMPOSE up -d
+
+            # --- Laravel writable (inside container) ---
+            $COMPOSE exec -T --user root app sh -lc '
+              set -e
+              mkdir -p storage/logs storage/framework/cache storage/framework/sessions storage/framework/views bootstrap/cache
+              touch storage/logs/laravel.log storage/logs/vop.log storage/logs/bav.log
+              chown -R www-data:www-data storage bootstrap/cache
+              find storage bootstrap/cache -type d -exec chmod 775 {} \;
+              find storage bootstrap/cache -type f -exec chmod 664 {} \;
+            '
+            $COMPOSE exec -T --user root app sh -lc 'git config --system --add safe.directory /var/www || true'
+
+            # --- Composer ---
+            $COMPOSE exec -T --user root app sh -lc '
+              set -e
+              export COMPOSER_ALLOW_SUPERUSER=1
+              # Usually for develop we might want dev dependencies?
+              # If not, add --no-dev back.
+              composer install --no-interaction --prefer-dist --optimize-autoloader
+            '
+
+            # --- Laravel ---
+            $COMPOSE exec -T --user www-data app php artisan package:discover --ansi
+
+            $COMPOSE exec -T --user www-data app php artisan config:clear || true
+            $COMPOSE exec -T --user www-data app php artisan cache:clear || true
+            $COMPOSE exec -T --user www-data app php artisan route:clear || true
+            $COMPOSE exec -T --user www-data app php artisan view:clear || true
+
+            $COMPOSE exec -T --user www-data app php artisan migrate --force
+
+            $COMPOSE ps
