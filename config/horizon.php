@@ -8,6 +8,7 @@
  * - high: VOP verification, alerts
  * - vop: VOP verification jobs (processed with high priority)
  * - billing: EMP billing jobs (processed with high priority)
+ * - bav: BAV batch verification jobs (external API, rate-limited)
  * - reconciliation: Reconciliation jobs
  * - emp-refresh: EMP inbound sync (long-running import)
  * - exports: CSV/report exports (long-running, low priority)
@@ -28,6 +29,7 @@ return [
         'redis:high' => 60,
         'redis:vop' => 60,
         'redis:billing' => 60,
+        'redis:bav' => 120,
         'redis:reconciliation' => 60,
         'redis:emp-refresh' => 120,
         'redis:exports' => 300,
@@ -83,7 +85,7 @@ return [
         ],
         'supervisor-high' => [
             'connection' => 'redis',
-            'queue' => ['high', 'vop', 'billing', 'reconciliation'],
+            'queue' => ['high', 'vop', 'billing', 'bav', 'reconciliation'],
             'balance' => 'auto',
             'autoScalingStrategy' => 'time',
             'maxProcesses' => 3,
