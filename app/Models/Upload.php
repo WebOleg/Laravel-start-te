@@ -67,6 +67,7 @@ class Upload extends Model
         'reconciliation_batch_id',
         'reconciliation_started_at',
         'reconciliation_completed_at',
+        'skip_bic_blacklist',
     ];
 
     protected $casts = [
@@ -91,6 +92,7 @@ class Upload extends Model
         'bav_processed_count' => 'integer',
         'reconciliation_started_at' => 'datetime',
         'reconciliation_completed_at' => 'datetime',
+        'skip_bic_blacklist' => 'boolean',
     ];
 
     public function uploader(): BelongsTo
@@ -428,31 +430,25 @@ class Upload extends Model
         ]);
     }
     
-    // Boot the model and register event listeners for cache invalidation.
     protected static function booted(): void
     {
-        // Clear upload search cache when new upload is created
         static::created(function () {
             self::clearSearchCache();
         });
     
-        // Clear upload search cache when upload is updated
         static::updated(function () {
             self::clearSearchCache();
         });
     
-        // Clear upload search cache when upload is deleted
         static::deleted(function () {
             self::clearSearchCache();
         });
     
-        // Clear upload search cache when upload is restored
         static::restored(function () {
             self::clearSearchCache();
         });
     }
     
-    // Clear all upload search cache entries.
     private static function clearSearchCache(): void
     {
         try {
@@ -462,12 +458,9 @@ class Upload extends Model
                 Cache::forget($key);
             }
 
-            // Clear the manifest itself
             Cache::forget('upload_search_keys');
         } catch (\Exception $e) {
-            // Log error but don't break the application
             \Illuminate\Support\Facades\Log::warning('Failed to clear upload search cache: ' . $e->getMessage());
         }
     }
 }
-
