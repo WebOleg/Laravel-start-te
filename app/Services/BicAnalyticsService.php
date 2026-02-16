@@ -100,6 +100,59 @@ class BicAnalyticsService
     }
 
     /**
+     * Get CB reason code breakdown for a specific BIC.
+     */
+    public function getBicCbCodeBreakdown(
+        string $bic,
+        string $period = self::DEFAULT_PERIOD,
+        ?string $billingModel = null,
+        ?int $empAccountId = null
+    ): array {
+        [$start, $end] = $this->resolveDateRange($period, null, null);
+
+        $query = DB::table('billing_attempts')
+            ->where('bic', $bic)
+            ->where('status', BillingAttempt::STATUS_CHARGEBACKED)
+            ->whereRaw('COALESCE(emp_created_at, created_at) BETWEEN ? AND ?', [$start, $end]);
+
+        if ($billingModel) {
+            $query->where('billing_model', $billingModel);
+        }
+
+        if ($empAccountId) {
+            $query->where('emp_account_id', $empAccountId);
+        }
+
+        $results = $query
+            ->selectRaw("COALESCE(chargeback_reason_code, 'UNKNOWN') as code, COUNT(*) as count, SUM(amount) as volume")
+            ->groupBy('code')
+            ->orderByDesc('count')
+            ->get();
+
+        $totalCb = $results->sum('count');
+        $totalVolume = $results->sum('volume');
+
+        $codes = [];
+        foreach ($results as $row) {
+            $codes[] = [
+                'code' => $row->code,
+                'count' => (int) $row->count,
+                'volume' => round((float) $row->volume, 2),
+                'percent_count' => $totalCb > 0 ? round(($row->count / $totalCb) * 100, 2) : 0,
+                'percent_volume' => $totalVolume > 0 ? round($row->volume / $totalVolume * 100, 2) : 0,
+            ];
+        }
+
+        return [
+            'bic' => $bic,
+            'period' => $period,
+            'total_chargebacks' => $totalCb,
+            'total_volume' => round($totalVolume, 2),
+            'codes' => $codes,
+        ];
+    }
+
+    /**
      * Calculate BIC analytics grouped by BIC.
      * Optionally filter by CB reason code to see which BICs have specific chargeback reasons.
      */

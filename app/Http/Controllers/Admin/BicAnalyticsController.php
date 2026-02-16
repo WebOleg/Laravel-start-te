@@ -61,6 +61,30 @@ class BicAnalyticsController extends Controller
         return response()->json(['data' => $data]);
     }
 
+    public function cbCodeBreakdown(Request $request): JsonResponse
+    {
+        $request->validate([
+            'bic' => 'required|string',
+            'period' => 'nullable|in:7d,30d,60d,90d',
+            'model' => 'nullable|string|in:' . implode(',', DebtorProfile::BILLING_MODELS),
+            'emp_account_id' => 'nullable|integer|exists:emp_accounts,id',
+        ]);
+
+        $bic = $request->input('bic');
+        $period = $request->input('period', BicAnalyticsService::DEFAULT_PERIOD);
+        $billingModel = $request->input('model');
+        $empAccountId = $request->input('emp_account_id');
+
+        $data = $this->bicAnalyticsService->getBicCbCodeBreakdown(
+            $bic,
+            $period,
+            $billingModel,
+            $empAccountId
+        );
+
+        return response()->json(['data' => $data]);
+    }
+
     public function show(Request $request, string $bic): JsonResponse
     {
         $request->validate([
