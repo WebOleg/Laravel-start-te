@@ -36,6 +36,7 @@ class BavBatchController extends Controller
                 'filename' => $b->original_filename,
                 'status' => $b->status,
                 'total_records' => $b->total_records,
+                'record_limit' => $b->record_limit,
                 'processed_records' => $b->processed_records,
                 'success_count' => $b->success_count,
                 'failed_count' => $b->failed_count,
@@ -78,6 +79,7 @@ class BavBatchController extends Controller
 
     /**
      * Confirm and start processing a BAV batch.
+     * Accepts optional record_limit to process only N records.
      */
     public function start(Request $request, int $id): JsonResponse
     {
@@ -87,10 +89,17 @@ class BavBatchController extends Controller
             return response()->json(['error' => 'Batch is already ' . $batch->status], 422);
         }
 
+        $request->validate([
+            'record_limit' => 'nullable|integer|min:1|max:' . $batch->total_records,
+        ]);
+
+        $recordLimit = $request->input('record_limit') ? (int) $request->input('record_limit') : $batch->total_records;
+        $batch->update(['record_limit' => $recordLimit]);
+
         $balance = $this->bavService->getBalance();
-        if ($balance['success'] && $balance['credits_remaining'] < $batch->total_records) {
+        if ($balance['success'] && $balance['credits_remaining'] < $recordLimit) {
             return response()->json([
-                'error' => "Not enough BAV credits. Need {$batch->total_records}, have {$balance['credits_remaining']}.",
+                'error' => "Not enough BAV credits. Need {$recordLimit}, have {$balance['credits_remaining']}.",
                 'credits_remaining' => $balance['credits_remaining'],
             ], 422);
         }
@@ -101,7 +110,8 @@ class BavBatchController extends Controller
             'data' => [
                 'batch_id' => $batch->id,
                 'status' => 'queued',
-                'message' => "BAV batch queued for processing ({$batch->total_records} records)",
+                'record_limit' => $recordLimit,
+                'message' => "BAV batch queued for processing ({$recordLimit} of {$batch->total_records} records)",
             ]
         ]);
     }

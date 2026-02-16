@@ -4,9 +4,11 @@ namespace Tests\Feature\Admin;
 
 use App\Models\BavBatch;
 use App\Models\User;
+use App\Jobs\ProcessBavBatchJob;
 use App\Services\BavBatchService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
 class BavBatchControllerTest extends TestCase
@@ -175,5 +177,138 @@ class BavBatchControllerTest extends TestCase
         $response->assertStatus(201)
             ->assertJsonPath('data.total_records', 1)
             ->assertJsonPath('data.column_mapping.has_header', true);
+    }
+
+    public function test_bav_batch_start_with_record_limit(): void
+    {
+        Queue::fake();
+
+        $batch = BavBatch::create([
+            'user_id' => $this->user->id,
+            'original_filename' => 'test.csv',
+            'file_path' => 'bav-batches/test.csv',
+            'status' => BavBatch::STATUS_PENDING,
+            'total_records' => 100,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->postJson("/api/admin/bav/batches/{$batch->id}/start", [
+                'record_limit' => 30,
+            ]);
+
+        $response->assertStatus(200)
+            ->assertJsonPath('data.record_limit', 30);
+
+        $batch->refresh();
+        $this->assertEquals(30, $batch->record_limit);
+
+        Queue::assertPushed(ProcessBavBatchJob::class);
+    }
+
+    public function test_bav_batch_start_without_record_limit_uses_total(): void
+    {
+        Queue::fake();
+
+        $batch = BavBatch::create([
+            'user_id' => $this->user->id,
+            'original_filename' => 'test.csv',
+            'file_path' => 'bav-batches/test.csv',
+            'status' => BavBatch::STATUS_PENDING,
+            'total_records' => 50,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->postJson("/api/admin/bav/batches/{$batch->id}/start");
+
+        $response->assertStatus(200);
+
+        $batch->refresh();
+        $this->assertEquals(50, $batch->record_limit);
+
+        Queue::assertPushed(ProcessBavBatchJob::class);
+    }
+
+    public function test_bav_batch_start_rejects_limit_exceeding_total(): void
+    {
+        $batch = BavBatch::create([
+            'user_id' => $this->user->id,
+            'original_filename' => 'test.csv',
+            'file_path' => 'bav-batches/test.csv',
+            'status' => BavBatch::STATUS_PENDING,
+            'total_records' => 10,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->postJson("/api/admin/bav/batches/{$batch->id}/start", [
+                'record_limit' => 50,
+            ]);
+
+        $response->assertStatus(422)
+            ->assertJsonValidationErrors(['record_limit']);
+    }
+
+    public function test_bav_batch_start_rejects_zero_limit(): void
+    {
+        $batch = BavBatch::create([
+            'user_id' => $this->user->id,
+            'original_filename' => 'test.csv',
+            'file_path' => 'bav-batches/test.csv',
+            'status' => BavBatch::STATUS_PENDING,
+            'total_records' => 10,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->postJson("/api/admin/bav/batches/{$batch->id}/start", [
+                'record_limit' => 0,
+            ]);
+
+        $response->assertStatus(422)
+            ->assertJsonValidationErrors(['record_limit']);
+    }
+
+    public function test_bav_batch_progress_percentage_uses_record_limit(): void
+    {
+        $batch = BavBatch::create([
+            'user_id' => $this->user->id,
+            'original_filename' => 'test.csv',
+            'file_path' => 'bav-batches/test.csv',
+            'status' => BavBatch::STATUS_PROCESSING,
+            'total_records' => 100,
+            'record_limit' => 20,
+            'processed_records' => 10,
+            'success_count' => 8,
+            'failed_count' => 2,
+            'credits_used' => 10,
+            'started_at' => now(),
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson("/api/admin/bav/batches/{$batch->id}/status");
+
+        $response->assertStatus(200)
+            ->assertJsonPath('data.total', 100)
+            ->assertJsonPath('data.record_limit', 20)
+            ->assertJsonPath('data.effective_limit', 20);
+
+        $this->assertEquals(50.0, $response->json('data.percentage'));
+    }
+
+    public function test_bav_batch_index_includes_record_limit(): void
+    {
+        BavBatch::create([
+            'user_id' => $this->user->id,
+            'original_filename' => 'test.csv',
+            'file_path' => 'bav-batches/test.csv',
+            'status' => BavBatch::STATUS_COMPLETED,
+            'total_records' => 100,
+            'record_limit' => 25,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/bav/batches');
+
+        $response->assertStatus(200)
+            ->assertJsonPath('data.0.record_limit', 25)
+            ->assertJsonPath('data.0.total_records', 100);
     }
 }
