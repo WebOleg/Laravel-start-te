@@ -1,10 +1,8 @@
 <?php
-
 /**
  * Model for standalone BAV verification batches.
  * Tracks upload, processing status, and results for CSV-based BAV checks.
  */
-
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
@@ -25,6 +23,7 @@ class BavBatch extends Model
         'results_path',
         'status',
         'total_records',
+        'record_limit',
         'processed_records',
         'success_count',
         'failed_count',
@@ -38,6 +37,7 @@ class BavBatch extends Model
 
     protected $casts = [
         'total_records' => 'integer',
+        'record_limit' => 'integer',
         'processed_records' => 'integer',
         'success_count' => 'integer',
         'failed_count' => 'integer',
@@ -53,17 +53,26 @@ class BavBatch extends Model
         return $this->belongsTo(User::class);
     }
 
+    public function getEffectiveLimit(): int
+    {
+        return $this->record_limit ?? $this->total_records;
+    }
+
     public function getProgress(): array
     {
+        $effectiveLimit = $this->getEffectiveLimit();
+
         return [
             'status' => $this->status,
             'total' => $this->total_records,
+            'record_limit' => $this->record_limit,
+            'effective_limit' => $effectiveLimit,
             'processed' => $this->processed_records,
             'success' => $this->success_count,
             'failed' => $this->failed_count,
             'credits_used' => $this->credits_used,
-            'percentage' => $this->total_records > 0
-                ? round(($this->processed_records / $this->total_records) * 100, 1)
+            'percentage' => $effectiveLimit > 0
+                ? round(($this->processed_records / $effectiveLimit) * 100, 1)
                 : 0,
             'started_at' => $this->started_at?->toIso8601String(),
             'completed_at' => $this->completed_at?->toIso8601String(),

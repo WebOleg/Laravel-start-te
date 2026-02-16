@@ -72,7 +72,7 @@ class BavBatchService
     }
 
     /**
-     * Process all records in a BavBatch.
+     * Process records in a BavBatch, respecting optional record_limit.
      */
     public function processBatch(BavBatch $batch, int $delayMs = 500): void
     {
@@ -85,13 +85,20 @@ class BavBatchService
 
         $mapping = $batch->column_mapping;
         $startRow = $mapping['has_header'] ? 1 : 0;
+        $recordLimit = $batch->record_limit ?? $batch->total_records;
 
         $outputRows = [];
         $headerRow = $mapping['has_header'] ? $rows[0] : [];
         $outputHeader = array_merge($headerRow, ['bav_valid', 'bav_name_match', 'bav_bic', 'bav_score', 'bav_result', 'bav_error']);
         $outputRows[] = $outputHeader;
 
+        $processed = 0;
+
         for ($i = $startRow; $i < count($rows); $i++) {
+            if ($processed >= $recordLimit) {
+                break;
+            }
+
             $row = $rows[$i];
 
             $iban = $this->cleanIban($row[$mapping['iban']] ?? '');
@@ -102,6 +109,7 @@ class BavBatchService
             if (empty($iban)) {
                 $outputRows[] = array_merge($row, ['false', '', '', '0', '', 'Empty IBAN']);
                 $batch->incrementProcessed(false);
+                $processed++;
                 continue;
             }
 
@@ -128,6 +136,8 @@ class BavBatchService
                     'error' => $e->getMessage(),
                 ]);
             }
+
+            $processed++;
 
             if ($delayMs > 0) {
                 usleep($delayMs * 1000);
