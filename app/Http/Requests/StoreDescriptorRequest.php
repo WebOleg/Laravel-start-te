@@ -43,6 +43,10 @@ class StoreDescriptorRequest extends FormRequest
                     ->where('year', $this->year)
                     ->ignore($this->route('descriptor')), // Ignore self on update
             ],
+            'emp_account_id' => [
+                'required',
+                'exists:emp_accounts,id'
+            ],
         ];
     }
 
