@@ -129,40 +129,19 @@ class BicAnalyticsService
             $query->where('emp_account_id', $empAccountId);
         }
 
-        // Filter to only BICs that have chargebacks with this specific reason code
+        // When filtering by CB reason code, override chargeback counting
+        // to only count chargebacks with this specific code
         if ($cbReasonCode) {
-            $bicsWithCode = DB::table('billing_attempts')
-                ->whereRaw('COALESCE(emp_created_at, created_at) BETWEEN ? AND ?', [$start, $end])
-                ->where('status', BillingAttempt::STATUS_CHARGEBACKED)
-                ->where('chargeback_reason_code', $cbReasonCode)
-                ->whereNotNull('bic')
-                ->where('bic', '!=', '')
-                ->when($billingModel, fn($q) => $q->where('billing_model', $billingModel))
-                ->when($empAccountId, fn($q) => $q->where('emp_account_id', $empAccountId))
-                ->distinct()
-                ->pluck('bic')
-                ->toArray();
-
-            if (empty($bicsWithCode)) {
-                return [
-                    'period' => $period,
-                    'model' => $billingModel ?? 'all',
-                    'emp_account_id' => $empAccountId,
-                    'cb_reason_code' => $cbReasonCode,
-                    'start_date' => $start->toIso8601String(),
-                    'end_date' => $end->toIso8601String(),
-                    'threshold' => $threshold,
-                    'bics' => [],
-                    'totals' => $this->initTotals(),
-                    'high_risk_count' => 0,
-                ];
-            }
-
-            $query->whereIn('bic', $bicsWithCode);
+            $chargebackCountCase = "SUM(CASE WHEN status = '" . BillingAttempt::STATUS_CHARGEBACKED . "'
+                AND chargeback_reason_code = '" . addslashes($cbReasonCode) . "'
+                THEN 1 ELSE 0 END)";
+            $chargebackVolumeCase = "SUM(CASE WHEN status = '" . BillingAttempt::STATUS_CHARGEBACKED . "'
+                AND chargeback_reason_code = '" . addslashes($cbReasonCode) . "'
+                THEN amount ELSE 0 END)";
+        } else {
+            $chargebackCountCase = $this->buildChargebackCountCase($excludedCbCodes);
+            $chargebackVolumeCase = $this->buildChargebackVolumeCase($excludedCbCodes);
         }
-
-        $chargebackCountCase = $this->buildChargebackCountCase($excludedCbCodes);
-        $chargebackVolumeCase = $this->buildChargebackVolumeCase($excludedCbCodes);
 
         $query->groupBy('bic')
             ->select([
