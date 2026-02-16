@@ -19,7 +19,8 @@ class DescriptorController extends Controller
 
     public function index(): JsonResponse
     {
-        $descriptors = TransactionDescriptor::orderByDesc('is_default')
+        $descriptors = TransactionDescriptor::with('empAccount')
+                                            ->orderByDesc('is_default')
                                             ->orderBy('year')
                                             ->orderBy('month')
                                             ->get();

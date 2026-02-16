@@ -18,6 +18,7 @@ class TransactionDescriptor extends Model
         'descriptor_city',
         'descriptor_country',
         'is_default',
+        'emp_account_id',
     ];
 
     protected $casts = [
@@ -43,5 +44,13 @@ class TransactionDescriptor extends Model
     public function scopeDefaultFallback(Builder $query): void
     {
         $query->where('is_default', true);
+    }
+
+    /**
+     * Get the EMP account associated with this descriptor.
+     */
+    public function empAccount()
+    {
+        return $this->belongsTo(EmpAccount::class);
     }
 }
