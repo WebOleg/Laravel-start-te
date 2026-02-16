@@ -19,6 +19,7 @@ use App\Http\Controllers\Admin\VopController as AdminVopController;
 use App\Http\Controllers\Admin\EmpRefreshController as AdminEmpRefreshController;
 use App\Http\Controllers\Admin\BicAnalyticsController as AdminBicAnalyticsController;
 use App\Http\Controllers\Admin\BavController as AdminBavController;
+use App\Http\Controllers\Admin\BavBatchController as AdminBavBatchController;
 use App\Http\Middleware\EmpWebhookSecurity;
 use App\Http\Controllers\Webhook\EmpWebhookController;
 
@@ -73,6 +74,15 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/start', [AdminBavController::class, 'startVerification']);
             Route::get('/status', [AdminBavController::class, 'getStatus']);
             Route::post('/cancel', [AdminBavController::class, 'cancelVerification']);
+        });
+
+        Route::prefix('bav/batches')->group(function () {
+            Route::get('/', [AdminBavBatchController::class, 'index']);
+            Route::post('/upload', [AdminBavBatchController::class, 'upload']);
+            Route::post('/{id}/start', [AdminBavBatchController::class, 'start']);
+            Route::get('/{id}/status', [AdminBavBatchController::class, 'status']);
+            Route::get('/{id}/download', [AdminBavBatchController::class, 'download']);
+            Route::get('/balance', [AdminBavBatchController::class, 'balance']);
         });
 
         Route::post('uploads/{upload}/sync', [AdminBillingController::class, 'sync']);
