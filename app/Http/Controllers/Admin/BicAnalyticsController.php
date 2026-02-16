@@ -14,9 +14,6 @@ class BicAnalyticsController extends Controller
         private BicAnalyticsService $bicAnalyticsService
     ) {}
 
-    /**
-     * Get BIC analytics summary.
-     */
     public function index(Request $request): JsonResponse
     {
         $request->validate([
@@ -25,6 +22,7 @@ class BicAnalyticsController extends Controller
             'end_date' => 'nullable|date|after_or_equal:start_date',
             'model' => 'nullable|string|in:' . implode(',', DebtorProfile::BILLING_MODELS),
             'emp_account_id' => 'nullable|integer|exists:emp_accounts,id',
+            'cb_reason_code' => 'nullable|string|max:50',
         ]);
 
         $period = $request->input('period', BicAnalyticsService::DEFAULT_PERIOD);
@@ -32,26 +30,23 @@ class BicAnalyticsController extends Controller
         $endDate = $request->input('end_date');
         $billingModel = $request->input('model');
         $empAccountId = $request->input('emp_account_id');
+        $cbReasonCode = $request->input('cb_reason_code');
 
-        $data = $this->bicAnalyticsService->getAnalytics($period, $startDate, $endDate, $billingModel, $empAccountId);
+        $data = $this->bicAnalyticsService->getAnalytics($period, $startDate, $endDate, $billingModel, $empAccountId, $cbReasonCode);
 
         return response()->json(['data' => $data]);
     }
 
-    /**
-     * Get price point breakdown for a specific BIC.
-     * Useful to see if CBKs are tied to specific amounts (e.g., 1.99 vs 99.99).
-     */
     public function pricePoints(Request $request): JsonResponse
     {
         $request->validate([
-            'bic' => 'required|string', // BIC is validated here now
+            'bic' => 'required|string',
             'period' => 'nullable|in:7d,30d,60d,90d',
             'model' => 'nullable|string|in:' . implode(',', DebtorProfile::BILLING_MODELS),
             'emp_account_id' => 'nullable|integer|exists:emp_accounts,id',
         ]);
 
-        $bic = $request->input('bic'); // Get BIC from the query string
+        $bic = $request->input('bic');
         $period = $request->input('period', BicAnalyticsService::DEFAULT_PERIOD);
         $billingModel = $request->input('model');
         $empAccountId = $request->input('emp_account_id');
@@ -66,9 +61,6 @@ class BicAnalyticsController extends Controller
         return response()->json(['data' => $data]);
     }
 
-    /**
-     * Get analytics for a specific BIC.
-     */
     public function show(Request $request, string $bic): JsonResponse
     {
         $request->validate([
@@ -90,9 +82,6 @@ class BicAnalyticsController extends Controller
         return response()->json(['data' => $data]);
     }
 
-    /**
-     * Clear analytics cache.
-     */
     public function clearCache(): JsonResponse
     {
         $this->bicAnalyticsService->clearCache();
@@ -100,9 +89,6 @@ class BicAnalyticsController extends Controller
         return response()->json(['message' => 'Cache cleared']);
     }
 
-    /**
-     * Export BIC analytics as CSV.
-     */
     public function export(Request $request)
     {
         $request->validate([
@@ -111,6 +97,7 @@ class BicAnalyticsController extends Controller
             'end_date' => 'nullable|date|after_or_equal:start_date',
             'model' => 'nullable|string|in:' . implode(',', DebtorProfile::BILLING_MODELS),
             'emp_account_id' => 'nullable|integer|exists:emp_accounts,id',
+            'cb_reason_code' => 'nullable|string|max:50',
         ]);
 
         $period = $request->input('period', BicAnalyticsService::DEFAULT_PERIOD);
@@ -118,13 +105,14 @@ class BicAnalyticsController extends Controller
         $endDate = $request->input('end_date');
         $billingModel = $request->input('model');
         $empAccountId = $request->input('emp_account_id');
+        $cbReasonCode = $request->input('cb_reason_code');
 
-        $data = $this->bicAnalyticsService->getAnalytics($period, $startDate, $endDate, $billingModel, $empAccountId);
+        $data = $this->bicAnalyticsService->getAnalytics($period, $startDate, $endDate, $billingModel, $empAccountId, $cbReasonCode);
 
-        // Include model and account in filename if present
         $parts = ['bic_analytics'];
         if ($billingModel) $parts[] = $billingModel;
         if ($empAccountId) $parts[] = "acc{$empAccountId}";
+        if ($cbReasonCode) $parts[] = "cb_{$cbReasonCode}";
         $parts[] = $period;
         $prefix = implode('_', $parts);
         $filename = $prefix . '_' . now()->format('Ymd_His') . '.csv';
