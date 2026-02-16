@@ -86,12 +86,17 @@ class TransactionDescriptorSeeder extends Seeder
                 $combination = [$year, $month];
             } while (in_array($combination, $usedCombinations));
 
-            TransactionDescriptor::factory()
-                ->create([
+            TransactionDescriptor::updateOrCreate(
+                [
+                    'year'  => $year,
+                    'month' => $month,
+                ],
+                TransactionDescriptor::factory()->make([
                     'year'           => $year,
                     'month'          => $month,
                     'emp_account_id' => $empAccounts->random()->id,
-                ]);
+                ])->toArray()
+            );
 
             $usedCombinations[] = $combination;
         }

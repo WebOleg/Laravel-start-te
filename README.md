@@ -203,38 +203,33 @@ docker compose exec app php artisan test --filter=ReconciliationControllerTest
 
 ### Test Coverage
 
-**Feature Tests - Admin Controllers (23 suites)**
-
-| Test Suite                   | Tests | Status |
-| ---------------------------- | ----- | ------ |
-| EmpRefreshControllerTest     | 32    | ✅     |
-| BicAnalyticsControllerTest   | 21    | ✅     |
-| ChargebackControllerTest     | 21    | ✅     |
-| DashboardTest                | 21    | ✅     |
-| BillingControllerTest        | 21    | ✅     |
-| DebtorControllerTest         | 28    | ✅     |
-| UploadValidationTest         | 18    | ✅     |
-| BillingAttemptControllerTest | 18    | ✅     |
-| VopLogControllerTest         | 14    | ✅     |
-| UploadStatusTest             | 14    | ✅     |
-| UploadValidationStatsTest    | 12    | ✅     |
-| BavBatchControllerTest       | 11    | ✅     |
-| VopControllerTest            | 10    | ✅     |
-| UploadStoreTest              | 10    | ✅     |
-| StatsControllerTest          | 9     | ✅     |
-| UploadChargebackFilterTest   | 9     | ✅     |
-| ReconciliationControllerTest | 17    | ✅     |
-| UploadEdgeCasesTest          | 7     | ✅     |
-| UploadControllerTest         | 7     | ✅     |
-| PricePointStatsTest          | 7     | ✅     |
-| UploadDeleteTest             | 8     | ✅     |
-| DescriptorControllerTest     | 5     | ✅     |
-| BlacklistUploadTest          | 4     | ✅     |
-
-**Feature Tests - Other (10 suites)**
+**Feature Tests**
 
 | Test Suite                      | Tests | Status |
-| ------------------------------- | ----- | ------ |
+| --------------------------------| ----- | ------ |
+| EmpRefreshControllerTest        | 32    | ✅     |
+| BicAnalyticsControllerTest      | 21    | ✅     |
+| ChargebackControllerTest        | 21    | ✅     |
+| DashboardTest                   | 21    | ✅     |
+| BillingControllerTest           | 21    | ✅     |
+| DebtorControllerTest            | 28    | ✅     |
+| UploadValidationTest            | 18    | ✅     |
+| BillingAttemptControllerTest    | 18    | ✅     |
+| VopLogControllerTest            | 14    | ✅     |
+| UploadStatusTest                | 14    | ✅     |
+| UploadValidationStatsTest       | 12    | ✅     |
+| BavBatchControllerTest          | 11    | ✅     |
+| VopControllerTest               | 10    | ✅     |
+| UploadStoreTest                 | 10    | ✅     |
+| StatsControllerTest             | 9     | ✅     |
+| UploadChargebackFilterTest      | 9     | ✅     |
+| ReconciliationControllerTest    | 17    | ✅     |
+| UploadEdgeCasesTest             | 7     | ✅     |
+| UploadControllerTest            | 7     | ✅     |
+| PricePointStatsTest             | 7     | ✅     |
+| UploadDeleteTest                | 8     | ✅     |
+| DescriptorControllerTest        | 5     | ✅     |
+| BlacklistUploadTest             | 4     | ✅     |
 | ChargebackStatsTest             | 21    | ✅     |
 | BavVerificationTest             | 14    | ✅     |
 | CleanUsersExportTest            | 14    | ✅     |
@@ -246,24 +241,14 @@ docker compose exec app php artisan test --filter=ReconciliationControllerTest
 | VopBavIntegrationTest           | 8     | ✅     |
 | VopVerificationServiceTest      | 5     | ✅     |
 | S3FileUploadTest                | 5     | ✅     |
-
-**Feature Tests - Console Commands (4 suites)**
-
-| Test Suite                    | Tests | Status |
-| ----------------------------- | ----- | ------ |
-| BicBlacklistImportCommandTest | 20    | ✅     |
-| BicBlacklistAutoCommandTest   | 20    | ✅     |
-| BicBlacklistListCommandTest   | 15    | ✅     |
-| DispatchRecurringBillingTest  | 5     | ✅     |
-
-**Feature Tests - Authentication (3 suites)**
-
-| Test Suite                | Tests | Status |
-| -------------------       | ----- | ------ |
-| EmpRefreshControllerTest  | 32    | ✅     |
-| UserTest                  | 16    | ✅     |
-| LogoutTest                | 12    | ✅     |
-| LoginTwoFactorTest        | 5     | ✅     |
+| BicBlacklistImportCommandTest   | 20    | ✅     |
+| BicBlacklistAutoCommandTest     | 20    | ✅     |
+| BicBlacklistListCommandTest     | 15    | ✅     |
+| DispatchRecurringBillingTest    | 5     | ✅     |
+| EmpRefreshControllerTest        | 32    | ✅     |
+| UserTest                        | 16    | ✅     |
+| LogoutTest                      | 12    | ✅     |
+| LoginTwoFactorTest              | 5     | ✅     |
 
 **Unit Tests - Services (21 suites)**
 
