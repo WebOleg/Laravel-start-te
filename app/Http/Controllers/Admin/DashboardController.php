@@ -219,6 +219,7 @@ class DashboardController extends Controller
         $chargebacked = $chargebackQuery->count();
         $totalAmount = (clone $baseQuery)->where('status', BillingAttempt::STATUS_APPROVED)->sum('amount');
         $chargebackAmount = $chargebackQuery->sum('amount');
+        $pendingAmount = (clone $baseQuery)->where('status', BillingAttempt::STATUS_PENDING)->sum('amount');
 
         $pending = (clone $baseQuery)->where('status', BillingAttempt::STATUS_PENDING)->count();
         $declined = (clone $baseQuery)->where('status', BillingAttempt::STATUS_DECLINED)->count();
@@ -251,6 +252,7 @@ class DashboardController extends Controller
             'approval_rate' => $this->calculateRate($successful, $total),
             'chargeback_rate' => $this->calculateRate($chargebacked, $successful),
             'total_approved_amount' => round($totalAmount, 2),
+            'total_pending_amount' => round($pendingAmount, 2),
             'total_chargeback_amount' => round($chargebackAmount, 2),
             'today' => $todayQuery->count(),
             'average_attempts_per_debtor' => round(
