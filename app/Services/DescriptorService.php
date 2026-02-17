@@ -25,10 +25,11 @@ class DescriptorService
     /**
      * If setting a new default, un-set any existing default.
      */
-    public function ensureSingleDefault(bool $isNewDefault, ?int $ignoreId = null): void
+    public function ensureSingleDefault(bool $isNewDefault, ?int $ignoreId = null, ?int $empAccountId = null): void
     {
-        if ($isNewDefault) {
+        if ($isNewDefault && $empAccountId !== null) {
             TransactionDescriptor::where('is_default', true)
+                                ->where('emp_account_id', $empAccountId)
                                 ->when($ignoreId, fn($q) => $q->where('id', '!=', $ignoreId))
                                 ->update(['is_default' => false]);
         }

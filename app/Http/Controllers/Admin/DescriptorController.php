@@ -25,7 +25,7 @@ class DescriptorController extends Controller
                                             ->orderByDesc('is_default')
                                             ->orderBy('year')
                                             ->orderBy('month')
-                                            ->paginate($request->input('per_page', 20));
+                                            ->paginate(min((int) $request->input('per_page', 20), 100));
 
         return DescriptorResource::collection($descriptors);
     }
