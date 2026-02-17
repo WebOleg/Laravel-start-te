@@ -32,6 +32,11 @@ class DescriptorService
                                 ->where('emp_account_id', $empAccountId)
                                 ->when($ignoreId, fn($q) => $q->where('id', '!=', $ignoreId))
                                 ->update(['is_default' => false]);
+        } else if ($isNewDefault && $empAccountId === null) {
+            TransactionDescriptor::where('is_default', true)
+                                ->whereNull('emp_account_id')
+                                ->when($ignoreId, fn($q) => $q->where('id', '!=', $ignoreId))
+                                ->update(['is_default' => false]);
         }
     }
 }

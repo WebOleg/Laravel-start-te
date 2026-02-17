@@ -24,7 +24,23 @@ class StoreDescriptorRequest extends FormRequest
             ],
             'descriptor_city' => 'nullable|string|max:13',
             'descriptor_country' => 'nullable|string|size:3', // ISO alpha-3
-            'is_default' => 'required|boolean',
+            'is_default' => [
+                'required',
+                'boolean',
+                function ($attribute, $value, $fail) {
+                    // Validate global default uniqueness
+                    if ($value && $this->emp_account_id === null) {
+                        $query = TransactionDescriptor::whereNull('emp_account_id')
+                            ->where('is_default', true);
+                        
+                        $this->excludeCurrentRecord($query);
+                        
+                        if ($query->exists()) {
+                            $fail("A global default descriptor already exists.");
+                        }
+                    }
+                },
+            ],
 
             // Conditional Logic: If NOT default, Date is required.
             'year' => [
@@ -41,34 +57,10 @@ class StoreDescriptorRequest extends FormRequest
                 Rule::requiredIf(!$this->is_default),
             ],
             'emp_account_id' => [
-                'required',
+                'nullable',
                 'exists:emp_accounts,id',
                 function ($attribute, $value, $fail) {
-                    $query = TransactionDescriptor::where('emp_account_id', $value);
-                    $isDefault = filter_var($this->is_default, FILTER_VALIDATE_BOOLEAN);
-                    
-                    // If it's a default descriptor, check for other defaults
-                    if ($isDefault) {
-                        $query = $query->where('is_default', true);
-                    } else {
-                        // If it's a dated descriptor, check for same year/month combination
-                        $query = $query->where('year', $this->year)
-                                    ->where('month', $this->month)
-                                    ->where('is_default', false);
-                    }
-                    
-                    // Exclude current record if updating
-                    if ($this->route('descriptor')) {
-                        $query = $query->where('id', '!=', $this->route('descriptor')->id);
-                    }
-                    
-                    if ($query->exists()) {
-                        if ($this->is_default) {
-                            $fail("A default descriptor already exists for this account.");
-                        } else {
-                            $fail("A descriptor for {$this->year}-{$this->month} already exists for this account.");
-                        }
-                    }
+                    $this->validateDescriptorUniqueness($value, $fail);
                 },
             ],
         ];
@@ -83,6 +75,57 @@ class StoreDescriptorRequest extends FormRequest
                 'year' => null,
                 'month' => null,
             ]);
+        }
+    }
+
+    /**
+     * Validate descriptor uniqueness based on account-specific scenarios:
+     * 1. Account-specific dated (emp_account_id + month + year, is_default=false)
+     * 2. Account-specific default (emp_account_id, is_default=true)
+     */
+    protected function validateDescriptorUniqueness($empAccountId, $fail): void
+    {
+        // Only validate if emp_account_id is provided
+        if ($empAccountId === null) {
+            return;
+        }
+
+        $isDefault = filter_var($this->is_default, FILTER_VALIDATE_BOOLEAN);
+        
+        // Scenario 1: Account-specific dated descriptor (emp_account_id + month + year, is_default=false)
+        if (!$isDefault) {
+            $query = TransactionDescriptor::where('emp_account_id', $empAccountId)
+                ->where('year', $this->year)
+                ->where('month', $this->month)
+                ->where('is_default', false);
+            
+            $this->excludeCurrentRecord($query);
+            
+            if ($query->exists()) {
+                $fail("A descriptor for {$this->year}-{$this->month} already exists for this account.");
+            }
+        }
+        
+        // Scenario 2: Account-specific default (emp_account_id, no month/year, is_default=true)
+        else {
+            $query = TransactionDescriptor::where('emp_account_id', $empAccountId)
+                ->where('is_default', true);
+            
+            $this->excludeCurrentRecord($query);
+            
+            if ($query->exists()) {
+                $fail("A default descriptor already exists for this account.");
+            }
+        }
+    }
+
+    /**
+     * Exclude the current record from the query if updating
+     */
+    protected function excludeCurrentRecord($query): void
+    {
+        if ($this->route('descriptor')) {
+            $query->where('id', '!=', $this->route('descriptor')->id);
         }
     }
 }
