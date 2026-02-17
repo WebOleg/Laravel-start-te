@@ -46,8 +46,8 @@ class DescriptorController extends Controller
     {
         $this->service->ensureSingleDefault(
             $request->is_default,
-            $descriptor->id,
-            $request->emp_account_id
+            ignoreId: $descriptor->id,
+            empAccountId: $request->emp_account_id
         );
 
         $descriptor->update($request->validated());

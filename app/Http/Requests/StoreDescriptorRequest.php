@@ -124,8 +124,12 @@ class StoreDescriptorRequest extends FormRequest
      */
     protected function excludeCurrentRecord($query): void
     {
-        if ($this->route('descriptor')) {
-            $query->where('id', '!=', $this->route('descriptor')->id);
+        $descriptor = $this->route('descriptor');
+        if ($descriptor instanceof TransactionDescriptor) {
+            $query->where('id', '!=', $descriptor->id);
+        } elseif ($descriptor) {
+            // Fallback if route model binding is not used
+            $query->where('id', '!=', $descriptor);
         }
     }
 }
