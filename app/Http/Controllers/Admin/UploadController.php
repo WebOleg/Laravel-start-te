@@ -134,7 +134,6 @@ class UploadController extends Controller
 
             $empAccountId = $request->input('emp_account_id');
 
-            // Capture the lock flag
             $applyGlobalLock = $request->boolean('apply_global_lock');
 
             $preValidation = $this->preValidationService->validate($file);
@@ -258,8 +257,12 @@ class UploadController extends Controller
         return DebtorResource::collection($debtors);
     }
 
-    public function validate(Upload $upload): JsonResponse
+    public function validate(Request $request, Upload $upload): JsonResponse
     {
+        $request->validate([
+            'skip_bic_blacklist' => 'nullable|boolean',
+        ]);
+
         if ($upload->status === Upload::STATUS_PROCESSING) {
             return response()->json([
                 'message' => 'Upload is still processing. Please wait.',
@@ -271,6 +274,13 @@ class UploadController extends Controller
                 'message' => 'Validation already in progress.',
                 'status' => 'processing',
             ], 200);
+        }
+
+        // Save BIC blacklist skip flag before dispatching validation
+        if ($request->has('skip_bic_blacklist')) {
+            $upload->update([
+                'skip_bic_blacklist' => $request->boolean('skip_bic_blacklist'),
+            ]);
         }
 
         ProcessValidationJob::dispatch($upload);
@@ -356,6 +366,7 @@ class UploadController extends Controller
                 'ready_for_sync' => (clone $query)->readyForSync()->count(),
                 'skipped' => $skipped,
                 'is_processing' => $upload->isValidationProcessing(),
+                'skip_bic_blacklist' => $upload->skip_bic_blacklist ?? false,
                 'model_counts' => [
                     'all' => (int) $modelStats->all_count,
                     'legacy' => (int) $modelStats->legacy,
@@ -427,13 +438,10 @@ class UploadController extends Controller
 
         $query = $request->input('query', '');
 
-        // Create cache key based on search query
         $cacheKey = 'upload_search:' . md5(strtolower(trim($query)));
 
-        // Track this cache key in a manifest for later invalidation
         $this->trackCacheKey($cacheKey);
 
-        // Cache for 5 minutes (300 seconds)
         $uploads = Cache::remember($cacheKey, 300, function () use ($query) {
             return Upload::where('filename', 'like', "%{$query}%")
                 ->orWhere('original_filename', 'like', "%{$query}%")
@@ -475,16 +483,12 @@ class UploadController extends Controller
         return round(($processed / $upload->total_records) * 100, 2);
     }
 
-    /**
-     * Track cache key for later invalidation.
-     */
     private function trackCacheKey(string $key): void
     {
         $keys = Cache::get('upload_search_keys', []);
         
         if (!in_array($key, $keys)) {
             $keys[] = $key;
-            // Store manifest with 1 day TTL
             Cache::put('upload_search_keys', $keys, 86400);
         }
     }

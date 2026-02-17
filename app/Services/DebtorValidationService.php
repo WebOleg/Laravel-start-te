@@ -100,8 +100,6 @@ class DebtorValidationService
             $errors[] = 'Amount is required';
         }
 
-        // THR-9: postcode, city, address removed from required fields
-
         return $errors;
     }
 
@@ -109,7 +107,6 @@ class DebtorValidationService
     {
         $errors = [];
 
-        // Validate individual name lengths
         if (!empty($debtor->first_name) && strlen($debtor->first_name) > self::NAME_MAX_LENGTH) {
             $errors[] = 'First name cannot exceed ' . self::NAME_MAX_LENGTH . ' characters';
         }
@@ -117,7 +114,6 @@ class DebtorValidationService
             $errors[] = 'Last name cannot exceed ' . self::NAME_MAX_LENGTH . ' characters';
         }
 
-        // Validate individual fields for invalid characters
         if (!empty($debtor->first_name)) {
             if (preg_match(self::INVALID_NAME_PATTERN, $debtor->first_name)) {
                 $errors[] = 'First name contains numbers or symbols';
@@ -289,6 +285,7 @@ class DebtorValidationService
 
     /**
      * Validate against blacklist (IBAN + name + email + BIC).
+     * Respects upload-level skip_bic_blacklist flag.
      */
     protected function validateBlacklist(Debtor $debtor): array
     {
@@ -296,7 +293,12 @@ class DebtorValidationService
 
         $check = $this->blacklistService->checkDebtor($debtor);
 
+        $skipBic = $debtor->upload?->skip_bic_blacklist ?? false;
+
         foreach ($check['reasons'] as $reason) {
+            if ($skipBic && $reason === 'BIC is blacklisted') {
+                continue;
+            }
             $errors[] = $reason;
         }
 

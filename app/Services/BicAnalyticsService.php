@@ -32,19 +32,19 @@ class BicAnalyticsService
         ?string $startDate = null,
         ?string $endDate = null,
         ?string $billingModel = null,
-        ?int $empAccountId = null
+        ?int $empAccountId = null,
+       ?string $cbReasonCode = null
     ): array
     {
-        $cacheKey = $this->buildCacheKey($period, $startDate, $endDate, $billingModel, $empAccountId);
+        $cacheKey = $this->buildCacheKey($period, $startDate, $endDate, $billingModel, $empAccountId, $cbReasonCode);
 
-        return Cache::remember($cacheKey, self::CACHE_TTL, function () use ($period, $startDate, $endDate, $billingModel, $empAccountId) {
-            return $this->calculateAnalytics($period, $startDate, $endDate, $billingModel, $empAccountId);
+        return Cache::remember($cacheKey, self::CACHE_TTL, function () use ($period, $startDate, $endDate, $billingModel, $empAccountId, $cbReasonCode) {
+            return $this->calculateAnalytics($period, $startDate, $endDate, $billingModel, $empAccountId, $cbReasonCode);
         });
     }
 
     /**
      * Get breakdown of analytics for a specific BIC grouped by Price Point (Amount).
-     * Useful to see if CBKs are tied to specific amounts (e.g., 1.99 vs 99.99).
      */
     public function getBicPricePointBreakdown(
         string $bic,
@@ -100,14 +100,69 @@ class BicAnalyticsService
     }
 
     /**
+     * Get CB reason code breakdown for a specific BIC.
+     */
+    public function getBicCbCodeBreakdown(
+        string $bic,
+        string $period = self::DEFAULT_PERIOD,
+        ?string $billingModel = null,
+        ?int $empAccountId = null
+    ): array {
+        [$start, $end] = $this->resolveDateRange($period, null, null);
+
+        $query = DB::table('billing_attempts')
+            ->where('bic', $bic)
+            ->where('status', BillingAttempt::STATUS_CHARGEBACKED)
+            ->whereRaw('COALESCE(emp_created_at, created_at) BETWEEN ? AND ?', [$start, $end]);
+
+        if ($billingModel) {
+            $query->where('billing_model', $billingModel);
+        }
+
+        if ($empAccountId) {
+            $query->where('emp_account_id', $empAccountId);
+        }
+
+        $results = $query
+            ->selectRaw("COALESCE(chargeback_reason_code, 'UNKNOWN') as code, COUNT(*) as count, SUM(amount) as volume")
+            ->groupBy('code')
+            ->orderByDesc('count')
+            ->get();
+
+        $totalCb = $results->sum('count');
+        $totalVolume = $results->sum('volume');
+
+        $codes = [];
+        foreach ($results as $row) {
+            $codes[] = [
+                'code' => $row->code,
+                'count' => (int) $row->count,
+                'volume' => round((float) $row->volume, 2),
+                'percent_count' => $totalCb > 0 ? round(($row->count / $totalCb) * 100, 2) : 0,
+                'percent_volume' => $totalVolume > 0 ? round($row->volume / $totalVolume * 100, 2) : 0,
+            ];
+        }
+
+        return [
+            'bic' => $bic,
+            'period' => $period,
+            'total_chargebacks' => $totalCb,
+            'total_volume' => round($totalVolume, 2),
+            'codes' => $codes,
+        ];
+    }
+
+    /**
      * Calculate BIC analytics grouped by BIC.
+     * Optionally filter by CB reason code to see which BICs have specific chargeback reasons.
      */
     public function calculateAnalytics(
         string $period,
         ?string $startDate = null,
         ?string $endDate = null,
         ?string $billingModel = null,
-        ?int $empAccountId = null
+        ?int $empAccountId = null,
+        ?string $cbReasonCode = null
     ): array
     {
         [$start, $end] = $this->resolveDateRange($period, $startDate, $endDate);
@@ -127,8 +182,19 @@ class BicAnalyticsService
             $query->where('emp_account_id', $empAccountId);
         }
 
-        $chargebackCountCase = $this->buildChargebackCountCase($excludedCbCodes);
-        $chargebackVolumeCase = $this->buildChargebackVolumeCase($excludedCbCodes);
+        // When filtering by CB reason code, override chargeback counting
+        // to only count chargebacks with this specific code
+        if ($cbReasonCode) {
+            $chargebackCountCase = "SUM(CASE WHEN status = '" . BillingAttempt::STATUS_CHARGEBACKED . "'
+                AND chargeback_reason_code = '" . addslashes($cbReasonCode) . "'
+                THEN 1 ELSE 0 END)";
+            $chargebackVolumeCase = "SUM(CASE WHEN status = '" . BillingAttempt::STATUS_CHARGEBACKED . "'
+                AND chargeback_reason_code = '" . addslashes($cbReasonCode) . "'
+                THEN amount ELSE 0 END)";
+        } else {
+            $chargebackCountCase = $this->buildChargebackCountCase($excludedCbCodes);
+            $chargebackVolumeCase = $this->buildChargebackVolumeCase($excludedCbCodes);
+        }
 
         $query->groupBy('bic')
             ->select([
@@ -169,6 +235,7 @@ class BicAnalyticsService
             'period' => $period,
             'model' => $billingModel ?? 'all',
             'emp_account_id' => $empAccountId,
+            'cb_reason_code' => $cbReasonCode,
             'start_date' => $start->toIso8601String(),
             'end_date' => $end->toIso8601String(),
             'threshold' => $threshold,
@@ -236,9 +303,6 @@ class BicAnalyticsService
         }
     }
 
-    /**
-     * Build SQL CASE statement for chargeback count excluding specified reason codes.
-     */
     private function buildChargebackCountCase(array $excludedCodes): string
     {
         if (empty($excludedCodes)) {
@@ -253,9 +317,6 @@ class BicAnalyticsService
                 THEN 1 ELSE 0 END)";
     }
 
-    /**
-     * Build SQL CASE statement for chargeback volume excluding specified reason codes.
-     */
     private function buildChargebackVolumeCase(array $excludedCodes): string
     {
         if (empty($excludedCodes)) {
@@ -275,16 +336,18 @@ class BicAnalyticsService
         ?string $startDate,
         ?string $endDate,
         ?string $billingModel,
-        ?int $empAccountId = null
+        ?int $empAccountId = null,
+        ?string $cbReasonCode = null
     ): string
     {
         $suffix = $billingModel ? "_{$billingModel}" : "";
         $accountSuffix = $empAccountId ? "_acc{$empAccountId}" : "";
+        $cbSuffix = $cbReasonCode ? "_cb{$cbReasonCode}" : "";
 
         if ($startDate && $endDate) {
-            return "bic_analytics_custom_v2_{$startDate}_{$endDate}{$suffix}{$accountSuffix}";
+            return "bic_analytics_custom_v2_{$startDate}_{$endDate}{$suffix}{$accountSuffix}{$cbSuffix}";
         }
-        return "bic_analytics_v2_{$period}{$suffix}{$accountSuffix}";
+        return "bic_analytics_v2_{$period}{$suffix}{$accountSuffix}{$cbSuffix}";
     }
 
     private function resolveDateRange(string $period, ?string $startDate, ?string $endDate): array
@@ -305,12 +368,6 @@ class BicAnalyticsService
         return [$start, $end];
     }
 
-    /**
-     * Process a single BIC row into analytics data.
-     *
-     * CB Rate formula: chargebacks / (approved + chargebacks) × 100
-     * This accounts for the fact that chargebacked transactions were originally approved.
-     */
     private function processBicRow(object $row, float $threshold): array
     {
         $totalTxCount = (int) $row->total_transactions;
@@ -393,11 +450,6 @@ class BicAnalyticsService
         $totals['chargeback_volume'] += $bicData['chargeback_volume'];
     }
 
-    /**
-     * Calculate final rates for totals.
-     *
-     * CB Rate formula: chargebacks / (approved + chargebacks) × 100
-     */
     private function finalizeTotals(array &$totals, float $threshold): void
     {
         $totals['total_volume'] = round($totals['total_volume'], 2);
