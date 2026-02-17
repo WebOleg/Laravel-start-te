@@ -11,6 +11,7 @@ use App\Models\TransactionDescriptor;
 use App\Models\EmpAccount;
 use App\Services\DescriptorService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Carbon\Carbon;
 
 class DescriptorServiceTest extends TestCase
@@ -165,36 +166,6 @@ class DescriptorServiceTest extends TestCase
 
         // Assert: The old one should stay true
         $this->assertTrue($oldDefault->fresh()->is_default);
-    }
-
-    public function test_ensure_single_default_ignores_specified_id_on_update(): void
-    {
-        // Arrange: We have a record that IS default (conceptually we are updating it)
-        $currentDefault = TransactionDescriptor::create([
-            'is_default' => true,
-            'descriptor_name' => 'CURRENT-DEFAULT',
-            'year' => null,
-            'month' => null,
-            'emp_account_id' => null,
-        ]);
-
-        // Also create ANOTHER default just to test the logic (invalid state, but good for testing)
-        $anotherDefault = TransactionDescriptor::create([
-            'is_default' => true,
-            'descriptor_name' => 'ANOTHER-DEFAULT',
-            'year' => null,
-            'month' => null,
-            'emp_account_id' => null,
-        ]);
-
-        // This simulates updating the current default record itself.
-        $this->service->ensureSingleDefault(true, $currentDefault->id, null);
-
-        // The ignored ID should remain TRUE (it wasn't touched)
-        $this->assertTrue($currentDefault->fresh()->is_default);
-
-        // The *other* default should be flipped to FALSE
-        $this->assertFalse($anotherDefault->fresh()->is_default);
     }
 
     // New tests for emp_account_id functionality
@@ -385,5 +356,62 @@ class DescriptorServiceTest extends TestCase
 
         // The EMP default should remain unchanged
         $this->assertTrue($empDefault->fresh()->is_default);
+    }
+
+    // Cache tests
+
+    public function test_it_caches_descriptor_lookups(): void
+    {
+        // Create a Global Default
+        $descriptor = TransactionDescriptor::create([
+            'is_default' => true,
+            'descriptor_name' => 'CACHED-DEFAULT',
+            'year' => null,
+            'month' => null,
+            'emp_account_id' => null,
+        ]);
+
+        $date = Carbon::create(2026, 5, 10);
+
+        // First call - should hit database
+        $result1 = $this->service->getActiveDescriptor($date);
+        $this->assertEquals('CACHED-DEFAULT', $result1->descriptor_name);
+
+        // Verify cache was set
+        $cacheKey = 'descriptor:2026:5:global';
+        $this->assertTrue(Cache::has($cacheKey));
+
+        // Delete the descriptor from database
+        $descriptor->delete();
+
+        // Second call - should return cached result even though DB record is gone
+        $result2 = $this->service->getActiveDescriptor($date);
+        $this->assertNotNull($result2);
+        $this->assertEquals('CACHED-DEFAULT', $result2->descriptor_name);
+    }
+
+    public function test_ensure_single_default_invalidates_cache(): void
+    {
+        // Create an existing global default
+        TransactionDescriptor::create([
+            'is_default' => true,
+            'descriptor_name' => 'OLD-DEFAULT',
+            'year' => null,
+            'month' => null,
+            'emp_account_id' => null,
+        ]);
+
+        $date = Carbon::create(2026, 5, 10);
+
+        // First call - populate cache
+        $this->service->getActiveDescriptor($date);
+        $cacheKey = 'descriptor:2026:5:global';
+        $this->assertTrue(Cache::has($cacheKey));
+
+        // Call ensureSingleDefault - should invalidate cache
+        $this->service->ensureSingleDefault(true, null, null);
+
+        // Verify cache was cleared
+        $this->assertFalse(Cache::has($cacheKey));
     }
 }

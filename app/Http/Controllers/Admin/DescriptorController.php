@@ -39,6 +39,9 @@ class DescriptorController extends Controller
 
         $descriptor = TransactionDescriptor::create($request->validated());
 
+        // Invalidate cache after creating descriptor
+        $this->service->invalidateCache($request->emp_account_id);
+
         return response()->json(['data' => $descriptor], 201);
     }
 
@@ -52,12 +55,20 @@ class DescriptorController extends Controller
 
         $descriptor->update($request->validated());
 
+        // Invalidate cache after updating descriptor
+        $this->service->invalidateCache($request->emp_account_id);
+
         return response()->json(['data' => $descriptor]);
     }
 
     public function destroy(TransactionDescriptor $descriptor): JsonResponse
     {
+        $empAccountId = $descriptor->emp_account_id;
         $descriptor->delete();
+        
+        // Invalidate cache after deleting descriptor
+        $this->service->invalidateCache($empAccountId);
+        
         return response()->json(['message' => 'Deleted successfully']);
     }
 }

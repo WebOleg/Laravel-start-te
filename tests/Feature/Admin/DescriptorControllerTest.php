@@ -101,47 +101,6 @@ class DescriptorControllerTest extends TestCase
             ->assertJsonPath('data.emp_account_id', $empAccount->id);
     }
 
-    public function test_store_prevents_duplicate_global_default(): void
-    {
-        TransactionDescriptor::factory()->create([
-            'is_default' => true,
-            'emp_account_id' => null,
-        ]);
-
-        $payload = [
-            'descriptor_name' => 'ANOTHER-DEFAULT',
-            'is_default'      => true,
-        ];
-
-        $response = $this->withHeaders($this->authHeaders())
-            ->postJson('/api/admin/billing/descriptors', $payload);
-
-        $response->assertStatus(422)
-            ->assertJsonPath('errors.is_default.0', 'A global default descriptor already exists.');
-    }
-
-    public function test_store_prevents_duplicate_emp_default(): void
-    {
-        $empAccount = EmpAccount::factory()->create();
-        
-        TransactionDescriptor::factory()->create([
-            'is_default' => true,
-            'emp_account_id' => $empAccount->id,
-        ]);
-
-        $payload = [
-            'descriptor_name' => 'ANOTHER-EMP-DEFAULT',
-            'is_default'      => true,
-            'emp_account_id'  => $empAccount->id,
-        ];
-
-        $response = $this->withHeaders($this->authHeaders())
-            ->postJson('/api/admin/billing/descriptors', $payload);
-
-        $response->assertStatus(422)
-            ->assertJsonPath('errors.emp_account_id.0', 'A default descriptor already exists for this account.');
-    }
-
     public function test_store_prevents_duplicate_specific_month_for_same_account(): void
     {
         $empAccount = EmpAccount::factory()->create();

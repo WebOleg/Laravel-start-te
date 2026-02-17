@@ -27,19 +27,6 @@ class StoreDescriptorRequest extends FormRequest
             'is_default' => [
                 'required',
                 'boolean',
-                function ($attribute, $value, $fail) {
-                    // Validate global default uniqueness
-                    if ($value && $this->emp_account_id === null) {
-                        $query = TransactionDescriptor::whereNull('emp_account_id')
-                            ->where('is_default', true);
-                        
-                        $this->excludeCurrentRecord($query);
-                        
-                        if ($query->exists()) {
-                            $fail("A global default descriptor already exists.");
-                        }
-                    }
-                },
             ],
 
             // Conditional Logic: If NOT default, Date is required.
@@ -81,7 +68,6 @@ class StoreDescriptorRequest extends FormRequest
     /**
      * Validate descriptor uniqueness based on account-specific scenarios:
      * 1. Account-specific dated (emp_account_id + month + year, is_default=false)
-     * 2. Account-specific default (emp_account_id, is_default=true)
      */
     protected function validateDescriptorUniqueness($empAccountId, $fail): void
     {
@@ -103,18 +89,6 @@ class StoreDescriptorRequest extends FormRequest
             
             if ($query->exists()) {
                 $fail("A descriptor for {$this->year}-{$this->month} already exists for this account.");
-            }
-        }
-        
-        // Scenario 2: Account-specific default (emp_account_id, no month/year, is_default=true)
-        else {
-            $query = TransactionDescriptor::where('emp_account_id', $empAccountId)
-                ->where('is_default', true);
-            
-            $this->excludeCurrentRecord($query);
-            
-            if ($query->exists()) {
-                $fail("A default descriptor already exists for this account.");
             }
         }
     }

@@ -76,6 +76,11 @@ class EmpBillingService
         string $billingModel = DebtorProfile::MODEL_LEGACY,
         array $context = []
     ): BillingAttempt {
+        // Ensure upload relation is loaded to avoid N+1 queries
+        if (!$debtor->relationLoaded('upload')) {
+            $debtor->load('upload');
+        }
+
         $billableAmount = $amount ?? $debtor->amount;
 
         if (!$this->canBill($debtor, $billableAmount)) {

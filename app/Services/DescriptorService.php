@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\TransactionDescriptor;
 use DateTimeInterface;
+use Illuminate\Support\Facades\Cache;
 
 class DescriptorService
 {
@@ -18,31 +19,40 @@ class DescriptorService
     public function getActiveDescriptor(?DateTimeInterface $date = null, ?int $empAccountId = null): ?TransactionDescriptor
     {
         $date = $date ?? now();
+        
+        $cacheKey = sprintf(
+            'descriptor:%s:%s:%s',
+            $date->format('Y'),
+            $date->format('n'),
+            $empAccountId ?? 'global'
+        );
 
-        // Case 1: Specific descriptor for this month/year with matching emp_account_id
-        if ($empAccountId !== null) {
-            $specific = TransactionDescriptor::specificFor($date)
-                ->where('emp_account_id', $empAccountId)
-                ->first();
+        return Cache::remember($cacheKey, 300, function () use ($date, $empAccountId) {
+            // Case 1: Specific descriptor for this month/year with matching emp_account_id
+            if ($empAccountId !== null) {
+                $specific = TransactionDescriptor::specificFor($date)
+                    ->where('emp_account_id', $empAccountId)
+                    ->first();
 
-            if ($specific) {
-                return $specific;
+                if ($specific) {
+                    return $specific;
+                }
+
+                // Case 2: Default descriptor for this emp_account_id
+                $empDefault = TransactionDescriptor::where('is_default', true)
+                    ->where('emp_account_id', $empAccountId)
+                    ->first();
+
+                if ($empDefault) {
+                    return $empDefault;
+                }
             }
 
-            // Case 2: Default descriptor for this emp_account_id
-            $empDefault = TransactionDescriptor::where('is_default', true)
-                ->where('emp_account_id', $empAccountId)
+            // Case 3: Global default descriptor (emp_account_id = null)
+            return TransactionDescriptor::where('is_default', true)
+                ->whereNull('emp_account_id')
                 ->first();
-
-            if ($empDefault) {
-                return $empDefault;
-            }
-        }
-
-        // Case 3: Global default descriptor (emp_account_id = null)
-        return TransactionDescriptor::where('is_default', true)
-            ->whereNull('emp_account_id')
-            ->first();
+        });
     }
 
     /**
@@ -68,5 +78,18 @@ class DescriptorService
         }
 
         $query->update(['is_default' => false]);
+        
+        // Invalidate cache for the affected scope
+        $this->invalidateCache($empAccountId);
+    }
+
+    /**
+     * Invalidate descriptor cache for a specific EMP account or global scope
+     */
+    public function invalidateCache(?int $empAccountId = null): void
+    {
+        // Clear all cached entries for this scope across all months/years
+        // This is a simple approach - clears cache whenever descriptors change
+        Cache::flush();
     }
 }
