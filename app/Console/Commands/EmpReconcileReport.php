@@ -3,7 +3,7 @@
 /**
  * EmpReconcileReport - Compare EMP portal CSV export with our billing_attempts database.
  * Uses temporary DB table for memory-efficient comparison of large datasets.
- * Safe for production: no impact on other processes, no schema changes.
+ * Compares by unique_id only (no date filtering) for accurate SDD reconciliation.
  */
 
 namespace App\Console\Commands;
@@ -16,10 +16,9 @@ class EmpReconcileReport extends Command
 {
     protected $signature = 'emp:reconcile
         {file : Path to EMP CSV export file}
-        {--emp_account_id= : Filter our DB by specific EMP account ID}
         {--export : Save detailed discrepancies to CSV}';
 
-    protected $description = 'Compare EMP portal CSV export with our billing_attempts database and generate reconciliation report';
+    protected $description = 'Compare EMP portal CSV export with our billing_attempts database. Matches by unique_id without date filtering.';
 
     private const STORAGE_DISK = 's3';
     private const STORAGE_PATH = 'reports/emp-reconciliation';
@@ -41,7 +40,6 @@ class EmpReconcileReport extends Command
     public function handle(): int
     {
         $filePath = $this->argument('file');
-        $empAccountId = $this->option('emp_account_id');
         $shouldExport = $this->option('export');
 
         if (!file_exists($filePath)) {
@@ -54,12 +52,10 @@ class EmpReconcileReport extends Command
 
         $startTime = microtime(true);
 
-        // Create temp table for comparison
         $this->tempTable = 'tmp_emp_reconcile_' . getmypid();
         $this->createTempTable();
 
         try {
-            // Parse CSV and load into temp table
             $this->info('Reading EMP CSV and loading into temp table...');
             $empSummary = $this->loadCsvToTempTable($filePath);
 
@@ -75,22 +71,19 @@ class EmpReconcileReport extends Command
 
             $this->displayEmpSummary($empSummary);
 
-            // DB summary
-            $this->info('Querying our database...');
+            $this->info('Querying our database (by unique_id match, no date filter)...');
             $dbTime = microtime(true);
-            $dbSummary = $this->getDbSummary($empSummary['date_from'], $empSummary['date_to'], $empAccountId);
+            $dbSummary = $this->getDbSummary();
             $this->info("DB query completed in " . $this->elapsed($dbTime));
             $this->displayDbSummary($dbSummary);
 
-            // Compare via SQL joins
             $this->newLine();
-            $this->info('=== COMPARISON ===');
+            $this->info('=== COMPARISON (by unique_id only) ===');
             $compareTime = microtime(true);
-            $discrepancies = $this->compareViaSql($empSummary['date_from'], $empSummary['date_to'], $empAccountId);
+            $discrepancies = $this->compareViaSql();
             $this->info("Comparison completed in " . $this->elapsed($compareTime));
             $this->displayComparison($empSummary, $dbSummary, $discrepancies);
 
-            // Export
             if ($shouldExport) {
                 $this->exportReport($empSummary, $dbSummary, $discrepancies);
             }
@@ -179,7 +172,6 @@ class EmpReconcileReport extends Command
             $type = trim($row[$idx['Type']] ?? '');
             $amount = (float) str_replace(',', '.', $row[$idx['Amount (with decimal mark per currency exponent)']] ?? '0');
             $dateTime = trim($row[$idx['DateTime (UTC)']] ?? '');
-            $terminal = trim($row[$idx['Terminal']] ?? '');
 
             $mappedStatus = self::EMP_STATUS_MAP["{$status}|{$type}"] ?? "{$status}|{$type}";
             $statusCounts[$mappedStatus] = ($statusCounts[$mappedStatus] ?? 0) + 1;
@@ -188,6 +180,7 @@ class EmpReconcileReport extends Command
                 $totalAmount[$mappedStatus] += $amount;
             }
 
+            $terminal = trim($row[$idx['Terminal']] ?? '');
             if ($terminal && !in_array($terminal, $terminals)) {
                 $terminals[] = $terminal;
             }
@@ -248,21 +241,14 @@ class EmpReconcileReport extends Command
         ];
     }
 
-    private function getDbSummary(string $dateFrom, string $dateTo, ?string $empAccountId): array
+    private function getDbSummary(): array
     {
-        $query = DB::table('billing_attempts')
-            ->where('created_at', '>=', $dateFrom . ' 00:00:00')
-            ->where('created_at', '<=', $dateTo . ' 23:59:59');
-
-        if ($empAccountId) {
-            $query->where('emp_account_id', (int) $empAccountId);
-        }
-
-        $rows = $query->selectRaw("
-            status,
-            COUNT(*) as cnt,
-            SUM(amount::numeric) as total_amount
-        ")->groupBy('status')->get();
+        $rows = DB::select("
+            SELECT ba.status, COUNT(*) as cnt, SUM(ba.amount::numeric) as total_amount
+            FROM billing_attempts ba
+            INNER JOIN {$this->tempTable} t ON t.unique_id = ba.unique_id
+            GROUP BY ba.status
+        ");
 
         $statusCounts = [];
         $totalAmount = [];
@@ -281,38 +267,17 @@ class EmpReconcileReport extends Command
         ];
     }
 
-    private function compareViaSql(string $dateFrom, string $dateTo, ?string $empAccountId): array
+    private function compareViaSql(): array
     {
-        $accountFilter = '';
-        if ($empAccountId) {
-            $accountFilter = ' AND ba.emp_account_id = ' . (int) $empAccountId;
-        }
-
-        $dateFilter = "ba.created_at >= '{$dateFrom} 00:00:00' AND ba.created_at <= '{$dateTo} 23:59:59'";
-
-        // In EMP (sales only) but not in our DB
         $inEmpNotDb = DB::select("
             SELECT t.unique_id, t.status, t.amount, t.customer_name, t.iban, t.date_time
             FROM {$this->tempTable} t
             LEFT JOIN billing_attempts ba ON ba.unique_id = t.unique_id
-                AND {$dateFilter} {$accountFilter}
             WHERE t.status IN ('approved', 'chargebacked', 'error')
             AND ba.id IS NULL
             ORDER BY t.date_time
         ");
 
-        // In our DB but not in EMP
-        $inDbNotEmp = DB::select("
-            SELECT ba.unique_id, ba.status, ba.amount, ba.emp_account_id, ba.created_at
-            FROM billing_attempts ba
-            LEFT JOIN {$this->tempTable} t ON t.unique_id = ba.unique_id
-            WHERE {$dateFilter} {$accountFilter}
-            AND ba.unique_id IS NOT NULL
-            AND t.unique_id IS NULL
-            ORDER BY ba.created_at
-        ");
-
-        // Status mismatches
         $statusMismatch = DB::select("
             SELECT t.unique_id,
                    t.status as emp_status,
@@ -323,13 +288,11 @@ class EmpReconcileReport extends Command
                    ba.created_at as db_date
             FROM {$this->tempTable} t
             INNER JOIN billing_attempts ba ON ba.unique_id = t.unique_id
-                AND {$dateFilter} {$accountFilter}
             WHERE t.status IN ('approved', 'chargebacked', 'error')
             AND t.status != ba.status
             ORDER BY t.date_time
         ");
 
-        // Amount mismatches
         $amountMismatch = DB::select("
             SELECT t.unique_id,
                    t.amount as emp_amount,
@@ -338,7 +301,6 @@ class EmpReconcileReport extends Command
                    ba.status
             FROM {$this->tempTable} t
             INNER JOIN billing_attempts ba ON ba.unique_id = t.unique_id
-                AND {$dateFilter} {$accountFilter}
             WHERE t.status IN ('approved', 'chargebacked', 'error')
             AND ABS(t.amount - ba.amount::numeric) > 0.01
             ORDER BY ABS(t.amount - ba.amount::numeric) DESC
@@ -346,7 +308,6 @@ class EmpReconcileReport extends Command
 
         return [
             'in_emp_not_db' => $inEmpNotDb,
-            'in_db_not_emp' => $inDbNotEmp,
             'status_mismatch' => $statusMismatch,
             'amount_mismatch' => $amountMismatch,
         ];
@@ -372,7 +333,7 @@ class EmpReconcileReport extends Command
 
     private function displayDbSummary(array $dbSummary): void
     {
-        $this->info('--- Our Database ---');
+        $this->info('--- Our Database (matched records only) ---');
         $rows = [];
         foreach ($dbSummary['status_counts'] as $status => $count) {
             $rows[] = [$status, $count];
@@ -414,14 +375,12 @@ class EmpReconcileReport extends Command
         $this->newLine();
 
         $inEmpNotDb = count($discrepancies['in_emp_not_db']);
-        $inDbNotEmp = count($discrepancies['in_db_not_emp']);
         $statusMismatch = count($discrepancies['status_mismatch']);
         $amountMismatch = count($discrepancies['amount_mismatch']);
 
         $this->info('--- Discrepancies ---');
         $this->table(['Type', 'Count'], [
             ['In EMP but not in our DB', $inEmpNotDb],
-            ['In our DB but not in EMP', $inDbNotEmp],
             ['Status mismatch', $statusMismatch],
             ['Amount mismatch (>0.01)', $amountMismatch],
         ]);
@@ -455,8 +414,23 @@ class EmpReconcileReport extends Command
             );
         }
 
+        if ($inEmpNotDb > 0) {
+            $this->warn("Missing in our DB (first 10):");
+            $sample = array_slice($discrepancies['in_emp_not_db'], 0, 10);
+            $this->table(
+                ['Unique ID', 'Status', 'Amount', 'IBAN', 'Name'],
+                array_map(fn($d) => [
+                    substr($d->unique_id, 0, 16) . '...',
+                    $d->status,
+                    'EUR ' . number_format((float) $d->amount, 2),
+                    $d->iban ?? '',
+                    $d->customer_name ?? '',
+                ], $sample)
+            );
+        }
+
         $this->newLine();
-        $totalIssues = $inEmpNotDb + $inDbNotEmp + $statusMismatch + $amountMismatch;
+        $totalIssues = $inEmpNotDb + $statusMismatch + $amountMismatch;
         if ($totalIssues === 0) {
             $this->info('RECONCILIATION PASSED - No discrepancies found');
         } else {
@@ -505,6 +479,7 @@ class EmpReconcileReport extends Command
         $lines[] = 'Generated: ' . now()->toDateTimeString();
         $lines[] = "Period: {$empSummary['date_from']} to {$empSummary['date_to']}";
         $lines[] = 'Terminals: ' . implode(', ', $empSummary['terminals']);
+        $lines[] = 'Method: unique_id matching (no date filtering)';
         $lines[] = '';
         $lines[] = '--- EMP PORTAL ---';
         foreach ($empSummary['status_counts'] as $status => $count) {
@@ -518,7 +493,7 @@ class EmpReconcileReport extends Command
             }
         }
         $lines[] = '';
-        $lines[] = '--- OUR DATABASE ---';
+        $lines[] = '--- OUR DATABASE (matched records) ---';
         foreach ($dbSummary['status_counts'] as $status => $count) {
             $lines[] = "  {$status}: {$count}";
         }
@@ -532,12 +507,10 @@ class EmpReconcileReport extends Command
         $lines[] = '';
         $lines[] = '--- DISCREPANCIES ---';
         $lines[] = 'In EMP not in DB: ' . count($discrepancies['in_emp_not_db']);
-        $lines[] = 'In DB not in EMP: ' . count($discrepancies['in_db_not_emp']);
         $lines[] = 'Status mismatch: ' . count($discrepancies['status_mismatch']);
         $lines[] = 'Amount mismatch: ' . count($discrepancies['amount_mismatch']);
 
         $total = count($discrepancies['in_emp_not_db'])
-            + count($discrepancies['in_db_not_emp'])
             + count($discrepancies['status_mismatch'])
             + count($discrepancies['amount_mismatch']);
 
@@ -567,13 +540,6 @@ class EmpReconcileReport extends Command
             ]);
         }
 
-        foreach ($discrepancies['in_db_not_emp'] as $row) {
-            fputcsv($handle, [
-                'IN_DB_NOT_EMP', $row->unique_id, '-', $row->status,
-                '-', $row->amount, 'Account: ' . ($row->emp_account_id ?? ''),
-            ]);
-        }
-
         foreach ($discrepancies['status_mismatch'] as $row) {
             fputcsv($handle, [
                 'STATUS_MISMATCH', $row->unique_id, $row->emp_status, $row->db_status,
@@ -598,7 +564,6 @@ class EmpReconcileReport extends Command
     private function hasDiscrepancies(array $discrepancies): bool
     {
         return !empty($discrepancies['in_emp_not_db'])
-            || !empty($discrepancies['in_db_not_emp'])
             || !empty($discrepancies['status_mismatch'])
             || !empty($discrepancies['amount_mismatch']);
     }
