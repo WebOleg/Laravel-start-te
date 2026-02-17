@@ -20,6 +20,9 @@ class EmpReconcileReport extends Command
 
     protected $description = 'Compare EMP portal CSV export with our billing_attempts database and generate reconciliation report';
 
+    private const STORAGE_DISK = 's3';
+    private const STORAGE_PATH = 'reports/emp-reconciliation';
+
     private const EMP_STATUS_MAP = [
         'approved|sdd_sale' => 'approved',
         'chargebacked|sdd_sale' => 'chargebacked',
@@ -69,8 +72,8 @@ class EmpReconcileReport extends Command
         $discrepancies = $this->compare($empData, $dbData);
         $this->displayComparison($empData, $dbData, $discrepancies);
 
-        if ($shouldExport && !empty($discrepancies)) {
-            $this->exportDiscrepancies($discrepancies, $empData['date_from'], $empData['date_to']);
+        if ($shouldExport) {
+            $this->exportReport($empData, $dbData, $discrepancies);
         }
 
         return 0;
@@ -434,9 +437,94 @@ class EmpReconcileReport extends Command
         $this->newLine();
     }
 
-    private function exportDiscrepancies(array $discrepancies, string $dateFrom, string $dateTo): void
+    private function exportReport(array $empData, array $dbData, array $discrepancies): void
     {
-        $filename = "emp_reconcile_{$dateFrom}_{$dateTo}_" . date('His') . '.csv';
+        $dateFrom = $empData['date_from'];
+        $dateTo = $empData['date_to'];
+        $timestamp = date('Ymd_His');
+
+        $summaryName = "summary_{$dateFrom}_to_{$dateTo}_{$timestamp}.txt";
+        $discrepancyName = "discrepancies_{$dateFrom}_to_{$dateTo}_{$timestamp}.csv";
+
+        $basePath = self::STORAGE_PATH . "/{$dateFrom}_{$dateTo}";
+
+        // Build summary text report
+        $summary = $this->buildSummaryReport($empData, $dbData, $discrepancies);
+        Storage::disk(self::STORAGE_DISK)->put("{$basePath}/{$summaryName}", $summary);
+        $this->info("Summary saved: {$basePath}/{$summaryName}");
+
+        // Build discrepancies CSV
+        if ($this->hasDiscrepancies($discrepancies)) {
+            $csv = $this->buildDiscrepancyCsv($discrepancies);
+            Storage::disk(self::STORAGE_DISK)->put("{$basePath}/{$discrepancyName}", $csv);
+            $this->info("Discrepancies saved: {$basePath}/{$discrepancyName}");
+        }
+
+        // Store original EMP CSV as reference
+        $originalName = "emp_export_{$dateFrom}_to_{$dateTo}.csv";
+        $originalContent = file_get_contents($this->argument('file'));
+        Storage::disk(self::STORAGE_DISK)->put("{$basePath}/{$originalName}", $originalContent);
+        $this->info("Original EMP CSV archived: {$basePath}/{$originalName}");
+
+        $this->newLine();
+        $this->info("All files saved to S3: {$basePath}/");
+    }
+
+    private function buildSummaryReport(array $empData, array $dbData, array $discrepancies): string
+    {
+        $lines = [];
+        $lines[] = '=== EMP RECONCILIATION REPORT ===';
+        $lines[] = 'Generated: ' . now()->toDateTimeString();
+        $lines[] = "Period: {$empData['date_from']} to {$empData['date_to']}";
+        $lines[] = 'Terminals: ' . implode(', ', $empData['terminals']);
+        $lines[] = '';
+        $lines[] = '--- EMP PORTAL ---';
+        foreach ($empData['status_counts'] as $status => $count) {
+            $lines[] = "  {$status}: {$count}";
+        }
+        $lines[] = '';
+        $lines[] = 'EMP Volumes:';
+        foreach ($empData['amounts'] as $status => $amount) {
+            if ($amount > 0) {
+                $lines[] = "  {$status}: EUR " . number_format($amount, 2);
+            }
+        }
+        $lines[] = '';
+        $lines[] = '--- OUR DATABASE ---';
+        foreach ($dbData['status_counts'] as $status => $count) {
+            $lines[] = "  {$status}: {$count}";
+        }
+        $lines[] = '';
+        $lines[] = 'DB Volumes:';
+        foreach ($dbData['amounts'] as $status => $amount) {
+            if ($amount > 0) {
+                $lines[] = "  {$status}: EUR " . number_format($amount, 2);
+            }
+        }
+        $lines[] = '';
+        $lines[] = '--- DISCREPANCIES ---';
+        $lines[] = 'In EMP not in DB: ' . count($discrepancies['in_emp_not_db']);
+        $lines[] = 'In DB not in EMP: ' . count($discrepancies['in_db_not_emp']);
+        $lines[] = 'Status mismatch: ' . count($discrepancies['status_mismatch']);
+        $lines[] = 'Amount mismatch: ' . count($discrepancies['amount_mismatch']);
+
+        $total = count($discrepancies['in_emp_not_db'])
+            + count($discrepancies['in_db_not_emp'])
+            + count($discrepancies['status_mismatch'])
+            + count($discrepancies['amount_mismatch']);
+
+        $lines[] = '';
+        if ($total === 0) {
+            $lines[] = 'RESULT: RECONCILIATION PASSED';
+        } else {
+            $lines[] = "RESULT: {$total} DISCREPANCIES FOUND";
+        }
+
+        return implode("\n", $lines);
+    }
+
+    private function buildDiscrepancyCsv(array $discrepancies): string
+    {
         $handle = fopen('php://temp', 'r+');
 
         fputcsv($handle, [
@@ -496,10 +584,14 @@ class EmpReconcileReport extends Command
         $content = stream_get_contents($handle);
         fclose($handle);
 
-        Storage::disk('local')->put($filename, $content);
-        $path = Storage::disk('local')->path($filename);
+        return $content;
+    }
 
-        $this->info("Discrepancies exported to: {$path}");
-        $this->line("docker cp <container>:{$path} ./{$filename}");
+    private function hasDiscrepancies(array $discrepancies): bool
+    {
+        return !empty($discrepancies['in_emp_not_db'])
+            || !empty($discrepancies['in_db_not_emp'])
+            || !empty($discrepancies['status_mismatch'])
+            || !empty($discrepancies['amount_mismatch']);
     }
 }
