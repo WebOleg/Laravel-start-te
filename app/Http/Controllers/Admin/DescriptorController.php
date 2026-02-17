@@ -4,9 +4,11 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\StoreDescriptorRequest;
+use App\Http\Resources\DescriptorResource;
 use App\Models\TransactionDescriptor;
 use App\Services\DescriptorService;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 
 class DescriptorController extends Controller
 {
@@ -17,14 +19,15 @@ class DescriptorController extends Controller
         $this->service = $service;
     }
 
-    public function index(): JsonResponse
+    public function index(Request $request)
     {
-        $descriptors = TransactionDescriptor::orderByDesc('is_default')
+        $descriptors = TransactionDescriptor::with('empAccount')
+                                            ->orderByDesc('is_default')
                                             ->orderBy('year')
                                             ->orderBy('month')
-                                            ->get();
+                                            ->paginate(min((int) $request->input('per_page', 20), 100));
 
-        return response()->json(['data' => $descriptors]);
+        return DescriptorResource::collection($descriptors);
     }
 
     public function store(StoreDescriptorRequest $request): JsonResponse

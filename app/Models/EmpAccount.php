@@ -130,4 +130,12 @@ class EmpAccount extends Model
     {
         return $this->hasMany(BillingAttempt::class);
     }
+
+    /**
+     * Get all transaction descriptors associated with this EMP account.
+     */
+    public function transactionDescriptors(): HasMany
+    {
+        return $this->hasMany(TransactionDescriptor::class);
+    }
 }

@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests;
 
+use App\Models\TransactionDescriptor;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
@@ -38,10 +39,37 @@ class StoreDescriptorRequest extends FormRequest
                 'min:1',
                 'max:12',
                 Rule::requiredIf(!$this->is_default),
-                // Prevent duplicate months (Unique composite index check)
-                Rule::unique('transaction_descriptors')
-                    ->where('year', $this->year)
-                    ->ignore($this->route('descriptor')), // Ignore self on update
+            ],
+            'emp_account_id' => [
+                'required',
+                'exists:emp_accounts,id',
+                function ($attribute, $value, $fail) {
+                    $query = TransactionDescriptor::where('emp_account_id', $value);
+                    $isDefault = filter_var($this->is_default, FILTER_VALIDATE_BOOLEAN);
+                    
+                    // If it's a default descriptor, check for other defaults
+                    if ($isDefault) {
+                        $query = $query->where('is_default', true);
+                    } else {
+                        // If it's a dated descriptor, check for same year/month combination
+                        $query = $query->where('year', $this->year)
+                                    ->where('month', $this->month)
+                                    ->where('is_default', false);
+                    }
+                    
+                    // Exclude current record if updating
+                    if ($this->route('descriptor')) {
+                        $query = $query->where('id', '!=', $this->route('descriptor')->id);
+                    }
+                    
+                    if ($query->exists()) {
+                        if ($this->is_default) {
+                            $fail("A default descriptor already exists for this account.");
+                        } else {
+                            $fail("A descriptor for {$this->year}-{$this->month} already exists for this account.");
+                        }
+                    }
+                },
             ],
         ];
     }
