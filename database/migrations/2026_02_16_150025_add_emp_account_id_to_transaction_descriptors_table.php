@@ -17,6 +17,10 @@ return new class extends Migration
                   ->constrained('emp_accounts')
                   ->nullOnDelete()
                   ->after('id');
+            
+            // Drop old unique constraint and create new one with emp_account_id
+            $table->dropUnique(['year', 'month']);
+            $table->unique(['year', 'month', 'emp_account_id']);
         });
     }
 

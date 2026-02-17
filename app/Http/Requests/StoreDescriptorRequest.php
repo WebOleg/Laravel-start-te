@@ -38,14 +38,16 @@ class StoreDescriptorRequest extends FormRequest
                 'min:1',
                 'max:12',
                 Rule::requiredIf(!$this->is_default),
-                // Prevent duplicate months (Unique composite index check)
-                Rule::unique('transaction_descriptors')
-                    ->where('year', $this->year)
-                    ->ignore($this->route('descriptor')), // Ignore self on update
             ],
             'emp_account_id' => [
                 'required',
-                'exists:emp_accounts,id'
+                'exists:emp_accounts,id',
+                // Prevent duplicate (Unique composite indes: year, month, emp_account_id)
+                Rule::unique('transaction_descriptors')
+                        ->where('year', $this->year)
+                        ->where('month', $this->month)
+                        ->where('emp_account_id', $this->emp_account_id)
+                        ->ignore($this->route('descriptor'))
             ],
         ];
     }
