@@ -32,7 +32,10 @@ class DescriptorController extends Controller
 
     public function store(StoreDescriptorRequest $request): JsonResponse
     {
-        $this->service->ensureSingleDefault($request->is_default);
+        $this->service->ensureSingleDefault(
+            $request->is_default,
+            empAccountId: $request->emp_account_id
+        );
 
         $descriptor = TransactionDescriptor::create($request->validated());
 
@@ -41,7 +44,11 @@ class DescriptorController extends Controller
 
     public function update(StoreDescriptorRequest $request, TransactionDescriptor $descriptor): JsonResponse
     {
-        $this->service->ensureSingleDefault($request->is_default, $descriptor->id);
+        $this->service->ensureSingleDefault(
+            $request->is_default,
+            $descriptor->id,
+            $request->emp_account_id
+        );
 
         $descriptor->update($request->validated());
 
