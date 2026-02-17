@@ -32,25 +32,43 @@ class DescriptorController extends Controller
 
     public function store(StoreDescriptorRequest $request): JsonResponse
     {
-        $this->service->ensureSingleDefault($request->is_default);
+        $this->service->ensureSingleDefault(
+            $request->is_default,
+            empAccountId: $request->emp_account_id
+        );
 
         $descriptor = TransactionDescriptor::create($request->validated());
+
+        // Invalidate cache after creating descriptor
+        $this->service->invalidateCache($request->emp_account_id);
 
         return response()->json(['data' => $descriptor], 201);
     }
 
     public function update(StoreDescriptorRequest $request, TransactionDescriptor $descriptor): JsonResponse
     {
-        $this->service->ensureSingleDefault($request->is_default, $descriptor->id);
+        $this->service->ensureSingleDefault(
+            $request->is_default,
+            ignoreId: $descriptor->id,
+            empAccountId: $request->emp_account_id
+        );
 
         $descriptor->update($request->validated());
+
+        // Invalidate cache after updating descriptor
+        $this->service->invalidateCache($request->emp_account_id);
 
         return response()->json(['data' => $descriptor]);
     }
 
     public function destroy(TransactionDescriptor $descriptor): JsonResponse
     {
+        $empAccountId = $descriptor->emp_account_id;
         $descriptor->delete();
+        
+        // Invalidate cache after deleting descriptor
+        $this->service->invalidateCache($empAccountId);
+        
         return response()->json(['message' => 'Deleted successfully']);
     }
 }
