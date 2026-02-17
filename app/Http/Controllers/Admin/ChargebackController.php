@@ -26,7 +26,11 @@ class ChargebackController extends Controller
         ]);
 
         $chargebacks = $this->chargebackService->getChargebacks($request);
-        return ChargebackResource::collection($chargebacks);
+        $stats = $this->chargebackService->getChargebackStatistics($request);
+        
+        return ChargebackResource::collection($chargebacks)->additional([
+            'stats' => $stats,
+        ]);
     }
 
     public function codes(){

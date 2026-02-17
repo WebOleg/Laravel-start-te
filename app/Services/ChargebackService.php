@@ -30,12 +30,12 @@ class ChargebackService
         ])
         ->where('status', BillingAttempt::STATUS_CHARGEBACKED);
 
-        if ($request->has('code'))
+        if ($request->filled('code'))
         {
             $chargebacks->where('chargeback_reason_code', $request->input('code'));
         }
 
-        if ($request->has('emp_account_id'))
+        if ($request->filled('emp_account_id'))
         {
             $chargebacks->where('emp_account_id', $request->input('emp_account_id'));
         }
@@ -48,7 +48,7 @@ class ChargebackService
             
             if ($period !== 'all') {
                 if ($dateMode === 'chargeback') {
-                    $chargebacks->whereDate('chargebacked_at', '>=', $startDate);
+                    $chargebacks->where('chargebacked_at', '>=', $startDate);
                 } else {
                     // transaction mode (default)
                     $chargebacks->whereRaw('COALESCE(billing_attempts.emp_created_at, billing_attempts.created_at) >= ?', [$startDate]);
@@ -410,5 +410,122 @@ class ChargebackService
         } catch (\Exception $e) {
             return null;
         }
+    }
+
+    /**
+     * Get comprehensive chargeback statistics
+     */
+    public function getChargebackStatistics(Request $request): array
+    {
+        $period = $request->input('period', 'all');
+        $dateMode = $request->input('date_mode', 'transaction');
+        $empAccountId = $request->filled('emp_account_id') ? $request->input('emp_account_id') : null;
+        $code = $request->filled('code') ? $request->input('code') : null;
+        
+        // Build cache key from parameters
+        $cacheKey = 'chargeback_stats:' . md5(json_encode([
+            'period' => $period,
+            'date_mode' => $dateMode,
+            'emp_account_id' => $empAccountId,
+            'code' => $code,
+        ]));
+        
+        $ttl = config('tether.cache.ttl_short', 600); // 60 seconds default
+        
+        return Cache::remember($cacheKey, $ttl, function () use ($request, $period, $dateMode, $empAccountId, $code) {
+            // Build the same query as getChargebacks for consistency
+            $query = BillingAttempt::where('status', BillingAttempt::STATUS_CHARGEBACKED);
+
+            if ($code) {
+                $query->where('chargeback_reason_code', $code);
+            }
+
+            if ($empAccountId) {
+                $query->where('emp_account_id', $empAccountId);
+            }
+
+            if ($period !== 'all') {
+                $startDate = $this->getStartDateFromPeriod($period);
+                
+                if ($dateMode === 'chargeback') {
+                    $query->where('chargebacked_at', '>=', $startDate);
+                } else {
+                    // transaction mode (default)
+                    $query->whereRaw('COALESCE(billing_attempts.emp_created_at, billing_attempts.created_at) >= ?', [$startDate]);
+                }
+            }
+
+            // Get statistics
+            $stats = $query->selectRaw('
+                COUNT(*) as total_count,
+                COALESCE(SUM(amount), 0) as total_amount,
+                COUNT(DISTINCT emp_account_id) as affected_accounts
+            ')->first();
+
+            // Get approved count for chargeback rate
+            $approvedQuery = BillingAttempt::where('status', BillingAttempt::STATUS_APPROVED);
+            
+            if ($empAccountId) {
+                $approvedQuery->where('emp_account_id', $empAccountId);
+            }
+
+            if ($period !== 'all') {
+                $startDate = $this->getStartDateFromPeriod($period);
+                
+                if ($dateMode === 'chargeback') {
+                    $approvedQuery->where('chargebacked_at', '>=', $startDate);
+                } else {
+                    $approvedQuery->whereRaw('COALESCE(billing_attempts.emp_created_at, billing_attempts.created_at) >= ?', [$startDate]);
+                }
+            }
+
+            $approvedCount = $approvedQuery->count();
+
+            // Get top reason code
+            $topReasonQuery = BillingAttempt::select('chargeback_reason_code', DB::raw('COUNT(*) as count'))
+                ->where('status', BillingAttempt::STATUS_CHARGEBACKED);
+            
+            if ($code) {
+                $topReasonQuery->where('chargeback_reason_code', $code);
+            }
+
+            if ($empAccountId) {
+                $topReasonQuery->where('emp_account_id', $empAccountId);
+            }
+
+            if ($period !== 'all') {
+                $startDate = $this->getStartDateFromPeriod($period);
+                
+                if ($dateMode === 'chargeback') {
+                    $topReasonQuery->where('chargebacked_at', '>=', $startDate);
+                } else {
+                    $topReasonQuery->whereRaw('COALESCE(billing_attempts.emp_created_at, billing_attempts.created_at) >= ?', [$startDate]);
+                }
+            }
+
+            $topReason = $topReasonQuery
+                ->groupBy('chargeback_reason_code')
+                ->orderByDesc('count')
+                ->first();
+
+            $totalCount = (int) $stats->total_count;
+            $totalAmount = (float) $stats->total_amount;
+            
+            return [
+                'total_chargebacks_count' => $totalCount,
+                'total_chargeback_amount' => round($totalAmount, 2),
+                'chargeback_rate' => ($approvedCount + $totalCount) > 0 
+                    ? round(($totalCount / ($approvedCount + $totalCount)) * 100, 2)
+                    : 0,
+                'average_chargeback_amount' => $totalCount > 0 
+                    ? round($totalAmount / $totalCount, 2) 
+                    : 0,
+                'most_common_reason_code' => $topReason ? [
+                    'code' => $topReason->chargeback_reason_code,
+                    'count' => (int) $topReason->count,
+                ] : null,
+                'affected_accounts' => (int) $stats->affected_accounts,
+            ];
+        });
     }
 }
