@@ -10,6 +10,7 @@ namespace App\Services;
 use App\Models\BillingAttempt;
 use App\Models\Chargeback;
 use App\Models\Upload;
+use App\Traits\HasDatePeriods;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -18,6 +19,8 @@ use Carbon\Carbon;
 
 class ChargebackService
 {
+    use HasDatePeriods;
+
     public function getChargebacks(Request $request)
     {
         $chargebacks = BillingAttempt::with([
@@ -27,12 +30,30 @@ class ChargebackService
         ])
         ->where('status', BillingAttempt::STATUS_CHARGEBACKED);
 
-        if ($request->has('code')) {
+        if ($request->has('code'))
+        {
             $chargebacks->where('chargeback_reason_code', $request->input('code'));
         }
 
-        if ($request->has('emp_account_id')) {
+        if ($request->has('emp_account_id'))
+        {
             $chargebacks->where('emp_account_id', $request->input('emp_account_id'));
+        }
+
+        if ($request->has('period'))
+        {
+            $period = $request->input('period');
+            $dateMode = $request->input('date_mode', 'transaction');
+            $startDate = $this->getStartDateFromPeriod($period);
+            
+            if ($period !== 'all') {
+                if ($dateMode === 'chargeback') {
+                    $chargebacks->whereDate('chargebacked_at', '>=', $startDate);
+                } else {
+                    // transaction mode (default)
+                    $chargebacks->whereRaw('COALESCE(billing_attempts.emp_created_at, billing_attempts.created_at) >= ?', [$startDate]);
+                }
+            }
         }
 
         $perPage = min((int) $request->input('per_page', 50), 100);
