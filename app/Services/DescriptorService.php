@@ -8,18 +8,41 @@ use DateTimeInterface;
 class DescriptorService
 {
     /**
-     * Determine the active descriptor for a given date.
+     * Determine the active descriptor for a given date and EMP account.
+     *
+     * Three-tier fallback:
+     * 1. Specific descriptor for this month/year with matching emp_account_id
+     * 2. Default descriptor (is_default=true) for this emp_account_id
+     * 3. Global default descriptor (is_default=true with emp_account_id=null)
      */
-    public function getActiveDescriptor(?DateTimeInterface $date = null): ?TransactionDescriptor
+    public function getActiveDescriptor(?DateTimeInterface $date = null, ?int $empAccountId = null): ?TransactionDescriptor
     {
         $date = $date ?? now();
-        $specific = TransactionDescriptor::specificFor($date)->first();
 
-        if ($specific) {
-            return $specific;
+        // Case 1: Specific descriptor for this month/year with matching emp_account_id
+        if ($empAccountId !== null) {
+            $specific = TransactionDescriptor::specificFor($date)
+                ->where('emp_account_id', $empAccountId)
+                ->first();
+
+            if ($specific) {
+                return $specific;
+            }
+
+            // Case 2: Default descriptor for this emp_account_id
+            $empDefault = TransactionDescriptor::where('is_default', true)
+                ->where('emp_account_id', $empAccountId)
+                ->first();
+
+            if ($empDefault) {
+                return $empDefault;
+            }
         }
 
-        return TransactionDescriptor::defaultFallback()->first();
+        // Case 3: Global default descriptor (emp_account_id = null)
+        return TransactionDescriptor::where('is_default', true)
+            ->whereNull('emp_account_id')
+            ->first();
     }
 
     /**

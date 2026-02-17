@@ -186,6 +186,7 @@ class EmpBillingService
                         BillingAttempt::STATUS_APPROVED,
                     ]);
             })
+            ->with('upload')
             ->cursor();
 
         return $this->billBatch($debtors, $notificationUrl);
@@ -350,7 +351,8 @@ class EmpBillingService
         ];
 
         // DD-01: Dynamic Descriptor Injection
-        $descriptor = $this->descriptorService->getActiveDescriptor(now());
+        $empAccountId = $debtor->upload?->emp_account_id ?? null;
+        $descriptor = $this->descriptorService->getActiveDescriptor(now(), $empAccountId);
 
         if ($descriptor) {
             // filter removes nulls (e.g. if city/country are not set)
