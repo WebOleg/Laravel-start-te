@@ -64,37 +64,44 @@ class TransactionDescriptorSeeder extends Seeder
         foreach ($descriptors as $descriptor) {
             TransactionDescriptor::updateOrCreate(
                 [
-                    'year'  => $descriptor['year'],
-                    'month' => $descriptor['month'],
+                    'year'           => $descriptor['year'],
+                    'month'          => $descriptor['month'],
+                    'emp_account_id' => $descriptor['emp_account_id'],
                 ],
                 $descriptor
             );
         }
 
-        // Create additional random entries for testing with unique year/month combinations
-        $usedCombinations = [
-            [2025, 1],
-            [2025, 2],
-            [2025, 3],
-            [null, null],
-        ];
+        // Create additional random entries for testing with unique year/month/emp_account_id combinations
+        $usedCombinations = [];
+        
+        // Track already used combinations
+        foreach ($descriptors as $descriptor) {
+            $usedCombinations[] = [
+                $descriptor['year'],
+                $descriptor['month'],
+                $descriptor['emp_account_id']
+            ];
+        }
 
         for ($i = 0; $i < 5; $i++) {
             do {
                 $year = rand(2026, 2030);
                 $month = rand(1, 12);
-                $combination = [$year, $month];
+                $empAccountId = $empAccounts->random()->id;
+                $combination = [$year, $month, $empAccountId];
             } while (in_array($combination, $usedCombinations));
 
             TransactionDescriptor::updateOrCreate(
                 [
-                    'year'  => $year,
-                    'month' => $month,
+                    'year'           => $year,
+                    'month'          => $month,
+                    'emp_account_id' => $empAccountId,
                 ],
                 TransactionDescriptor::factory()->make([
                     'year'           => $year,
                     'month'          => $month,
-                    'emp_account_id' => $empAccounts->random()->id,
+                    'emp_account_id' => $empAccountId,
                 ])->toArray()
             );
 

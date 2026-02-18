@@ -276,7 +276,6 @@ class UploadController extends Controller
             ], 200);
         }
 
-        // Save BIC blacklist skip flag before dispatching validation
         if ($request->has('skip_bic_blacklist')) {
             $upload->update([
                 'skip_bic_blacklist' => $request->boolean('skip_bic_blacklist'),
@@ -355,6 +354,22 @@ class UploadController extends Controller
         $meta = $upload->meta ?? [];
         $skipped = $meta['skipped'] ?? null;
 
+        $priceBreakdown = $upload->debtors()
+            ->where('validation_status', Debtor::VALIDATION_VALID)
+            ->selectRaw('amount, COUNT(*) as count, SUM(amount) as total')
+            ->groupBy('amount')
+            ->orderByDesc('count')
+            ->get()
+            ->map(fn($row) => [
+                'amount' => (float) $row->amount,
+                'count' => (int) $row->count,
+                'total' => round((float) $row->total, 2),
+            ]);
+
+        $validTotalAmount = $upload->debtors()
+            ->where('validation_status', Debtor::VALIDATION_VALID)
+            ->sum('amount');
+
         return response()->json([
             'data' => [
                 'total' => (int) $stats->total,
@@ -372,7 +387,9 @@ class UploadController extends Controller
                     'legacy' => (int) $modelStats->legacy,
                     'flywheel' => (int) $modelStats->flywheel,
                     'recovery' => (int) $modelStats->recovery,
-                ]
+                ],
+                'price_breakdown' => $priceBreakdown,
+                'valid_total_amount' => round((float) $validTotalAmount, 2),
             ],
         ]);
     }

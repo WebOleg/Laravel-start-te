@@ -98,7 +98,7 @@ class ProcessBillingChunkJob implements ShouldQueue
             'model' => $this->billingModel,
         ]);
 
-        $debtors = Debtor::with('debtorProfile')
+        $debtors = Debtor::with(['debtorProfile', 'upload'])
             ->whereIn('id', $this->debtorIds)
             ->whereDoesntHave('debtorProfile', function ($query) {
                 $query->where('is_active', false);

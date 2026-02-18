@@ -129,6 +129,10 @@ class EmpAccountController extends Controller
         $startDate = \Carbon\Carbon::create($year, $month, 1)->startOfMonth();
         $endDate = $startDate->copy()->endOfMonth();
 
+        // Calculate the last 90 days window for chargeback stats
+        $cbStartDate = now()->subDays(90);
+        $cbEndDate = now();
+
         $accounts = EmpAccount::ordered()->get(['id', 'name', 'slug', 'monthly_cap']);
 
         $usedByAccount = BillingAttempt::where('status', BillingAttempt::STATUS_APPROVED)
@@ -146,11 +150,35 @@ class EmpAccountController extends Controller
             ->selectRaw('emp_account_id, COUNT(*) as tx_count')
             ->pluck('tx_count', 'emp_account_id');
 
-        $data = $accounts->map(function ($account) use ($usedByAccount, $txCounts) {
+        // Calculate chargeback gross % for last 90 days per account
+        $approvedAmounts90d = BillingAttempt::where('status', BillingAttempt::STATUS_APPROVED)
+            ->whereBetween('emp_created_at', [$cbStartDate, $cbEndDate])
+            ->whereNotNull('emp_account_id')
+            ->groupBy('emp_account_id')
+            ->selectRaw('emp_account_id, SUM(amount) as approved_amount')
+            ->pluck('approved_amount', 'emp_account_id')
+            ->map(fn ($v) => (float) $v);
+
+        $chargebackAmounts90d = BillingAttempt::where('status', BillingAttempt::STATUS_CHARGEBACKED)
+            ->whereBetween('emp_created_at', [$cbStartDate, $cbEndDate])
+            ->whereNotNull('emp_account_id')
+            ->groupBy('emp_account_id')
+            ->selectRaw('emp_account_id, SUM(amount) as chargeback_amount')
+            ->pluck('chargeback_amount', 'emp_account_id')
+            ->map(fn ($v) => (float) $v);
+
+        $data = $accounts->map(function ($account) use ($usedByAccount, $txCounts, $approvedAmounts90d, $chargebackAmounts90d) {
             $cap = $account->monthly_cap ? (float) $account->monthly_cap : null;
             $used = $usedByAccount->get($account->id, 0);
             $remaining = $cap !== null ? max(0, $cap - $used) : null;
             $percentage = $cap !== null && $cap > 0 ? round(($used / $cap) * 100, 1) : null;
+
+            // Calculate chargeback gross % for last 90 days
+            $approvedAmount90d = $approvedAmounts90d->get($account->id, 0);
+            $chargebackAmount90d = $chargebackAmounts90d->get($account->id, 0);
+            $cbGrossPercentage90d = $approvedAmount90d > 0
+                ? round(($chargebackAmount90d / $approvedAmount90d) * 100, 2)
+                : 0;
 
             return [
                 'id' => $account->id,
@@ -161,6 +189,7 @@ class EmpAccountController extends Controller
                 'remaining' => $remaining,
                 'usage_percentage' => $percentage,
                 'tx_count' => $txCounts->get($account->id, 0),
+                'cbk_gross_percentage_90d' => $cbGrossPercentage90d,
             ];
         });
 
