@@ -4,9 +4,11 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\StoreDescriptorRequest;
+use App\Http\Resources\DescriptorResource;
 use App\Models\TransactionDescriptor;
 use App\Services\DescriptorService;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 
 class DescriptorController extends Controller
 {
@@ -17,37 +19,56 @@ class DescriptorController extends Controller
         $this->service = $service;
     }
 
-    public function index(): JsonResponse
+    public function index(Request $request)
     {
-        $descriptors = TransactionDescriptor::orderByDesc('is_default')
+        $descriptors = TransactionDescriptor::with('empAccount')
+                                            ->orderByDesc('is_default')
                                             ->orderBy('year')
                                             ->orderBy('month')
-                                            ->get();
+                                            ->paginate(min((int) $request->input('per_page', 20), 100));
 
-        return response()->json(['data' => $descriptors]);
+        return DescriptorResource::collection($descriptors);
     }
 
     public function store(StoreDescriptorRequest $request): JsonResponse
     {
-        $this->service->ensureSingleDefault($request->is_default);
+        $this->service->ensureSingleDefault(
+            $request->is_default,
+            empAccountId: $request->emp_account_id
+        );
 
         $descriptor = TransactionDescriptor::create($request->validated());
+
+        // Invalidate cache after creating descriptor
+        $this->service->invalidateCache($request->emp_account_id);
 
         return response()->json(['data' => $descriptor], 201);
     }
 
     public function update(StoreDescriptorRequest $request, TransactionDescriptor $descriptor): JsonResponse
     {
-        $this->service->ensureSingleDefault($request->is_default, $descriptor->id);
+        $this->service->ensureSingleDefault(
+            $request->is_default,
+            ignoreId: $descriptor->id,
+            empAccountId: $request->emp_account_id
+        );
 
         $descriptor->update($request->validated());
+
+        // Invalidate cache after updating descriptor
+        $this->service->invalidateCache($request->emp_account_id);
 
         return response()->json(['data' => $descriptor]);
     }
 
     public function destroy(TransactionDescriptor $descriptor): JsonResponse
     {
+        $empAccountId = $descriptor->emp_account_id;
         $descriptor->delete();
+        
+        // Invalidate cache after deleting descriptor
+        $this->service->invalidateCache($empAccountId);
+        
         return response()->json(['message' => 'Deleted successfully']);
     }
 }
