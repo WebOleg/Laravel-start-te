@@ -458,6 +458,7 @@ class ChargebackService
                         ba.status,
                         ba.amount,
                         ba.emp_account_id,
+                        ba.debtor_id,
                         ba.chargeback_reason_code
                     FROM billing_attempts ba
                     WHERE ba.status IN (?, ?)
@@ -470,7 +471,9 @@ class ChargebackService
                         SUM(CASE WHEN status = ? THEN 1 ELSE 0 END) as cb_count,
                         COALESCE(SUM(CASE WHEN status = ? THEN amount ELSE 0 END), 0) as cb_amount,
                         COUNT(DISTINCT CASE WHEN status = ? THEN emp_account_id END) as affected_accounts,
-                        SUM(CASE WHEN status = ? THEN 1 ELSE 0 END) as approved_count
+                        SUM(CASE WHEN status = ? THEN 1 ELSE 0 END) as approved_count,
+                        COUNT(DISTINCT CASE WHEN status = ? THEN debtor_id END) as unique_debtors,
+                        COALESCE(SUM(CASE WHEN status = ? THEN amount ELSE 0 END), 0) as approved_amount
                     FROM filtered
                 ),
                 top_reason AS (
@@ -487,12 +490,12 @@ class ChargebackService
             ";
 
             $allBindings = array_merge(
-                [$ap, $cb],           // WHERE status IN (?, ?)
-                $bindings,            // date/emp conditions
-                [$ap, $cb],           // AND (status = ? OR (status = ? ...))
-                $codeBindings,        // code filter inside OR
-                [$cb, $cb, $cb, $ap], // stats CTE CASE WHENs
-                [$cb],                // top_reason CTE WHERE
+                [$ap, $cb],                 // WHERE status IN (?, ?)
+                $bindings,                  // date/emp conditions
+                [$ap, $cb],                 // AND (status = ? OR (status = ? ...))
+                $codeBindings,              // code filter inside OR
+                [$cb, $cb, $cb, $ap, $cb, $ap], // stats CTE CASE WHENs (cb_count, cb_amount, affected_accounts, approved_count, unique_debtors, approved_amount)
+                [$cb],                      // top_reason CTE WHERE
             );
 
             $result = DB::selectOne($sql, $allBindings);
@@ -515,6 +518,9 @@ class ChargebackService
                     'count' => (int) $result->top_reason_count,
                 ] : null,
                 'affected_accounts' => (int) $result->affected_accounts,
+                // --- new statistics ---
+                'unique_debtors_count' => (int) $result->unique_debtors,
+                'total_approved_amount' => round((float) $result->approved_amount, 2),
             ];
         });
     }
