@@ -424,7 +424,7 @@ class ChargebackService
         $code = $request->filled('code') ? $request->input('code') : null;
 
         $cacheKey = $this->buildStatsCacheKey($period, $dateMode, $empAccountId, $code);
-        $ttl = config('tether.cache.ttl_short', 600);
+        $ttl = config('tether.cache.ttl_short', 900);
 
         return Cache::remember($cacheKey, $ttl, function () use ($period, $dateMode, $empAccountId, $code) {
             $cb = BillingAttempt::STATUS_CHARGEBACKED;
@@ -521,44 +521,30 @@ class ChargebackService
 
     /**
      * Build the cache key for chargeback statistics.
+     * Embeds a version number so that bumping the version invalidates all permutations at once.
      */
     private function buildStatsCacheKey(?string $period = 'all', ?string $dateMode = 'transaction', ?string $empAccountId = null, ?string $code = null): string
     {
-        return 'chargeback_stats:' . md5(json_encode([
-            'period' => $period,
-            'date_mode' => $dateMode,
+        $version = Cache::get('chargeback_stats_version', 1);
+
+        return 'chargeback_stats:v' . $version . ':' . md5(json_encode([
+            'period'         => $period,
+            'date_mode'      => $dateMode,
             'emp_account_id' => $empAccountId,
-            'code' => $code,
+            'code'           => $code,
         ]));
     }
 
     /**
      * Clear cached chargeback statistics.
      *
-     * Pass the same filter parameters used when fetching to clear a specific cache entry,
-     * or call with no arguments to clear all chargeback stats cache keys.
+     * Bumps the cache version, which effectively orphans every existing
+     * chargeback_stats entry regardless of filter combination (period,
+     * date_mode, emp_account_id, code). Orphaned entries expire naturally
+     * via their TTL — no enumeration needed.
      */
-    public function clearChargebackStatisticsCache(?string $period = null, ?string $dateMode = null, ?string $empAccountId = null, ?string $code = null): void
+    public function clearChargebackStatisticsCache(): void
     {
-        // If specific parameters are provided, clear that exact cache key
-        if ($period !== null) {
-            $cacheKey = $this->buildStatsCacheKey($period, $dateMode ?? 'transaction', $empAccountId, $code);
-            Cache::forget($cacheKey);
-            Log::info('ChargebackService: Cleared specific chargeback stats cache', ['key' => $cacheKey]);
-            return;
-        }
-
-        // Otherwise, clear all known chargeback stats keys by common periods
-        $periods = ['all', '24h', '7d', '30d', '90d'];
-        $dateModes = ['transaction', 'chargeback'];
-        $cleared = 0;
-
-        foreach ($periods as $p) {
-            foreach ($dateModes as $dm) {
-                $key = $this->buildStatsCacheKey($p, $dm);
-                Cache::forget($key);
-                $cleared++;
-            }
-        }
+        Cache::increment('chargeback_stats_version');
     }
 }
