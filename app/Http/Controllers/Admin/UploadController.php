@@ -370,6 +370,31 @@ class UploadController extends Controller
             ->where('validation_status', Debtor::VALIDATION_VALID)
             ->sum('amount');
 
+        $cbBreakdown = DB::table('billing_attempts')
+            ->join('debtors', 'billing_attempts.debtor_id', '=', 'debtors.id')
+            ->where('debtors.upload_id', $upload->id)
+            ->selectRaw("
+                debtors.amount,
+                SUM(CASE WHEN billing_attempts.status = 'approved' THEN 1 ELSE 0 END) as approved,
+                SUM(CASE WHEN billing_attempts.status = 'chargebacked' THEN 1 ELSE 0 END) as chargebacks,
+                SUM(CASE WHEN billing_attempts.status = 'approved' THEN billing_attempts.amount ELSE 0 END) as approved_volume,
+                SUM(CASE WHEN billing_attempts.status = 'chargebacked' THEN billing_attempts.amount ELSE 0 END) as cb_volume,
+                CASE WHEN SUM(CASE WHEN billing_attempts.status = 'approved' THEN 1 ELSE 0 END) > 0
+                    THEN ROUND(SUM(CASE WHEN billing_attempts.status = 'chargebacked' THEN 1 ELSE 0 END)::numeric / SUM(CASE WHEN billing_attempts.status = 'approved' THEN 1 ELSE 0 END)::numeric * 100, 2)
+                    ELSE 0 END as cb_rate
+            ")
+            ->groupBy('debtors.amount')
+            ->orderByDesc('chargebacks')
+            ->get()
+            ->map(fn($row) => [
+                'amount' => (float) $row->amount,
+                'approved' => (int) $row->approved,
+                'chargebacks' => (int) $row->chargebacks,
+                'approved_volume' => round((float) $row->approved_volume, 2),
+                'cb_volume' => round((float) $row->cb_volume, 2),
+                'cb_rate' => (float) $row->cb_rate,
+            ]);
+
         return response()->json([
             'data' => [
                 'total' => (int) $stats->total,
@@ -390,6 +415,7 @@ class UploadController extends Controller
                 ],
                 'price_breakdown' => $priceBreakdown,
                 'valid_total_amount' => round((float) $validTotalAmount, 2),
+                'cb_breakdown' => $cbBreakdown,
             ],
         ]);
     }
@@ -503,7 +529,7 @@ class UploadController extends Controller
     private function trackCacheKey(string $key): void
     {
         $keys = Cache::get('upload_search_keys', []);
-        
+
         if (!in_array($key, $keys)) {
             $keys[] = $key;
             Cache::put('upload_search_keys', $keys, 86400);
