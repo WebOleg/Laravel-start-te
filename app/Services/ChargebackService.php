@@ -458,7 +458,7 @@ class ChargebackService
             $excludeBindings = [];
             if (!empty($excludedCodes)) {
                 $placeholders = implode(', ', array_fill(0, count($excludedCodes), '?'));
-                $excludeFilter = "AND (ba.status != ? OR ba.chargeback_reason_code NOT IN ({$placeholders}))";
+                $excludeFilter = "AND (ba.status != ? OR ba.chargeback_reason_code IS NULL OR ba.chargeback_reason_code NOT IN ({$placeholders}))";
                 $excludeBindings = array_merge([$cb], $excludedCodes);
             }
 
