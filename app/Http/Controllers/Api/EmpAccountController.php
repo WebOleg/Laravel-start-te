@@ -133,6 +133,9 @@ class EmpAccountController extends Controller
         $cbStartDate = now()->subDays(90);
         $cbEndDate = now();
 
+        // Calculate chargeback gross % for last 90 days per account
+        $excludedCbCodes = config('tether.chargeback.excluded_cb_reason_codes', []);
+
         $accounts = EmpAccount::ordered()->get(['id', 'name', 'slug', 'monthly_cap']);
 
         $usedByAccount = BillingAttempt::where('status', BillingAttempt::STATUS_APPROVED)
@@ -150,36 +153,43 @@ class EmpAccountController extends Controller
             ->selectRaw('emp_account_id, COUNT(*) as tx_count')
             ->pluck('tx_count', 'emp_account_id');
 
-        // Calculate chargeback gross % for last 90 days per account
-        $approvedAmounts90d = BillingAttempt::where('status', BillingAttempt::STATUS_APPROVED)
-            ->whereBetween('emp_created_at', [$cbStartDate, $cbEndDate])
-            ->whereNotNull('emp_account_id')
-            ->groupBy('emp_account_id')
-            ->selectRaw('emp_account_id, SUM(amount) as approved_amount')
-            ->pluck('approved_amount', 'emp_account_id')
-            ->map(fn ($v) => (float) $v);
+        $stats90d = BillingAttempt::whereBetween('emp_created_at', [$cbStartDate, $cbEndDate])
+                    ->whereNotNull('emp_account_id')
+                    ->when(!empty($excludedCbCodes), function ($q) use ($excludedCbCodes) {
+                        $q->where(function ($subQ) use ($excludedCbCodes) {
+                            $subQ->whereNotIn('chargeback_reason_code', $excludedCbCodes)
+                                ->orWhereNull('chargeback_reason_code');
+                        });
+                    })
+                    ->groupBy('emp_account_id')
+                    ->selectRaw('
+                        emp_account_id,
+                        SUM(CASE WHEN status = ? THEN amount ELSE 0 END) as approved_amount,
+                        SUM(CASE WHEN status = ? AND chargebacked_at BETWEEN ? AND ? THEN amount ELSE 0 END) as chargeback_amount
+                    ', [
+                        BillingAttempt::STATUS_APPROVED,
+                        BillingAttempt::STATUS_CHARGEBACKED,
+                        $cbStartDate,
+                        $cbEndDate
+                    ])
+                    ->get()
+                    ->keyBy('emp_account_id');
 
-        $chargebackAmounts90d = BillingAttempt::where('status', BillingAttempt::STATUS_CHARGEBACKED)
-            ->whereBetween('emp_created_at', [$cbStartDate, $cbEndDate])
-            ->whereNotNull('emp_account_id')
-            ->groupBy('emp_account_id')
-            ->selectRaw('emp_account_id, SUM(amount) as chargeback_amount')
-            ->pluck('chargeback_amount', 'emp_account_id')
-            ->map(fn ($v) => (float) $v);
-
-        $data = $accounts->map(function ($account) use ($usedByAccount, $txCounts, $approvedAmounts90d, $chargebackAmounts90d) {
+        $data = $accounts->map(function ($account) use ($usedByAccount, $txCounts, $stats90d) {
             $cap = $account->monthly_cap ? (float) $account->monthly_cap : null;
             $used = $usedByAccount->get($account->id, 0);
             $remaining = $cap !== null ? max(0, $cap - $used) : null;
             $percentage = $cap !== null && $cap > 0 ? round(($used / $cap) * 100, 1) : null;
 
             // Calculate chargeback gross % for last 90 days
-            $approvedAmount90d = $approvedAmounts90d->get($account->id, 0);
-            $chargebackAmount90d = $chargebackAmounts90d->get($account->id, 0);
-            $cbGrossPercentage90d = $approvedAmount90d > 0
-                ? round(($chargebackAmount90d / $approvedAmount90d) * 100, 2)
+            $stats = $stats90d->get($account->id);
+            $approvedAmount90d = $stats ? (float) $stats->approved_amount : 0;
+            $chargebackAmount90d = $stats ? (float) $stats->chargeback_amount : 0;
+            $totalAmount90d = $approvedAmount90d + $chargebackAmount90d;
+            $cbGrossPercentage90d = $totalAmount90d > 0
+                ? round(($chargebackAmount90d / $totalAmount90d) * 100, 2)
                 : 0;
-
+                
             return [
                 'id' => $account->id,
                 'name' => $account->name,
