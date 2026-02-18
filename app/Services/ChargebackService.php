@@ -430,6 +430,8 @@ class ChargebackService
             $cb = BillingAttempt::STATUS_CHARGEBACKED;
             $ap = BillingAttempt::STATUS_APPROVED;
 
+            $excludedCodes = config('tether.chargeback.excluded_cb_reason_codes', []);
+
             // Build shared date/emp conditions as raw SQL fragments + bindings
             $conditions = [];
             $bindings = [];
@@ -451,6 +453,15 @@ class ChargebackService
             $codeFilter = $code ? 'AND ba.chargeback_reason_code = ?' : '';
             $codeBindings = $code ? [$code] : [];
 
+            // Exclusion filter for chargebacked rows
+            $excludeFilter = '';
+            $excludeBindings = [];
+            if (!empty($excludedCodes)) {
+                $placeholders = implode(', ', array_fill(0, count($excludedCodes), '?'));
+                $excludeFilter = "AND (ba.status != ? OR ba.chargeback_reason_code NOT IN ({$placeholders}))";
+                $excludeBindings = array_merge([$cb], $excludedCodes);
+            }
+
             // Single raw query using CTE
             $sql = "
                 WITH filtered AS (
@@ -465,6 +476,8 @@ class ChargebackService
                       {$whereClause}
                       -- code filter only applies to chargebacked rows
                       AND (ba.status = ? OR (ba.status = ? {$codeFilter}))
+                      -- exclude configured reason codes from chargebacked rows
+                      {$excludeFilter}
                 ),
                 stats AS (
                     SELECT
@@ -490,12 +503,13 @@ class ChargebackService
             ";
 
             $allBindings = array_merge(
-                [$ap, $cb],                 // WHERE status IN (?, ?)
-                $bindings,                  // date/emp conditions
-                [$ap, $cb],                 // AND (status = ? OR (status = ? ...))
-                $codeBindings,              // code filter inside OR
-                [$cb, $cb, $cb, $ap, $cb, $ap], // stats CTE CASE WHENs (cb_count, cb_amount, affected_accounts, approved_count, unique_debtors, approved_amount)
-                [$cb],                      // top_reason CTE WHERE
+                [$ap, $cb],                         // WHERE status IN (?, ?)
+                $bindings,                           // date/emp conditions
+                [$ap, $cb],                          // AND (status = ? OR (status = ? ...))
+                $codeBindings,                       // code filter inside OR
+                $excludeBindings,                    // exclusion filter
+                [$cb, $cb, $cb, $ap, $cb, $ap],     // stats CTE CASE WHENs
+                [$cb],                               // top_reason CTE WHERE
             );
 
             $result = DB::selectOne($sql, $allBindings);
