@@ -17,8 +17,20 @@ class ChargebackController extends Controller
 
     public function index(Request $request)
     {
+        $request->validate([
+            'emp_account_id' => 'nullable|integer|exists:emp_accounts,id',
+            'code' => 'nullable|string|max:12',
+            'period' => 'nullable|string|in:24h,7d,30d,90d,all',
+            'date_mode' => 'nullable|string|in:transaction,chargeback',
+            'per_page' => 'nullable|integer|min:1|max:100',
+        ]);
+
         $chargebacks = $this->chargebackService->getChargebacks($request);
-        return ChargebackResource::collection($chargebacks);
+        $stats = $this->chargebackService->getChargebackStatistics($request);
+        
+        return ChargebackResource::collection($chargebacks)->additional([
+            'stats' => $stats,
+        ]);
     }
 
     public function codes(){

@@ -10,6 +10,7 @@ namespace App\Services;
 use App\Models\BillingAttempt;
 use App\Models\Chargeback;
 use App\Models\Upload;
+use App\Traits\HasDatePeriods;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -18,6 +19,8 @@ use Carbon\Carbon;
 
 class ChargebackService
 {
+    use HasDatePeriods;
+
     public function getChargebacks(Request $request)
     {
         $chargebacks = BillingAttempt::with([
@@ -27,12 +30,30 @@ class ChargebackService
         ])
         ->where('status', BillingAttempt::STATUS_CHARGEBACKED);
 
-        if ($request->has('code')) {
+        if ($request->filled('code'))
+        {
             $chargebacks->where('chargeback_reason_code', $request->input('code'));
         }
 
-        if ($request->has('emp_account_id')) {
+        if ($request->filled('emp_account_id'))
+        {
             $chargebacks->where('emp_account_id', $request->input('emp_account_id'));
+        }
+
+        if ($request->has('period'))
+        {
+            $period = $request->input('period');
+            $dateMode = $request->input('date_mode', 'transaction');
+            $startDate = $this->getStartDateFromPeriod($period);
+            
+            if ($period !== 'all') {
+                if ($dateMode === 'chargeback') {
+                    $chargebacks->where('chargebacked_at', '>=', $startDate);
+                } else {
+                    // transaction mode (default)
+                    $chargebacks->whereRaw('COALESCE(billing_attempts.emp_created_at, billing_attempts.created_at) >= ?', [$startDate]);
+                }
+            }
         }
 
         $perPage = min((int) $request->input('per_page', 50), 100);
@@ -389,5 +410,147 @@ class ChargebackService
         } catch (\Exception $e) {
             return null;
         }
+    }
+
+
+    /**
+     * Get comprehensive chargeback statistics (optimized — single query)
+     */
+    public function getChargebackStatistics(Request $request): array
+    {
+        $period = $request->input('period', 'all');
+        $dateMode = $request->input('date_mode', 'transaction');
+        $empAccountId = $request->filled('emp_account_id') ? $request->input('emp_account_id') : null;
+        $code = $request->filled('code') ? $request->input('code') : null;
+
+        $cacheKey = $this->buildStatsCacheKey($period, $dateMode, $empAccountId, $code);
+        $ttl = config('tether.cache.ttl_short', 900);
+
+        return Cache::remember($cacheKey, $ttl, function () use ($period, $dateMode, $empAccountId, $code) {
+            $cb = BillingAttempt::STATUS_CHARGEBACKED;
+            $ap = BillingAttempt::STATUS_APPROVED;
+
+            // Build shared date/emp conditions as raw SQL fragments + bindings
+            $conditions = [];
+            $bindings = [];
+
+            if ($empAccountId) {
+                $conditions[] = 'ba.emp_account_id = ?';
+                $bindings[] = $empAccountId;
+            }
+
+            if ($period !== 'all') {
+                $startDate = $this->getStartDateFromPeriod($period);
+                $conditions[] = $dateMode === 'chargeback'
+                    ? 'ba.chargebacked_at >= ?'
+                    : 'COALESCE(ba.emp_created_at, ba.created_at) >= ?';
+                $bindings[] = $startDate;
+            }
+
+            $whereClause = count($conditions) ? 'AND ' . implode(' AND ', $conditions) : '';
+            $codeFilter = $code ? 'AND ba.chargeback_reason_code = ?' : '';
+            $codeBindings = $code ? [$code] : [];
+
+            // Single raw query using CTE
+            $sql = "
+                WITH filtered AS (
+                    SELECT 
+                        ba.status,
+                        ba.amount,
+                        ba.emp_account_id,
+                        ba.debtor_id,
+                        ba.chargeback_reason_code
+                    FROM billing_attempts ba
+                    WHERE ba.status IN (?, ?)
+                      {$whereClause}
+                      -- code filter only applies to chargebacked rows
+                      AND (ba.status = ? OR (ba.status = ? {$codeFilter}))
+                ),
+                stats AS (
+                    SELECT
+                        SUM(CASE WHEN status = ? THEN 1 ELSE 0 END) as cb_count,
+                        COALESCE(SUM(CASE WHEN status = ? THEN amount ELSE 0 END), 0) as cb_amount,
+                        COUNT(DISTINCT CASE WHEN status = ? THEN emp_account_id END) as affected_accounts,
+                        SUM(CASE WHEN status = ? THEN 1 ELSE 0 END) as approved_count,
+                        COUNT(DISTINCT CASE WHEN status = ? THEN debtor_id END) as unique_debtors,
+                        COALESCE(SUM(CASE WHEN status = ? THEN amount ELSE 0 END), 0) as approved_amount
+                    FROM filtered
+                ),
+                top_reason AS (
+                    SELECT chargeback_reason_code as code, COUNT(*) as reason_count
+                    FROM filtered
+                    WHERE status = ?
+                    GROUP BY chargeback_reason_code
+                    ORDER BY reason_count DESC
+                    LIMIT 1
+                )
+                SELECT s.*, tr.code as top_reason_code, tr.reason_count as top_reason_count
+                FROM stats s
+                LEFT JOIN top_reason tr ON true
+            ";
+
+            $allBindings = array_merge(
+                [$ap, $cb],                 // WHERE status IN (?, ?)
+                $bindings,                  // date/emp conditions
+                [$ap, $cb],                 // AND (status = ? OR (status = ? ...))
+                $codeBindings,              // code filter inside OR
+                [$cb, $cb, $cb, $ap, $cb, $ap], // stats CTE CASE WHENs (cb_count, cb_amount, affected_accounts, approved_count, unique_debtors, approved_amount)
+                [$cb],                      // top_reason CTE WHERE
+            );
+
+            $result = DB::selectOne($sql, $allBindings);
+
+            $totalCount = (int) $result->cb_count;
+            $totalAmount = (float) $result->cb_amount;
+            $approvedCount = (int) $result->approved_count;
+
+            return [
+                'total_chargebacks_count' => $totalCount,
+                'total_chargeback_amount' => round($totalAmount, 2),
+                'chargeback_rate' => ($approvedCount + $totalCount) > 0
+                    ? round(($totalCount / ($approvedCount + $totalCount)) * 100, 2)
+                    : 0,
+                'average_chargeback_amount' => $totalCount > 0
+                    ? round($totalAmount / $totalCount, 2)
+                    : 0,
+                'most_common_reason_code' => $result->top_reason_code ? [
+                    'code' => $result->top_reason_code,
+                    'count' => (int) $result->top_reason_count,
+                ] : null,
+                'affected_accounts' => (int) $result->affected_accounts,
+                // --- new statistics ---
+                'unique_debtors_count' => (int) $result->unique_debtors,
+                'total_approved_amount' => round((float) $result->approved_amount, 2),
+            ];
+        });
+    }
+
+    /**
+     * Build the cache key for chargeback statistics.
+     * Embeds a version number so that bumping the version invalidates all permutations at once.
+     */
+    private function buildStatsCacheKey(?string $period = 'all', ?string $dateMode = 'transaction', ?string $empAccountId = null, ?string $code = null): string
+    {
+        $version = Cache::get('chargeback_stats_version', 1);
+
+        return 'chargeback_stats:v' . $version . ':' . md5(json_encode([
+            'period'         => $period,
+            'date_mode'      => $dateMode,
+            'emp_account_id' => $empAccountId,
+            'code'           => $code,
+        ]));
+    }
+
+    /**
+     * Clear cached chargeback statistics.
+     *
+     * Bumps the cache version, which effectively orphans every existing
+     * chargeback_stats entry regardless of filter combination (period,
+     * date_mode, emp_account_id, code). Orphaned entries expire naturally
+     * via their TTL — no enumeration needed.
+     */
+    public function clearChargebackStatisticsCache(): void
+    {
+        Cache::increment('chargeback_stats_version');
     }
 }

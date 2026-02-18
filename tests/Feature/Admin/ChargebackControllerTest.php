@@ -1480,4 +1480,362 @@ class ChargebackControllerTest extends TestCase
         $response->assertStatus(200)
             ->assertJsonCount(3, 'data');
     }
+
+    // ==================== INDEX STATS TESTS ====================
+
+    public function test_index_returns_stats_alongside_data(): void
+    {
+        Sanctum::actingAs($this->user);
+        $debtor = Debtor::factory()->create();
+
+        BillingAttempt::factory()->count(3)->create([
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'debtor_id' => $debtor->id,
+            'chargeback_reason_code' => 'AC01',
+            'amount' => 100,
+        ]);
+
+        BillingAttempt::factory()->count(7)->create([
+            'status' => BillingAttempt::STATUS_APPROVED,
+            'debtor_id' => $debtor->id,
+            'amount' => 100,
+        ]);
+
+        $response = $this->getJson('/api/admin/chargebacks');
+
+        $response->assertStatus(200)
+            ->assertJsonStructure([
+                'data',
+                'links',
+                'meta',
+                'stats' => [
+                    'total_chargebacks_count',
+                    'total_chargeback_amount',
+                    'chargeback_rate',
+                    'average_chargeback_amount',
+                    'most_common_reason_code',
+                    'affected_accounts',
+                    'unique_debtors_count',
+                    'total_approved_amount',
+                ],
+            ]);
+
+        $response->assertJsonPath('stats.total_chargebacks_count', 3);
+        $response->assertJsonPath('stats.total_chargeback_amount', 300);
+        $response->assertJsonPath('stats.chargeback_rate', 30);
+        $response->assertJsonPath('stats.average_chargeback_amount', 100);
+        $response->assertJsonPath('stats.total_approved_amount', 700);
+    }
+
+    public function test_index_stats_most_common_reason_code(): void
+    {
+        Sanctum::actingAs($this->user);
+        $debtor = Debtor::factory()->create();
+
+        BillingAttempt::factory()->count(5)->create([
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'debtor_id' => $debtor->id,
+            'chargeback_reason_code' => 'MD01',
+        ]);
+
+        BillingAttempt::factory()->count(2)->create([
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'debtor_id' => $debtor->id,
+            'chargeback_reason_code' => 'AC01',
+        ]);
+
+        $response = $this->getJson('/api/admin/chargebacks');
+
+        $response->assertStatus(200);
+        $stat = $response->json('stats.most_common_reason_code');
+        $this->assertNotNull($stat);
+        $this->assertEquals('MD01', $stat['code']);
+        $this->assertEquals(5, $stat['count']);
+    }
+
+    public function test_index_stats_most_common_reason_code_is_null_when_no_chargebacks(): void
+    {
+        Sanctum::actingAs($this->user);
+
+        $response = $this->getJson('/api/admin/chargebacks');
+
+        $response->assertStatus(200)
+            ->assertJsonPath('stats.total_chargebacks_count', 0)
+            ->assertJsonPath('stats.most_common_reason_code', null);
+    }
+
+    public function test_index_stats_are_filtered_by_code(): void
+    {
+        Sanctum::actingAs($this->user);
+        $debtor = Debtor::factory()->create();
+
+        BillingAttempt::factory()->count(4)->create([
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'debtor_id' => $debtor->id,
+            'chargeback_reason_code' => 'AC01',
+            'amount' => 50,
+        ]);
+
+        BillingAttempt::factory()->count(6)->create([
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'debtor_id' => $debtor->id,
+            'chargeback_reason_code' => 'MD01',
+            'amount' => 100,
+        ]);
+
+        $response = $this->getJson('/api/admin/chargebacks?code=AC01');
+
+        $response->assertStatus(200)
+            ->assertJsonPath('stats.total_chargebacks_count', 4)
+            ->assertJsonPath('stats.total_chargeback_amount', 200);
+
+        // data listing is also filtered
+        $response->assertJsonCount(4, 'data');
+    }
+
+    public function test_index_stats_are_filtered_by_emp_account_id(): void
+    {
+        Sanctum::actingAs($this->user);
+        $debtor = Debtor::factory()->create();
+        $emp1 = EmpAccount::factory()->create();
+        $emp2 = EmpAccount::factory()->create();
+
+        BillingAttempt::factory()->count(3)->create([
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'debtor_id' => $debtor->id,
+            'emp_account_id' => $emp1->id,
+            'amount' => 100,
+        ]);
+
+        BillingAttempt::factory()->count(5)->create([
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'debtor_id' => $debtor->id,
+            'emp_account_id' => $emp2->id,
+            'amount' => 100,
+        ]);
+
+        $response = $this->getJson("/api/admin/chargebacks?emp_account_id={$emp1->id}");
+
+        $response->assertStatus(200)
+            ->assertJsonPath('stats.total_chargebacks_count', 3);
+
+        $response->assertJsonCount(3, 'data');
+    }
+
+    public function test_index_validates_period_parameter(): void
+    {
+        Sanctum::actingAs($this->user);
+
+        $response = $this->getJson('/api/admin/chargebacks?period=invalid');
+
+        $response->assertStatus(422)
+            ->assertJsonValidationErrors('period');
+    }
+
+    public function test_index_validates_date_mode_parameter(): void
+    {
+        Sanctum::actingAs($this->user);
+
+        $response = $this->getJson('/api/admin/chargebacks?date_mode=invalid');
+
+        $response->assertStatus(422)
+            ->assertJsonValidationErrors('date_mode');
+    }
+
+    public function test_index_validates_emp_account_id_must_exist(): void
+    {
+        Sanctum::actingAs($this->user);
+
+        $response = $this->getJson('/api/admin/chargebacks?emp_account_id=999999');
+
+        $response->assertStatus(422)
+            ->assertJsonValidationErrors('emp_account_id');
+    }
+
+    public function test_index_filters_by_period_transaction_date_mode(): void
+    {
+        Sanctum::actingAs($this->user);
+        $debtor = Debtor::factory()->create();
+
+        // In range (within 7d)
+        BillingAttempt::factory()->count(3)->create([
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'debtor_id' => $debtor->id,
+            'emp_created_at' => now()->subDays(3),
+            'chargeback_reason_code' => 'AC01',
+        ]);
+
+        // Out of range
+        BillingAttempt::factory()->count(2)->create([
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'debtor_id' => $debtor->id,
+            'emp_created_at' => now()->subDays(30),
+            'chargeback_reason_code' => 'AC01',
+        ]);
+
+        $response = $this->getJson('/api/admin/chargebacks?period=7d&date_mode=transaction');
+
+        $response->assertStatus(200)
+            ->assertJsonCount(3, 'data')
+            ->assertJsonPath('stats.total_chargebacks_count', 3);
+    }
+
+    public function test_index_filters_by_period_chargeback_date_mode(): void
+    {
+        Sanctum::actingAs($this->user);
+        $debtor = Debtor::factory()->create();
+
+        // In range
+        BillingAttempt::factory()->count(2)->create([
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'debtor_id' => $debtor->id,
+            'chargebacked_at' => now()->subDays(3),
+            'chargeback_reason_code' => 'AC01',
+        ]);
+
+        // Out of range
+        BillingAttempt::factory()->count(4)->create([
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'debtor_id' => $debtor->id,
+            'chargebacked_at' => now()->subDays(30),
+            'chargeback_reason_code' => 'AC01',
+        ]);
+
+        $response = $this->getJson('/api/admin/chargebacks?period=7d&date_mode=chargeback');
+
+        $response->assertStatus(200)
+            ->assertJsonCount(2, 'data')
+            ->assertJsonPath('stats.total_chargebacks_count', 2);
+    }
+
+    public function test_index_period_all_returns_all_chargebacks(): void
+    {
+        Sanctum::actingAs($this->user);
+        $debtor = Debtor::factory()->create();
+
+        BillingAttempt::factory()->count(5)->create([
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'debtor_id' => $debtor->id,
+            'chargebacked_at' => now()->subYears(2),
+        ]);
+
+        $response = $this->getJson('/api/admin/chargebacks?period=all');
+
+        $response->assertStatus(200)
+            ->assertJsonCount(5, 'data')
+            ->assertJsonPath('stats.total_chargebacks_count', 5);
+    }
+
+    public function test_index_stats_unique_debtors_count(): void
+    {
+        Sanctum::actingAs($this->user);
+
+        $debtor1 = Debtor::factory()->create();
+        $debtor2 = Debtor::factory()->create();
+
+        BillingAttempt::factory()->count(3)->create([
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'debtor_id' => $debtor1->id,
+        ]);
+
+        BillingAttempt::factory()->count(2)->create([
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'debtor_id' => $debtor2->id,
+        ]);
+
+        $response = $this->getJson('/api/admin/chargebacks');
+
+        $response->assertStatus(200)
+            ->assertJsonPath('stats.unique_debtors_count', 2);
+    }
+
+    public function test_index_stats_affected_accounts(): void
+    {
+        Sanctum::actingAs($this->user);
+        $debtor = Debtor::factory()->create();
+        $emp1 = EmpAccount::factory()->create();
+        $emp2 = EmpAccount::factory()->create();
+
+        BillingAttempt::factory()->count(2)->create([
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'debtor_id' => $debtor->id,
+            'emp_account_id' => $emp1->id,
+        ]);
+
+        BillingAttempt::factory()->count(3)->create([
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'debtor_id' => $debtor->id,
+            'emp_account_id' => $emp2->id,
+        ]);
+
+        $response = $this->getJson('/api/admin/chargebacks');
+
+        $response->assertStatus(200)
+            ->assertJsonPath('stats.affected_accounts', 2);
+    }
+
+    public function test_index_stats_chargeback_rate_zero_when_no_approved(): void
+    {
+        Sanctum::actingAs($this->user);
+        $debtor = Debtor::factory()->create();
+
+        BillingAttempt::factory()->count(5)->create([
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'debtor_id' => $debtor->id,
+        ]);
+
+        $response = $this->getJson('/api/admin/chargebacks');
+
+        $response->assertStatus(200)
+            ->assertJsonPath('stats.chargeback_rate', 100);
+    }
+
+    public function test_index_stats_are_cached(): void
+    {
+        Sanctum::actingAs($this->user);
+        $debtor = Debtor::factory()->create();
+
+        BillingAttempt::factory()->count(2)->create([
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'debtor_id' => $debtor->id,
+        ]);
+
+        // First request primes cache
+        $response1 = $this->getJson('/api/admin/chargebacks');
+        $response1->assertStatus(200);
+        $count1 = $response1->json('stats.total_chargebacks_count');
+
+        // Add more chargebacks without clearing the cache
+        BillingAttempt::factory()->count(5)->create([
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            'debtor_id' => $debtor->id,
+        ]);
+
+        // Second request should return cached stats
+        $response2 = $this->getJson('/api/admin/chargebacks');
+        $response2->assertStatus(200);
+        $count2 = $response2->json('stats.total_chargebacks_count');
+
+        $this->assertEquals($count1, $count2);
+    }
+
+    public function test_index_accepts_all_valid_period_values(): void
+    {
+        Sanctum::actingAs($this->user);
+
+        foreach (['24h', '7d', '30d', '90d', 'all'] as $period) {
+            $response = $this->getJson("/api/admin/chargebacks?period={$period}");
+            $response->assertStatus(200, "Period '{$period}' should be accepted");
+        }
+    }
+
+    public function test_index_accepts_all_valid_date_mode_values(): void
+    {
+        Sanctum::actingAs($this->user);
+
+        foreach (['transaction', 'chargeback'] as $mode) {
+            $response = $this->getJson("/api/admin/chargebacks?date_mode={$mode}");
+            $response->assertStatus(200, "Date mode '{$mode}' should be accepted");
+        }
+    }
 }
