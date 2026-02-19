@@ -85,7 +85,7 @@ class EmpChargebackService
         if ($mode === 'empty') {
             $query->whereNull('chargeback_reason_code');
         } elseif ($mode === 'empty-reason-messages') {
-            $query->whereNull('chargeback_reason_description');
+            $query->whereNull('chargeback_reason_description')->orWhere('chargeback_reason_description', '');
         }
         // 'all' mode: no additional filter
 
