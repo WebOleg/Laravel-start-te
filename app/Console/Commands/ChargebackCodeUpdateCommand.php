@@ -20,6 +20,8 @@ class ChargebackCodeUpdateCommand extends Command
                             {--empty : Process all chargebacks missing reason codes}
                             {--empty-reason-messages : Process all chargebacks missing reason descriptions (chargeback_reason_description)}
                             {--chunk= : Limit the number of records to process (only for --all, --empty, and --empty-reason-messages)}
+                            {--from= : Start offset (skip this many records)}
+                            {--to= : End offset (process up to this record number)}
                             {--dry-run : Show what would be processed without making actual changes}';
 
     /**
@@ -46,12 +48,14 @@ class ChargebackCodeUpdateCommand extends Command
         $processEmptyReason = $this->option('empty');
         $processEmptyReasonMessages = $this->option('empty-reason-messages');
         $limit = $this->option('chunk');
+        $from = $this->option('from');
+        $to = $this->option('to');
         $dryRun = $this->option('dry-run');
 
         // Ensure at least one option is provided
         if (!$uniqueId && !$processAll && !$processEmptyReason && !$processEmptyReasonMessages) {
             $this->error("Please provide at least one of the following options: {unique-id}, --all, --empty, --empty-reason-messages");
-            $this->info("Examples: emp:fetch-chargeback-codes {unique-id} | --all | --empty | --empty-reason-messages [--chunk=N] [--dry-run]");
+            $this->info("Examples: emp:fetch-chargeback-codes {unique-id} | --all | --empty | --empty-reason-messages [--chunk=N] [--from=N] [--to=N] [--dry-run]");
             return Command::FAILURE;
         }
 
@@ -64,6 +68,36 @@ class ChargebackCodeUpdateCommand extends Command
         $bulkOptionsCount = (int) $processAll + (int) $processEmptyReason + (int) $processEmptyReasonMessages;
         if ($bulkOptionsCount > 1) {
             $this->error("Cannot combine --all, --empty, and --empty-reason-messages options together");
+            return Command::FAILURE;
+        }
+
+        // Validate --from and --to options
+        if ($from !== null) {
+            if ($uniqueId) {
+                $this->error("Cannot use --from with unique-id argument");
+                return Command::FAILURE;
+            }
+            if (!is_numeric($from) || $from < 0) {
+                $this->error("--from must be a non-negative number");
+                return Command::FAILURE;
+            }
+            $from = (int) $from;
+        }
+
+        if ($to !== null) {
+            if ($uniqueId) {
+                $this->error("Cannot use --to with unique-id argument");
+                return Command::FAILURE;
+            }
+            if (!is_numeric($to) || $to <= 0) {
+                $this->error("--to must be a positive number");
+                return Command::FAILURE;
+            }
+            $to = (int) $to;
+        }
+
+        if ($from !== null && $to !== null && $from >= $to) {
+            $this->error("--from must be less than --to");
             return Command::FAILURE;
         }
 
@@ -95,17 +129,17 @@ class ChargebackCodeUpdateCommand extends Command
 
         // Process bulk - all chargebacks
         if ($processAll) {
-            return $this->processBulkChargebacks('all', $limit, $dryRun);
+            return $this->processBulkChargebacks('all', $limit, $from, $to, $dryRun);
         }
 
         // Process bulk - empty reason codes only
         if ($processEmptyReason) {
-            return $this->processBulkChargebacks('empty', $limit, $dryRun);
+            return $this->processBulkChargebacks('empty', $limit, $from, $to, $dryRun);
         }
 
         // Process bulk - empty reason descriptions only
         if ($processEmptyReasonMessages) {
-            return $this->processBulkChargebacks('empty-reason-messages', $limit, $dryRun);
+            return $this->processBulkChargebacks('empty-reason-messages', $limit, $from, $to, $dryRun);
         }
 
         return Command::SUCCESS;
@@ -170,7 +204,7 @@ class ChargebackCodeUpdateCommand extends Command
         return Command::SUCCESS;
     }
 
-    private function processBulkChargebacks(string $mode, ?int $limit = null, bool $dryRun = false): int
+    private function processBulkChargebacks(string $mode, ?int $limit = null, ?int $from = null, ?int $to = null, bool $dryRun = false): int
     {
         $typeLabels = [
             'all'                   => 'all chargebacks',
@@ -180,8 +214,9 @@ class ChargebackCodeUpdateCommand extends Command
 
         $type = $typeLabels[$mode] ?? $mode;
         $limitText = $limit ? " (chunk: {$limit})" : '';
+        $rangeText = ($from !== null || $to !== null) ? " (range: " . ($from ?? 0) . " to " . ($to ?? 'end') . ")" : '';
         $dryRunText = $dryRun ? ' [DRY RUN MODE]' : '';
-        $this->info("Processing {$type}{$limitText}{$dryRunText}...");
+        $this->info("Processing {$type}{$limitText}{$rangeText}{$dryRunText}...");
 
         $this->newLine();
 
@@ -211,7 +246,7 @@ class ChargebackCodeUpdateCommand extends Command
                 $code,
                 $message
             ));
-        }, $limit, $dryRun);
+        }, $limit, $from, $to, $dryRun);
 
         // Display summary
         $this->newLine();
