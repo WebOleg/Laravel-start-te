@@ -205,6 +205,14 @@ class ChargebackService
         if (!empty($filters['end_date'])) {
             $query->whereDate('chargebacked_at', '<=', $filters['end_date']);
         }
+
+        $excludedCodes = config('tether.chargeback.excluded_cb_reason_codes', []);
+        if (!empty($excludedCodes)) {
+            $query->where(function ($q) use ($excludedCodes) {
+                $q->whereNull('chargeback_reason_code')
+                ->orWhereNotIn('chargeback_reason_code', $excludedCodes);
+            });
+        }
     }
 
     /**
