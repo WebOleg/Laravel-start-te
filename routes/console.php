@@ -35,12 +35,10 @@ Schedule::command('bic-blacklist:auto --period=30')
     ->appendOutputTo($cronLog)
     ->withoutOverlapping();
 
-Schedule::call(function () {
-    Artisan::call('emp:refresh', [
-        '--from' => now()->subDays(30)->format('Y-m-d'),
-        '--to' => now()->subDay()->format('Y-m-d')
-    ]);
-})->name('emp:refresh-callback')
+Schedule::command('emp:refresh', [
+    '--from' => now()->subDays(30)->format('Y-m-d'),
+    '--to' => now()->subDay()->format('Y-m-d')
+])->name('emp:refresh-callback')
   ->dailyAt('05:00')
   ->appendOutputTo($cronLog)
   ->withoutOverlapping();
