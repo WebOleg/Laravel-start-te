@@ -40,4 +40,6 @@ Schedule::call(function () {
         '--from' => now()->subDays(30)->format('Y-m-d'),
         '--to' => now()->subDay()->format('Y-m-d')
     ]);
-})->dailyAt('05:00');
+})->dailyAt('05:00')
+  ->appendOutputTo($cronLog)
+  ->withoutOverlapping();
