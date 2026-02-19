@@ -7,6 +7,8 @@ Artisan::command('inspire', function () {
 })->purpose('Display an inspiring quote');
 Schedule::command('billing:dispatch')->everyMinute();
 Schedule::command('emp:fetch-chargeback-codes --empty --chunk=200')->everyTwoHours(20);
+// Morning bulk fetch: catch all remaining CB codes after nightly sync
+Schedule::command('emp:fetch-chargeback-codes --empty --chunk=1000')->dailyAt('06:30');
 Schedule::command('emp:sync-chargebacks --days=1')->dailyAt('06:00');
 // Cleanup broken batches (negative pending_jobs) every hour
 Schedule::command('batches:cleanup')->hourly();
