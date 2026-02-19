@@ -78,17 +78,21 @@ class EmpChargebackService
         }
     }
 
-    public function processBulkChargebackDetail(bool $isAll, ?callable $progressCallback = null, ?int $limit = null, bool $dryRun = false): array
+    public function processBulkChargebackDetail(string $mode, ?callable $progressCallback = null, ?int $limit = null, bool $dryRun = false): array
     {
         $query = BillingAttempt::where('status', BillingAttempt::STATUS_CHARGEBACKED);
-        if ($isAll === false) {
-            $query = $query->whereNull('chargeback_reason_code');
+
+        if ($mode === 'empty') {
+            $query->whereNull('chargeback_reason_code');
+        } elseif ($mode === 'empty-reason-messages') {
+            $query->whereNull('chargeback_reason_description');
         }
-        
+        // 'all' mode: no additional filter
+
         if ($limit !== null && $limit > 0) {
-            $query = $query->limit($limit);
+            $query->limit($limit);
         }
-        
+
         $uniqueIds = $query->latest()->pluck('unique_id')->toArray();
         
         $results = [
