@@ -78,17 +78,39 @@ class EmpChargebackService
         }
     }
 
-    public function processBulkChargebackDetail(bool $isAll, ?callable $progressCallback = null, ?int $limit = null, bool $dryRun = false): array
+    public function processBulkChargebackDetail(string $mode, ?callable $progressCallback = null, ?int $limit = null, ?int $from = null, ?int $to = null, bool $dryRun = false): array
     {
         $query = BillingAttempt::where('status', BillingAttempt::STATUS_CHARGEBACKED);
-        if ($isAll === false) {
-            $query = $query->whereNull('chargeback_reason_code');
+
+        if ($mode === 'empty') {
+            $query->where(function ($q) {
+                $q->whereNull('chargeback_reason_code')
+                  ->orWhere('chargeback_reason_code', '');
+            });
+        } elseif ($mode === 'empty-reason-messages') {
+            $query->where(function ($q) {
+                $q->whereNull('chargeback_reason_description')
+                  ->orWhere('chargeback_reason_description', '');
+            });
         }
-        
-        if ($limit !== null && $limit > 0) {
-            $query = $query->limit($limit);
+        // 'all' mode: no additional filter
+
+        // Apply from/to range (offset-based)
+        $offset = $from ?? 0;
+        if ($from !== null) {
+            $query->skip($offset);
         }
-        
+
+        // Calculate how many records to take
+        if ($to !== null) {
+            $rangeLimit = $to - $offset;
+            // If --chunk is also provided, take the smaller of the two
+            $take = $limit !== null ? min($limit, $rangeLimit) : $rangeLimit;
+            $query->limit($take);
+        } elseif ($limit !== null && $limit > 0) {
+            $query->limit($limit);
+        }
+
         $uniqueIds = $query->latest()->pluck('unique_id')->toArray();
         
         $results = [
@@ -166,10 +188,13 @@ class EmpChargebackService
                 if (!$billingAttempt) {
                     return false;
                 }
+
+                $reasonCode = $responseData['reason_code'] ?? null;
+                $reasonDescription = $responseData['reason_description'] ?? null;
                 
                 $updateData = [
-                    'chargeback_reason_code' => $responseData['reason_code'] ?? null,
-                    'chargeback_reason_description' => $responseData['reason_description'] ?? null,
+                    'chargeback_reason_code'        => ($reasonCode === '') ? null : $reasonCode,
+                    'chargeback_reason_description' => ($reasonDescription === '') ? null : $reasonDescription,
                 ];
                 
                 if (!$billingAttempt->chargebacked_at) {

@@ -65,7 +65,7 @@ class EmpRefreshService
      */
     public function processTransactions(array $transactions, ?int $empAccountId = null): array
     {
-        $stats = ['inserted' => 0, 'updated' => 0, 'unchanged' => 0, 'errors' => 0];
+        $stats = ['inserted' => 0, 'updated' => 0, 'unchanged' => 0, 'errors' => 0, 'debtors_synced' => 0];
         
         $batches = array_chunk($transactions, self::BATCH_SIZE);
         
@@ -75,6 +75,7 @@ class EmpRefreshService
             $stats['updated'] += $result['updated'];
             $stats['unchanged'] += $result['unchanged'];
             $stats['errors'] += $result['errors'];
+            $stats['debtors_synced'] += $result['debtors_synced'] ?? 0;
             
             usleep(self::RATE_LIMIT_DELAY_MS * 1000);
         }
@@ -138,7 +139,7 @@ class EmpRefreshService
         }
         
         if (empty($rows)) {
-            return ['inserted' => 0, 'updated' => 0, 'unchanged' => 0, 'errors' => 0];
+            return ['inserted' => 0, 'updated' => 0, 'unchanged' => 0, 'errors' => 0, 'debtors_synced' => 0];
         }
         
         try {
@@ -183,15 +184,19 @@ class EmpRefreshService
                     ]);
                 }
             }
+
+            // Sync debtor statuses from updated billing_attempts
+            $debtorsSynced = $this->syncDebtorStatuses($uniqueIds);
             
             Log::debug('EMP Refresh: batch upserted', [
                 'total' => count($rows),
                 'inserted' => $inserted,
                 'updated' => $updated,
                 'unchanged' => $unchanged,
+                'debtors_synced' => $debtorsSynced,
             ]);
             
-            return ['inserted' => $inserted, 'updated' => $updated, 'unchanged' => $unchanged, 'errors' => 0];
+            return ['inserted' => $inserted, 'updated' => $updated, 'unchanged' => $unchanged, 'errors' => 0, 'debtors_synced' => $debtorsSynced];
             
         } catch (\Exception $e) {
             Log::error('EMP Refresh: batch upsert failed, falling back to individual', [
@@ -200,6 +205,67 @@ class EmpRefreshService
             ]);
             
             return $this->processIndividually($transactions);
+        }
+    }
+
+    /**
+     * Sync debtor statuses based on their billing_attempt status.
+     * Fixes the gap where emp:refresh updates billing_attempt but not debtor.
+     */
+    private function syncDebtorStatuses(array $uniqueIds): int
+    {
+        if (empty($uniqueIds)) {
+            return 0;
+        }
+
+        try {
+            $placeholders = implode(',', array_fill(0, count($uniqueIds), '?'));
+
+            // Update debtors whose billing_attempt status changed to approved
+            $approvedCount = DB::update("
+                UPDATE debtors
+                SET status = ?, updated_at = NOW()
+                FROM billing_attempts
+                WHERE billing_attempts.debtor_id = debtors.id
+                AND billing_attempts.unique_id IN ({$placeholders})
+                AND debtors.status = ?
+                AND billing_attempts.status = ?
+            ", array_merge(
+                [Debtor::STATUS_APPROVED],
+                $uniqueIds,
+                [Debtor::STATUS_PENDING, BillingAttempt::STATUS_APPROVED]
+            ));
+
+            // Update debtors whose billing_attempt status changed to chargebacked
+            $chargebackedCount = DB::update("
+                UPDATE debtors
+                SET status = ?, updated_at = NOW()
+                FROM billing_attempts
+                WHERE billing_attempts.debtor_id = debtors.id
+                AND billing_attempts.unique_id IN ({$placeholders})
+                AND debtors.status NOT IN (?, ?)
+                AND billing_attempts.status = ?
+            ", array_merge(
+                [Debtor::STATUS_CHARGEBACKED],
+                $uniqueIds,
+                [Debtor::STATUS_CHARGEBACKED, 'failed', BillingAttempt::STATUS_CHARGEBACKED]
+            ));
+
+            $total = $approvedCount + $chargebackedCount;
+
+            if ($total > 0) {
+                Log::info('EMP Refresh: synced debtor statuses', [
+                    'approved' => $approvedCount,
+                    'chargebacked' => $chargebackedCount,
+                ]);
+            }
+
+            return $total;
+        } catch (\Exception $e) {
+            Log::warning('EMP Refresh: debtor status sync failed', [
+                'error' => $e->getMessage(),
+            ]);
+            return 0;
         }
     }
 
@@ -255,6 +321,10 @@ class EmpRefreshService
             }
 
             $existing->update($data);
+
+            // Sync debtor status for individual upsert
+            $this->syncDebtorStatuses([$uniqueId]);
+
             return 'updated';
         }
 
