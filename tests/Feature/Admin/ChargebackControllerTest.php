@@ -44,14 +44,12 @@ class ChargebackControllerTest extends TestCase
 
         $debtor = Debtor::factory()->create();
         
-        // Create VOP log for bank info
         VopLog::factory()->create([
             'debtor_id' => $debtor->id,
             'bank_name' => 'Test Bank',
             'country' => 'DE',
         ]);
 
-        // Create chargebacks
         BillingAttempt::factory()->count(3)->create([
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
             'debtor_id' => $debtor->id,
@@ -59,7 +57,6 @@ class ChargebackControllerTest extends TestCase
             'chargeback_reason_description' => 'Account closed',
         ]);
 
-        // Create non-chargebacks (should not appear)
         BillingAttempt::factory()->count(2)->create([
             'status' => BillingAttempt::STATUS_APPROVED,
             'debtor_id' => $debtor->id,
@@ -193,7 +190,6 @@ class ChargebackControllerTest extends TestCase
     {
         Sanctum::actingAs($this->user);
 
-        // Create only approved billing attempts
         BillingAttempt::factory()->count(3)->create([
             'status' => BillingAttempt::STATUS_APPROVED,
         ]);
@@ -204,7 +200,7 @@ class ChargebackControllerTest extends TestCase
             ->assertJsonCount(0, 'data');
     }
 
-    public function test_chargebacks_include_debtor_with_masked_iban(): void
+    public function test_chargebacks_include_debtor_with_full_iban(): void
     {
         Sanctum::actingAs($this->user);
 
@@ -222,8 +218,7 @@ class ChargebackControllerTest extends TestCase
         $response->assertStatus(200);
         
         $returnedIban = $response->json('data.0.debtor.iban');
-        $this->assertNotEquals('DE89370400440532013000', $returnedIban);
-        $this->assertStringContainsString('*', $returnedIban);
+        $this->assertEquals('DE89370400440532013000', $returnedIban);
     }
 
     public function test_chargebacks_include_bank_info_from_vop_log(): void
@@ -250,8 +245,6 @@ class ChargebackControllerTest extends TestCase
             ->assertJsonPath('data.0.bank_country', 'DE');
     }
 
-    // ==================== CODES ROUTE TESTS ====================
-
     public function test_can_list_unique_chargeback_codes(): void
     {
         Sanctum::actingAs($this->user);
@@ -269,7 +262,6 @@ class ChargebackControllerTest extends TestCase
             'chargeback_reason_code' => 'MD01',
         ]);
 
-        // Duplicate code
         BillingAttempt::factory()->create([
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
             'debtor_id' => $debtor->id,
@@ -329,14 +321,12 @@ class ChargebackControllerTest extends TestCase
             'chargeback_reason_code' => 'AC01',
         ]);
 
-        // Declined with error code should not appear
         BillingAttempt::factory()->create([
             'status' => BillingAttempt::STATUS_DECLINED,
             'debtor_id' => $debtor->id,
             'chargeback_reason_code' => 'AM04',
         ]);
 
-        // Error with code should not appear
         BillingAttempt::factory()->create([
             'status' => BillingAttempt::STATUS_ERROR,
             'debtor_id' => $debtor->id,
@@ -393,18 +383,15 @@ class ChargebackControllerTest extends TestCase
             'chargeback_reason_code' => 'AC01',
         ]);
 
-        // First request
         $response1 = $this->getJson('/api/admin/chargebacks/codes');
         $response1->assertStatus(200)->assertJson(['data' => ['AC01']]);
 
-        // Add new chargeback
         BillingAttempt::factory()->create([
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
             'debtor_id' => $debtor->id,
             'chargeback_reason_code' => 'MD01',
         ]);
 
-        // Second request should return cached result
         $response2 = $this->getJson('/api/admin/chargebacks/codes');
         $response2->assertStatus(200)->assertJson(['data' => ['AC01']]);
     }
@@ -447,7 +434,6 @@ class ChargebackControllerTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
 
-        // Create approved and chargebacked attempts
         BillingAttempt::factory()->count(7)->create([
             'upload_id' => $upload->id,
             'debtor_id' => $debtor->id,
@@ -470,7 +456,7 @@ class ChargebackControllerTest extends TestCase
             ->assertJsonPath('summary.billed_count', 7)
             ->assertJsonPath('summary.cb_amount', 300)
             ->assertJsonPath('summary.approved_amount', 700)
-            ->assertJsonPath('summary.cb_rate', 30); // 3 out of 10 = 30%
+            ->assertJsonPath('summary.cb_rate', 30);
     }
 
     public function test_upload_reasons_breakdown_by_code(): void
@@ -504,13 +490,11 @@ class ChargebackControllerTest extends TestCase
 
         $reasons = $response->json('reasons');
         
-        // First reason should be AC01 (5 count, highest)
         $this->assertEquals('AC01', $reasons[0]['code']);
         $this->assertEquals('Account Closed', $reasons[0]['reason']);
         $this->assertEquals(5, $reasons[0]['cb_count']);
         $this->assertEquals(500, $reasons[0]['cb_amount']);
         
-        // Second reason should be MD01
         $this->assertEquals('MD01', $reasons[1]['code']);
         $this->assertEquals(3, $reasons[1]['cb_count']);
         $this->assertEquals(150, $reasons[1]['cb_amount']);
@@ -522,7 +506,6 @@ class ChargebackControllerTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
 
-        // 10 total records
         BillingAttempt::factory()->count(6)->create([
             'upload_id' => $upload->id,
             'debtor_id' => $debtor->id,
@@ -541,9 +524,7 @@ class ChargebackControllerTest extends TestCase
         $response->assertStatus(200);
         $reason = $response->json('reasons.0');
 
-        // 4 chargebacks / 4 total chargebacks = 100%
         $this->assertEquals(100, $reason['cb_percentage']);
-        // 4 chargebacks / 10 total records = 40%
         $this->assertEquals(40, $reason['total_percentage']);
     }
 
@@ -744,7 +725,6 @@ class ChargebackControllerTest extends TestCase
             'chargeback_reason_code' => 'AC01',
         ]);
 
-        // Test that requesting per_page > 100 is rejected with 422
         $response = $this->getJson("/api/admin/chargebacks/upload/{$upload->id}/AC01/records?per_page=200");
 
         $response->assertStatus(422)
@@ -775,7 +755,6 @@ class ChargebackControllerTest extends TestCase
             'chargeback_reason_code' => 'AC01',
         ]);
 
-        // Create non-chargebacked with same code
         BillingAttempt::factory()->count(2)->create([
             'upload_id' => $upload->id,
             'debtor_id' => $debtor->id,
@@ -919,7 +898,7 @@ class ChargebackControllerTest extends TestCase
 
         $response->assertStatus(200)
             ->assertJsonPath('summary.total_chargebacks', 5)
-            ->assertJsonCount(2, 'reasons'); // null code and AC01
+            ->assertJsonCount(2, 'reasons');
     }
 
     public function test_upload_reasons_with_very_large_amounts(): void
@@ -1224,15 +1203,12 @@ class ChargebackControllerTest extends TestCase
             'chargeback_reason_code' => 'AC01',
         ]);
 
-        // Get page 1
         $response1 = $this->getJson("/api/admin/chargebacks/upload/{$upload->id}/AC01/records?per_page=50&page=1");
         $page1Data = $response1->json('data');
 
-        // Get page 2
         $response2 = $this->getJson("/api/admin/chargebacks/upload/{$upload->id}/AC01/records?per_page=50&page=2");
         $page2Data = $response2->json('data');
 
-        // Get page 3
         $response3 = $this->getJson("/api/admin/chargebacks/upload/{$upload->id}/AC01/records?per_page=50&page=3");
         $page3Data = $response3->json('data');
 
@@ -1302,7 +1278,7 @@ class ChargebackControllerTest extends TestCase
             ->assertJsonCount(5, 'data');
     }
 
-    public function test_upload_reason_records_preserves_debtor_iban_masking(): void
+    public function test_upload_reason_records_returns_full_iban(): void
     {
         Sanctum::actingAs($this->user);
         $upload = Upload::factory()->create();
@@ -1322,8 +1298,7 @@ class ChargebackControllerTest extends TestCase
 
         $response->assertStatus(200);
         $returnedIban = $response->json('data.0.debtor.iban');
-        $this->assertNotEquals('DE89370400440532013000', $returnedIban);
-        $this->assertStringContainsString('*', $returnedIban);
+        $this->assertEquals('DE89370400440532013000', $returnedIban);
     }
 
     public function test_upload_reason_records_with_same_code_different_uploads(): void
@@ -1355,12 +1330,8 @@ class ChargebackControllerTest extends TestCase
         $response1->assertJsonCount(5, 'data');
         $response2->assertJsonCount(3, 'data');
 
-        $response1Data = $response1->json('data');
-        $response2Data = $response2->json('data');
-
-        // Verify they don't have overlapping IDs
-        $ids1 = array_column($response1Data, 'id');
-        $ids2 = array_column($response2Data, 'id');
+        $ids1 = array_column($response1->json('data'), 'id');
+        $ids2 = array_column($response2->json('data'), 'id');
 
         $this->assertEmpty(array_intersect($ids1, $ids2));
     }
@@ -1481,8 +1452,6 @@ class ChargebackControllerTest extends TestCase
             ->assertJsonCount(3, 'data');
     }
 
-    // ==================== INDEX STATS TESTS ====================
-
     public function test_index_returns_stats_alongside_data(): void
     {
         Sanctum::actingAs($this->user);
@@ -1589,7 +1558,6 @@ class ChargebackControllerTest extends TestCase
             ->assertJsonPath('stats.total_chargebacks_count', 4)
             ->assertJsonPath('stats.total_chargeback_amount', 200);
 
-        // data listing is also filtered
         $response->assertJsonCount(4, 'data');
     }
 
@@ -1657,7 +1625,6 @@ class ChargebackControllerTest extends TestCase
         Sanctum::actingAs($this->user);
         $debtor = Debtor::factory()->create();
 
-        // In range (within 7d)
         BillingAttempt::factory()->count(3)->create([
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
             'debtor_id' => $debtor->id,
@@ -1665,7 +1632,6 @@ class ChargebackControllerTest extends TestCase
             'chargeback_reason_code' => 'AC01',
         ]);
 
-        // Out of range
         BillingAttempt::factory()->count(2)->create([
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
             'debtor_id' => $debtor->id,
@@ -1685,7 +1651,6 @@ class ChargebackControllerTest extends TestCase
         Sanctum::actingAs($this->user);
         $debtor = Debtor::factory()->create();
 
-        // In range
         BillingAttempt::factory()->count(2)->create([
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
             'debtor_id' => $debtor->id,
@@ -1693,7 +1658,6 @@ class ChargebackControllerTest extends TestCase
             'chargeback_reason_code' => 'AC01',
         ]);
 
-        // Out of range
         BillingAttempt::factory()->count(4)->create([
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
             'debtor_id' => $debtor->id,
@@ -1800,18 +1764,15 @@ class ChargebackControllerTest extends TestCase
             'debtor_id' => $debtor->id,
         ]);
 
-        // First request primes cache
         $response1 = $this->getJson('/api/admin/chargebacks');
         $response1->assertStatus(200);
         $count1 = $response1->json('stats.total_chargebacks_count');
 
-        // Add more chargebacks without clearing the cache
         BillingAttempt::factory()->count(5)->create([
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
             'debtor_id' => $debtor->id,
         ]);
 
-        // Second request should return cached stats
         $response2 = $this->getJson('/api/admin/chargebacks');
         $response2->assertStatus(200);
         $count2 = $response2->json('stats.total_chargebacks_count');
