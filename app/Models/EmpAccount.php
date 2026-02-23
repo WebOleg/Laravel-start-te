@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Facades\Crypt;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
 class EmpAccount extends Model
 {
@@ -137,5 +138,20 @@ class EmpAccount extends Model
     public function transactionDescriptors(): HasMany
     {
         return $this->hasMany(TransactionDescriptor::class);
+    }
+
+    /**
+     * Webhook relay proxies associated with this EMP account.
+     *
+     * @return BelongsToMany
+     */
+    public function webhookRelays(): BelongsToMany
+    {
+        return $this->belongsToMany(
+            WebhookRelay::class,
+            'emp_account_webhook_relay',
+            'emp_account_id',
+            'webhook_relay_id'
+        )->withTimestamps();
     }
 }
