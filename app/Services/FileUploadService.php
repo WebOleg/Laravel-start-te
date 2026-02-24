@@ -330,6 +330,11 @@ class FileUploadService
         return $path;
     }
 
+    /**
+     * Create upload record.
+     * Resolves emp_account from request or default active account.
+     * Resolves tether_instance from request or active EMP instance.
+     */
     private function createUploadRecord(
         UploadedFile $file,
         string $storedPath,
@@ -340,20 +345,13 @@ class FileUploadService
         bool $applyGlobalLock = false,
         ?int $tetherInstanceId = null
     ): Upload {
-        if ($tetherInstanceId) {
-            $instance = TetherInstance::find($tetherInstanceId);
-            if ($instance && $instance->isEmp() && !$empAccountId) {
-                $empAccountId = $instance->acquirer_account_id;
-            }
-        }
-
         if ($empAccountId === null) {
             $activeAccount = EmpAccount::getActive();
             $empAccountId = $activeAccount?->id;
         }
 
-        if ($tetherInstanceId === null && $empAccountId) {
-            $instance = TetherInstance::where('acquirer_account_id', $empAccountId)
+        if ($tetherInstanceId === null) {
+            $instance = TetherInstance::where('acquirer_type', 'emp')
                 ->where('is_active', true)
                 ->first();
             $tetherInstanceId = $instance?->id;

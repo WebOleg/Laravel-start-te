@@ -2,7 +2,8 @@
 
 /**
  * Service for processing SEPA Direct Debit billing through emerchantpay.
- * Resolves acquirer account via TetherInstance when available.
+ * Account resolution: Debtor emp_account → Upload emp_account → default active.
+ * TetherInstance determines gateway type (EMP/FinXP), not specific account.
  */
 
 namespace App\Services\Emp;
@@ -11,10 +12,8 @@ use App\Models\BillingAttempt;
 use App\Models\Debtor;
 use App\Models\DebtorProfile;
 use App\Models\EmpAccount;
-use App\Models\TetherInstance;
 use App\Models\Upload;
 use App\Services\DescriptorService;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Carbon\Carbon;
@@ -38,22 +37,18 @@ class EmpBillingService
 
     /**
      * Resolve EmpClient for a debtor.
-     * Priority: TetherInstance → Upload emp_account → default active account.
+     * Priority: Debtor emp_account → Upload emp_account → default active.
      */
     protected function getClientForDebtor(Debtor $debtor): EmpClient
     {
-        if ($debtor->tether_instance_id) {
-            $instance = $debtor->tetherInstance;
-            if ($instance && $instance->isEmp() && $instance->acquirer_account_id) {
-                $account = $instance->acquirerAccount;
-                if ($account) {
-                    Log::debug('Billing client resolved via TetherInstance', [
-                        'debtor_id' => $debtor->id,
-                        'tether_instance_id' => $instance->id,
-                        'emp_account_id' => $account->id,
-                    ]);
-                    return new EmpClient($account);
-            }
+        if ($debtor->emp_account_id) {
+            $account = EmpAccount::find($debtor->emp_account_id);
+            if ($account) {
+                Log::debug('Billing client resolved via Debtor', [
+                    'debtor_id' => $debtor->id,
+                    'emp_account_id' => $account->id,
+                ]);
+                return new EmpClient($account);
             }
         }
 
@@ -61,6 +56,11 @@ class EmpBillingService
         if ($upload && $upload->emp_account_id) {
             $account = $upload->empAccount;
             if ($account) {
+                Log::debug('Billing client resolved via Upload', [
+                    'debtor_id' => $debtor->id,
+                    'upload_id' => $upload->id,
+                    'emp_account_id' => $account->id,
+                ]);
                 return new EmpClient($account);
             }
         }
@@ -70,25 +70,15 @@ class EmpBillingService
 
     /**
      * Resolve EmpClient for an upload.
-     * Priority: TetherInstance → emp_account_id → default.
+     * Priority: Upload emp_account → default active.
      */
     private function getClientForUpload(Upload $upload): EmpClient
     {
-        if ($upload->tether_instance_id) {
-            $instance = $upload->tetherInstance;
-            if ($instance && $instance->isEmp() && $instance->acquirer_account_id) {
-                $account = $instance->acquirerAccount;
-                if ($account) {
-                    return new EmpClient($account);
-                }
-            }
-        }
-
         if ($upload->emp_account_id) {
             $account = $upload->empAccount;
             if ($account) {
                 return new EmpClient($account);
-        }
+            }
         }
 
         return $this->defaultClient;
@@ -112,6 +102,19 @@ class EmpBillingService
     }
 
     /**
+     * Resolve emp_account_id for webhook relay and descriptor lookup.
+     * Priority: Debtor emp_account → Upload emp_account → null.
+     */
+    private function resolveEmpAccountId(Debtor $debtor): ?int
+    {
+        if ($debtor->emp_account_id) {
+            return $debtor->emp_account_id;
+        }
+
+        return $debtor->upload?->emp_account_id ?? null;
+    }
+
+    /**
      * Bill a single debtor.
      */
     public function billDebtor(
@@ -123,10 +126,6 @@ class EmpBillingService
     ): BillingAttempt {
         if (!$debtor->relationLoaded('upload')) {
             $debtor->load('upload');
-        }
-
-        if ($debtor->tether_instance_id && !$debtor->relationLoaded('tetherInstance')) {
-            $debtor->load('tetherInst.acquirerAccount');
         }
 
         $billableAmount = $amount ?? $debtor->amount;
@@ -248,7 +247,7 @@ class EmpBillingService
                         BillingAttempt::STATUS_APPROVED,
                     ]);
             })
-            ->with(['upload', 'tetherInstance.acquirerAccount'])
+            ->with(['upload'])
             ->cursor();
 
         return $this->billBatch($debtors, $notificationUrl);
@@ -406,8 +405,7 @@ class EmpBillingService
 
     private function buildRequestPayload(Debtor $debtor, string $transactionId, ?string $notificationUrl, float $amount): array
     {
-        $tetherInstance = $debtor->tether_instance_id ? $debtor->tetherInstance : null;
-        $empAccountId = $tetherInstance?->acquirer_account_id ?? $debtor->upload?->emp_account_id ?? null;
+        $empAccountId = $this->resolveEmpAccountId($debtor);
 
         $relayUrl = null;
 
@@ -431,7 +429,6 @@ class EmpBillingService
                     'transaction_id' => $transactionId,
                     'relay_domain' => $relayUrl,
                     'emp_account_id' => $empAccountId,
-                    'tether_instance_id' => $debtor->tether_instance_id,
                 ]);
             }
         }

@@ -17,7 +17,7 @@ use Carbon\Carbon;
 class EmpRefreshService
 {
     private EmpClient $client;
-    
+
     public const PER_PAGE = 100;
     public const BATCH_SIZE = 100;
     public const RATE_LIMIT_DELAY_MS = 50;
@@ -41,8 +41,8 @@ class EmpRefreshService
 
         $pagination = $this->extractPagination($response);
         $transactions = $this->extractTransactions($response);
-        
-        $hasMore = $pagination 
+
+        $hasMore = $pagination
             ? ($pagination['page'] < $pagination['pages_count'])
             : (count($transactions) >= self::PER_PAGE);
 
@@ -62,24 +62,23 @@ class EmpRefreshService
     }
 
     /**
-     * Resolve tether_instance_id from emp_account_id.
+     * Resolve tether_instance_id for EMP gateway.
+     * Uses acquirer_type lookup (instance = gateway level, not account level).
      */
-    private function resolveTetherInstanceId(?int $empAccountId): ?int
+    private function resolveTetherInstanceId(): ?int
     {
-        if (!$empAccountId) {
-            return null;
-        }
+        static $cachedId = null;
+        static $resolved = false;
 
-        static $cache = [];
-
-        if (!array_key_exists($empAccountId, $cache)) {
-            $instance = TetherInstance::where('acquirer_account_id', $empAccountId)
+        if (!$resolved) {
+            $instance = TetherInstance::where('acquirer_type', 'emp')
                 ->where('is_active', true)
                 ->first();
-            $cache[$empAccountId] = $instance?->id;
+            $cachedId = $instance?->id;
+            $resolved = true;
         }
 
-        return $cache[$empAccountId];
+        return $cachedId;
     }
 
     /**
@@ -88,9 +87,9 @@ class EmpRefreshService
     public function processTransactions(array $transactions, ?int $empAccountId = null): array
     {
         $stats = ['inserted' => 0, 'updated' => 0, 'unchanged' => 0, 'errors' => 0, 'debtors_synced' => 0];
-        
+
         $batches = array_chunk($transactions, self::BATCH_SIZE);
-        
+
         foreach ($batches as $batch) {
             $result = $this->processBatch($batch, $empAccountId);
             $stats['inserted'] += $result['inserted'];
@@ -98,7 +97,7 @@ class EmpRefreshService
             $stats['unchanged'] += $result['unchanged'];
             $stats['errors'] += $result['errors'];
             $stats['debtors_synced'] += $result['debtors_synced'] ?? 0;
-            
+
             usleep(self::RATE_LIMIT_DELAY_MS * 1000);
         }
 
@@ -116,20 +115,20 @@ class EmpRefreshService
         $chargebackedUniqueIds = [];
         $now = now();
         $terminalToken = $this->client->getTerminalToken();
-        $tetherInstanceId = $this->resolveTetherInstanceId($empAccountId);
-        
+        $tetherInstanceId = $this->resolveTetherInstanceId();
+
         foreach ($transactions as $tx) {
             $uniqueId = $tx['unique_id'] ?? null;
             if (!$uniqueId) {
                 continue;
             }
-            
+
             $uniqueIds[] = $uniqueId;
             $transactionId = $tx['transaction_id'] ?? null;
             $status = $this->mapStatus($tx['status'] ?? 'unknown');
             $amount = isset($tx['amount']) ? ((float) $tx['amount']) / 100 : 0;
             $empCreatedAt = isset($tx['timestamp']) ? Carbon::parse($tx['timestamp']) : null;
-            
+
             $newDataByUniqueId[$uniqueId] = [
                 'status' => $status,
                 'amount' => $amount,
@@ -138,7 +137,7 @@ class EmpRefreshService
             if ($status === BillingAttempt::STATUS_CHARGEBACKED) {
                 $chargebackedUniqueIds[$uniqueId] = $empCreatedAt ?? $now;
             }
-            
+
             $rows[] = [
                 'unique_id' => $uniqueId,
                 'transaction_id' => $transactionId ?: 'emp_import_' . $uniqueId,
@@ -161,21 +160,21 @@ class EmpRefreshService
                 'updated_at' => $now,
             ];
         }
-        
+
         if (empty($rows)) {
             return ['inserted' => 0, 'updated' => 0, 'unchanged' => 0, 'errors' => 0, 'debtors_synced' => 0];
         }
-        
+
         try {
             $existing = BillingAttempt::whereIn('unique_id', $uniqueIds)
                 ->select('unique_id', 'status', 'amount')
                 ->get()
                 ->keyBy('unique_id');
-            
+
             $inserted = 0;
             $updated = 0;
             $unchanged = 0;
-            
+
             foreach ($newDataByUniqueId as $uniqueId => $newData) {
                 if (!$existing->has($uniqueId)) {
                     $inserted++;
@@ -188,7 +187,7 @@ class EmpRefreshService
                     }
                 }
             }
-            
+
             BillingAttempt::upsert(
                 $rows,
                 ['unique_id'],
@@ -209,7 +208,7 @@ class EmpRefreshService
             }
 
             $debtorsSynced = $this->syncDebtorStatuses($uniqueIds);
-            
+
             Log::debug('EMP Refresh: batch upserted', [
                 'total' => count($rows),
                 'inserted' => $inserted,
@@ -218,15 +217,15 @@ class EmpRefreshService
                 'debtors_synced' => $debtorsSynced,
                 'tether_instance_id' => $tetherInstanceId,
             ]);
-            
+
             return ['inserted' => $inserted, 'updated' => $updated, 'unchanged' => $unchanged, 'errors' => 0, 'debtors_synced' => $debtorsSynced];
-            
+
         } catch (\Exception $e) {
             Log::error('EMP Refresh: batch upsert failed, falling back to individual', [
                 'error' => $e->getMessage(),
                 'batch_size' => count($rows),
             ]);
-            
+
             return $this->processIndividually($transactions, $empAccountId);
         }
     }
@@ -295,7 +294,7 @@ class EmpRefreshService
     private function processIndividually(array $transactions, ?int $empAccountId = null): array
     {
         $stats = ['inserted' => 0, 'updated' => 0, 'unchanged' => 0, 'errors' => 0];
-        
+
         foreach ($transactions as $tx) {
             try {
                 $result = $this->upsertTransaction($tx, $empAccountId);
@@ -308,7 +307,7 @@ class EmpRefreshService
                 $stats['errors']++;
             }
         }
-        
+
         return $stats;
     }
 
@@ -345,7 +344,7 @@ class EmpRefreshService
             return 'updated';
         }
 
-        $tetherInstanceId = $this->resolveTetherInstanceId($empAccountId);
+        $tetherInstanceId = $this->resolveTetherInstanceId();
 
         $createData = array_merge($data, [
             'transaction_id' => $transactionId ?: 'emp_import_' . $uniqueId,
@@ -368,7 +367,7 @@ class EmpRefreshService
     public function estimatePages(string $startDate, string $endDate): array
     {
         $firstPage = $this->fetchPage($startDate, $endDate, 1);
-        
+
         return [
             'first_page_count' => count($firstPage['transactions']),
             'has_more' => $firstPage['has_more'],
@@ -382,7 +381,7 @@ class EmpRefreshService
         if (!isset($response['@page'])) {
             return null;
         }
-        
+
         return [
             'page' => (int) ($response['@page'] ?? 1),
             'per_page' => (int) ($response['@per_page'] ?? 100),
