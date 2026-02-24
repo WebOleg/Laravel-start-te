@@ -21,6 +21,7 @@ use App\Http\Controllers\Admin\EmpRefreshController as AdminEmpRefreshController
 use App\Http\Controllers\Admin\BicAnalyticsController as AdminBicAnalyticsController;
 use App\Http\Controllers\Admin\BavController as AdminBavController;
 use App\Http\Controllers\Admin\BavBatchController as AdminBavBatchController;
+use App\Http\Controllers\Admin\TetherInstanceController;
 use App\Http\Middleware\EmpWebhookSecurity;
 use App\Http\Controllers\Webhook\EmpWebhookController;
 
@@ -112,6 +113,8 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::put('/accounts/{empAccount}/cap', [EmpAccountController::class, 'updateCap']);
             Route::get('/caps', [EmpAccountController::class, 'caps']);
         });
+
+        Route::get('tether-instances', [TetherInstanceController::class, 'index']);
 
         Route::prefix('chargebacks')->group(function () {
             Route::get('/', [ChargebackController::class, 'index']);
