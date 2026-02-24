@@ -241,8 +241,9 @@ class DebtorController extends Controller
 
     /**
      * Bulk reassign debtors to a different EMP account.
-     * Updates debtors and their pending billing attempts.
-     * Does NOT touch approved/chargebacked billing attempts (immutable).
+     * Updates debtors and their unsent pending billing attempts.
+     * Does NOT touch attempts already submitted to EMP (have unique_id)
+     * or approved/chargebacked attempts (immutable).
      */
     public function bulkReassign(Request $request): JsonResponse
     {
@@ -271,7 +272,7 @@ class DebtorController extends Controller
         ]);
 
         try {
-            $result = DB::transaction(function () use ($debtorIds, $targetAccountId, $targetAccount) {
+            $result = DB::transaction(function () use ($debtorIds, $targetAccountId) {
                 $debtorsUpdated = Debtor::whereIn('id', $debtorIds)
                     ->where(function ($q) use ($targetAccountId) {
                         $q->where('emp_account_id', '!=', $targetAccountId)
@@ -282,15 +283,23 @@ class DebtorController extends Controller
                 $pendingBillingUpdated = DB::table('billing_attempts')
                     ->whereIn('debtor_id', $debtorIds)
                     ->where('status', 'pending')
+                    ->whereNull('unique_id')
                     ->where(function ($q) use ($targetAccountId) {
                         $q->where('emp_account_id', '!=', $targetAccountId)
                             ->orWhereNull('emp_account_id');
                     })
                     ->update(['emp_account_id' => $targetAccountId]);
 
+                $skippedSubmitted = DB::table('billing_attempts')
+                    ->whereIn('debtor_id', $debtorIds)
+                    ->where('status', 'pending')
+                    ->whereNotNull('unique_id')
+                    ->count();
+
                 return [
                     'debtors_updated' => $debtorsUpdated,
                     'pending_billing_updated' => $pendingBillingUpdated,
+                    'skipped_submitted' => $skippedSubmitted,
                 ];
             });
 
@@ -299,15 +308,22 @@ class DebtorController extends Controller
                 'target_account_name' => $targetAccount->name,
                 'debtors_updated' => $result['debtors_updated'],
                 'pending_billing_updated' => $result['pending_billing_updated'],
+                'skipped_submitted' => $result['skipped_submitted'],
                 'total_requested' => count($debtorIds),
-                'admin_id' => request()->user()?->id,
+                'admin_id' => $request->user()?->id,
             ]);
 
+            $message = "Reassigned {$result['debtors_updated']} debtors to {$targetAccount->name}.";
+            if ($result['skipped_submitted'] > 0) {
+                $message .= " {$result['skipped_submitted']} pending attempts already submitted to EMP were left unchanged.";
+            }
+
             return response()->json([
-                'message' => "Reassigned {$result['debtors_updated']} debtors to {$targetAccount->name}.",
+                'message' => $message,
                 'data' => [
                     'debtors_updated' => $result['debtors_updated'],
                     'pending_billing_updated' => $result['pending_billing_updated'],
+                    'skipped_submitted' => $result['skipped_submitted'],
                     'target_account' => [
                         'id' => $targetAccount->id,
                         'name' => $targetAccount->name,
