@@ -4,6 +4,7 @@
  * Admin Dashboard controller for overview statistics.
  *
  * CB Rate formula: chargebacks / approved (EMP-aligned).
+ * Supports filtering by tether_instance_id (preferred) or emp_account_id (legacy).
  */
 
 namespace App\Http\Controllers\Admin;
@@ -26,36 +27,49 @@ class DashboardController extends Controller
             'month' => 'nullable|integer|min:1|max:12',
             'year' => 'nullable|integer|min:2020|max:2100',
             'emp_account_id' => 'nullable|integer|exists:emp_accounts,id',
+            'tether_instance_id' => 'nullable|integer|exists:tether_instances,id',
         ]);
 
         $month = $request->input('month');
         $year = $request->input('year');
         $empAccountId = $request->input('emp_account_id');
+        $tetherInstanceId = $request->input('tether_instance_id');
+
+        $filter = compact('empAccountId', 'tetherInstanceId');
 
         return response()->json([
             'data' => [
-                'uploads' => $this->getUploadStats($empAccountId),
-                'debtors' => $this->getDebtorStats($month, $year, $empAccountId),
-                'vop' => $this->getVopStats($empAccountId),
-                'billing' => $this->getBillingStats($month, $year, $empAccountId),
-                'recent_activity' => $this->getRecentActivity($empAccountId),
-                'trends' => $this->getTrends($empAccountId),
+                'uploads' => $this->getUploadStats($filter),
+                'debtors' => $this->getDebtorStats($month, $year, $filter),
+                'vop' => $this->getVopStats($filter),
+                'billing' => $this->getBillingStats($month, $year, $filter),
+                'recent_activity' => $this->getRecentActivity($filter),
+                'trends' => $this->getTrends($filter),
                 'filters' => [
                     'month' => $month,
                     'year' => $year,
                     'emp_account_id' => $empAccountId,
+                    'tether_instance_id' => $tetherInstanceId,
                 ],
             ],
         ]);
     }
 
-    private function getUploadStats(?int $empAccountId = null): array
+    private function applyAccountFilter($query, array $filter, string $table = ''): void
+    {
+        $prefix = $table ? "{$table}." : '';
+
+        if (!empty($filter['tetherInstanceId'])) {
+            $query->where("{$prefix}tether_instance_id", $filter['tetherInstanceId']);
+        } elseif (!empty($filter['empAccountId'])) {
+            $query->where("{$prefix}emp_account_id", $filter['empAccountId']);
+        }
+    }
+
+    private function getUploadStats(array $filter): array
     {
         $query = Upload::query();
-
-        if ($empAccountId) {
-            $query->where('emp_account_id', $empAccountId);
-        }
+        $this->applyAccountFilter($query, $filter);
 
         return [
             'total' => (clone $query)->count(),
@@ -68,16 +82,20 @@ class DashboardController extends Controller
         ];
     }
 
-    private function getFilteredUploadIds(?int $empAccountId): ?array
+    private function getFilteredUploadIds(array $filter): ?array
     {
-        if (!$empAccountId) {
-            return null;
+        if (!empty($filter['tetherInstanceId'])) {
+            return Upload::where('tether_instance_id', $filter['tetherInstanceId'])->pluck('id')->toArray();
         }
 
-        return Upload::where('emp_account_id', $empAccountId)->pluck('id')->toArray();
+        if (!empty($filter['empAccountId'])) {
+            return Upload::where('emp_account_id', $filter['empAccountId'])->pluck('id')->toArray();
+        }
+
+        return null;
     }
 
-    private function getDebtorStats(?int $month = null, ?int $year = null, ?int $empAccountId = null): array
+    private function getDebtorStats(?int $month = null, ?int $year = null, array $filter = []): array
     {
         $startDate = null;
         $endDate = null;
@@ -99,11 +117,9 @@ class DashboardController extends Controller
                 }
             });
 
-        if ($empAccountId) {
-            $billedQuery->where('emp_account_id', $empAccountId);
-            $approvedQuery->where('emp_account_id', $empAccountId);
-            $chargebackedQuery->where('emp_account_id', $empAccountId);
-        }
+        $this->applyAccountFilter($billedQuery, $filter);
+        $this->applyAccountFilter($approvedQuery, $filter);
+        $this->applyAccountFilter($chargebackedQuery, $filter);
 
         if ($startDate && $endDate) {
             $billedQuery->whereRaw('COALESCE(emp_created_at, created_at) BETWEEN ? AND ?', [$startDate, $endDate]);
@@ -117,10 +133,14 @@ class DashboardController extends Controller
         $netRecovered = $totalApproved - $totalChargebacked;
 
         $debtorQuery = Debtor::query();
-        $uploadIds = $this->getFilteredUploadIds($empAccountId);
 
-        if ($uploadIds !== null) {
-            $debtorQuery->whereIn('upload_id', $uploadIds);
+        if (!empty($filter['tetherInstanceId'])) {
+            $debtorQuery->where('tether_instance_id', $filter['tetherInstanceId']);
+        } else {
+            $uploadIds = $this->getFilteredUploadIds($filter);
+            if ($uploadIds !== null) {
+                $debtorQuery->whereIn('upload_id', $uploadIds);
+            }
         }
 
         $totalDebtors = (clone $debtorQuery)->count();
@@ -153,14 +173,19 @@ class DashboardController extends Controller
         ];
     }
 
-    private function getVopStats(?int $empAccountId = null): array
+    private function getVopStats(array $filter = []): array
     {
         $vopQuery = VopLog::query();
-        $uploadIds = $this->getFilteredUploadIds($empAccountId);
 
-        if ($uploadIds !== null) {
-            $debtorIds = Debtor::whereIn('upload_id', $uploadIds)->pluck('id')->toArray();
+        if (!empty($filter['tetherInstanceId'])) {
+            $debtorIds = Debtor::where('tether_instance_id', $filter['tetherInstanceId'])->pluck('id')->toArray();
             $vopQuery->whereIn('debtor_id', $debtorIds);
+        } else {
+            $uploadIds = $this->getFilteredUploadIds($filter);
+            if ($uploadIds !== null) {
+                $debtorIds = Debtor::whereIn('upload_id', $uploadIds)->pluck('id')->toArray();
+                $vopQuery->whereIn('debtor_id', $debtorIds);
+            }
         }
 
         $total = (clone $vopQuery)->count();
@@ -183,7 +208,7 @@ class DashboardController extends Controller
         ];
     }
 
-    private function getBillingStats(?int $month = null, ?int $year = null, ?int $empAccountId = null): array
+    private function getBillingStats(?int $month = null, ?int $year = null, array $filter = []): array
     {
         $startDate = null;
         $endDate = null;
@@ -196,10 +221,7 @@ class DashboardController extends Controller
         $excludedCbCodes = config('tether.chargeback.excluded_cb_reason_codes', []);
 
         $baseQuery = BillingAttempt::query();
-
-        if ($empAccountId) {
-            $baseQuery->where('emp_account_id', $empAccountId);
-        }
+        $this->applyAccountFilter($baseQuery, $filter);
 
         if ($startDate && $endDate) {
             $baseQuery->whereRaw('COALESCE(emp_created_at, created_at) BETWEEN ? AND ?', [$startDate, $endDate]);
@@ -227,13 +249,13 @@ class DashboardController extends Controller
         $voided = (clone $baseQuery)->where('status', BillingAttempt::STATUS_VOIDED)->count();
 
         $todayQuery = BillingAttempt::whereRaw('DATE(COALESCE(emp_created_at, created_at)) = ?', [today()->toDateString()]);
-        if ($empAccountId) {
-            $todayQuery->where('emp_account_id', $empAccountId);
-        }
+        $this->applyAccountFilter($todayQuery, $filter);
 
         $debtorCount = Debtor::count();
-        if ($empAccountId) {
-            $uploadIds = $this->getFilteredUploadIds($empAccountId);
+        if (!empty($filter['tetherInstanceId'])) {
+            $debtorCount = Debtor::where('tether_instance_id', $filter['tetherInstanceId'])->count();
+        } elseif (!empty($filter['empAccountId'])) {
+            $uploadIds = $this->getFilteredUploadIds($filter);
             if ($uploadIds !== null) {
                 $debtorCount = Debtor::whereIn('upload_id', $uploadIds)->count();
             }
@@ -262,16 +284,14 @@ class DashboardController extends Controller
         ];
     }
 
-    private function getRecentActivity(?int $empAccountId = null): array
+    private function getRecentActivity(array $filter = []): array
     {
         $uploadsQuery = Upload::select('id', 'original_filename', 'status', 'total_records', 'created_at');
         $billingQuery = BillingAttempt::select('id', 'debtor_id', 'status', 'amount', 'emp_created_at', 'created_at')
             ->with('debtor:id,first_name,last_name');
 
-        if ($empAccountId) {
-            $uploadsQuery->where('emp_account_id', $empAccountId);
-            $billingQuery->where('emp_account_id', $empAccountId);
-        }
+        $this->applyAccountFilter($uploadsQuery, $filter);
+        $this->applyAccountFilter($billingQuery, $filter);
 
         return [
             'recent_uploads' => $uploadsQuery
@@ -285,11 +305,11 @@ class DashboardController extends Controller
         ];
     }
 
-    private function getTrends(?int $empAccountId = null): array
+    private function getTrends(array $filter = []): array
     {
         $days = 7;
         $trends = [];
-        $uploadIds = $this->getFilteredUploadIds($empAccountId);
+        $uploadIds = $this->getFilteredUploadIds($filter);
         $excludedCbCodes = config('tether.chargeback.excluded_cb_reason_codes', []);
 
         for ($i = $days - 1; $i >= 0; $i--) {
@@ -309,14 +329,14 @@ class DashboardController extends Controller
                     }
                 });
 
-            if ($empAccountId) {
-                $uploadsQuery->where('emp_account_id', $empAccountId);
-                $billingQuery->where('emp_account_id', $empAccountId);
-                $successQuery->where('emp_account_id', $empAccountId);
-                $cbQuery->where('emp_account_id', $empAccountId);
-            }
+            $this->applyAccountFilter($uploadsQuery, $filter);
+            $this->applyAccountFilter($billingQuery, $filter);
+            $this->applyAccountFilter($successQuery, $filter);
+            $this->applyAccountFilter($cbQuery, $filter);
 
-            if ($uploadIds !== null) {
+            if (!empty($filter['tetherInstanceId'])) {
+                $debtorsQuery->where('tether_instance_id', $filter['tetherInstanceId']);
+            } elseif ($uploadIds !== null) {
                 $debtorsQuery->whereIn('upload_id', $uploadIds);
             }
 
