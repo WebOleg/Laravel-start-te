@@ -2,6 +2,7 @@
 
 /**
  * Service for processing SEPA Direct Debit billing through emerchantpay.
+ * Resolves acquirer account via TetherInstance when available.
  */
 
 namespace App\Services\Emp;
@@ -10,6 +11,7 @@ use App\Models\BillingAttempt;
 use App\Models\Debtor;
 use App\Models\DebtorProfile;
 use App\Models\EmpAccount;
+use App\Models\TetherInstance;
 use App\Models\Upload;
 use App\Services\DescriptorService;
 use Illuminate\Support\Facades\DB;
@@ -35,12 +37,27 @@ class EmpBillingService
     }
 
     /**
-     * Get EmpClient for a debtor (uses upload's account if set).
+     * Resolve EmpClient for a debtor.
+     * Priority: TetherInstance → Upload emp_account → default active account.
      */
     protected function getClientForDebtor(Debtor $debtor): EmpClient
     {
-        $upload = $debtor->upload;
+        if ($debtor->tether_instance_id) {
+            $instance = $debtor->tetherInstance;
+            if ($instance && $instance->isEmp() && $instance->acquirer_account_id) {
+                $account = $instance->acquirerAccount;
+                if ($account) {
+                    Log::debug('Billing client resolved via TetherInstance', [
+                        'debtor_id' => $debtor->id,
+                        'tether_instance_id' => $instance->id,
+                        'emp_account_id' => $account->id,
+                    ]);
+                    return new EmpClient($account);
+            }
+            }
+        }
 
+        $upload = $debtor->upload;
         if ($upload && $upload->emp_account_id) {
             $account = $upload->empAccount;
             if ($account) {
@@ -52,18 +69,46 @@ class EmpBillingService
     }
 
     /**
-     * Get EmpClient for an upload.
+     * Resolve EmpClient for an upload.
+     * Priority: TetherInstance → emp_account_id → default.
      */
     private function getClientForUpload(Upload $upload): EmpClient
     {
+        if ($upload->tether_instance_id) {
+            $instance = $upload->tetherInstance;
+            if ($instance && $instance->isEmp() && $instance->acquirer_account_id) {
+                $account = $instance->acquirerAccount;
+                if ($account) {
+                    return new EmpClient($account);
+                }
+            }
+        }
+
         if ($upload->emp_account_id) {
             $account = $upload->empAccount;
             if ($account) {
                 return new EmpClient($account);
-            }
+        }
         }
 
         return $this->defaultClient;
+    }
+
+    /**
+     * Resolve tether_instance_id for a debtor.
+     * Priority: debtor direct → upload → null.
+     */
+    private function resolveTetherInstanceId(Debtor $debtor): ?int
+    {
+        if ($debtor->tether_instance_id) {
+            return $debtor->tether_instance_id;
+        }
+
+        if ($debtor->upload && $debtor->upload->tether_instance_id) {
+            return $debtor->upload->tether_instance_id;
+        }
+
+        return null;
     }
 
     /**
@@ -76,9 +121,12 @@ class EmpBillingService
         string $billingModel = DebtorProfile::MODEL_LEGACY,
         array $context = []
     ): BillingAttempt {
-        // Ensure upload relation is loaded to avoid N+1 queries
         if (!$debtor->relationLoaded('upload')) {
             $debtor->load('upload');
+        }
+
+        if ($debtor->tether_instance_id && !$debtor->relationLoaded('tetherInstance')) {
+            $debtor->load('tetherInst.acquirerAccount');
         }
 
         $billableAmount = $amount ?? $debtor->amount;
@@ -87,8 +135,8 @@ class EmpBillingService
             throw new \InvalidArgumentException("Debtor {$debtor->id} cannot be billed");
         }
 
-        // Get the appropriate client for this debtor's upload
         $client = $this->getClientForDebtor($debtor);
+        $tetherInstanceId = $this->resolveTetherInstanceId($debtor);
 
         $transactionId = $this->generateTransactionId($debtor);
 
@@ -101,6 +149,7 @@ class EmpBillingService
             'debtor_id' => $debtor->id,
             'debtor_profile_id' => $debtor->debtor_profile_id,
             'upload_id' => $debtor->upload_id,
+            'tether_instance_id' => $tetherInstanceId,
             'transaction_id' => $transactionId,
             'amount' => $billableAmount,
             'currency' => 'EUR',
@@ -122,6 +171,14 @@ class EmpBillingService
         $this->updateBillingAttempt($billingAttempt, $response);
 
         $this->updateDebtorStatus($debtor, $billingAttempt);
+
+        Log::info('Debtor billed', [
+            'debtor_id' => $debtor->id,
+            'billing_attempt_id' => $billingAttempt->id,
+            'tether_instance_id' => $tetherInstanceId,
+            'emp_account_id' => $client->getEmpAccountId(),
+            'status' => $billingAttempt->status,
+        ]);
 
         return $billingAttempt;
     }
@@ -191,7 +248,7 @@ class EmpBillingService
                         BillingAttempt::STATUS_APPROVED,
                     ]);
             })
-            ->with('upload')
+            ->with(['upload', 'tetherInstance.acquirerAccount'])
             ->cursor();
 
         return $this->billBatch($debtors, $notificationUrl);
@@ -214,14 +271,7 @@ class EmpBillingService
             throw new \InvalidArgumentException('Billing attempt has no unique_id');
         }
 
-        // Use the account that was used for this billing attempt
-        $client = $this->defaultClient;
-        if ($billingAttempt->emp_account_id) {
-            $account = EmpAccount::find($billingAttempt->emp_account_id);
-            if ($account) {
-                $client = new EmpClient($account);
-            }
-        }
+        $client = $this->resolveClientForAttempt($billingAttempt);
 
         $response = $client->reconcile($billingAttempt->unique_id);
 
@@ -230,6 +280,22 @@ class EmpBillingService
         }
 
         return $response;
+    }
+
+    /**
+     * Resolve EmpClient for an existing billing attempt.
+     * Uses emp_account_id stored at creation time (immutable).
+     */
+    private function resolveClientForAttempt(BillingAttempt $billingAttempt): EmpClient
+    {
+        if ($billingAttempt->emp_account_id) {
+            $account = EmpAccount::find($billingAttempt->emp_account_id);
+            if ($account) {
+                return new EmpClient($account);
+            }
+        }
+
+        return $this->defaultClient;
     }
 
     /**
@@ -340,7 +406,9 @@ class EmpBillingService
 
     private function buildRequestPayload(Debtor $debtor, string $transactionId, ?string $notificationUrl, float $amount): array
     {
-        $empAccountId = $debtor->upload?->emp_account_id ?? null;
+        $tetherInstance = $debtor->tether_instance_id ? $debtor->tetherInstance : null;
+        $empAccountId = $tetherInstance?->acquirer_account_id ?? $debtor->upload?->emp_account_id ?? null;
+
         $relayUrl = null;
 
         if ($empAccountId) {
@@ -356,19 +424,18 @@ class EmpBillingService
             if ($relays->isNotEmpty()) {
                 $relay = $relays->random();
 
-                // Strip existing protocols if mistakenly added, then enforce HTTPS
                 $cleanDomain = preg_replace('#^https?://#', '', $relay->domain);
                 $relayUrl = 'https://' . rtrim($cleanDomain, '/');
 
                 Log::info('Routing webhook through disposable relay', [
                     'transaction_id' => $transactionId,
                     'relay_domain' => $relayUrl,
-                    'emp_account_id' => $empAccountId
+                    'emp_account_id' => $empAccountId,
+                    'tether_instance_id' => $debtor->tether_instance_id,
                 ]);
             }
         }
 
-        // Default Fallback
         $webhookToken = config('services.emp.webhook_token');
         $defaultNotificationUrl = config('app.url') . '/api/webhooks/emp' . ($webhookToken ? '/' . $webhookToken : '');
 
@@ -384,11 +451,9 @@ class EmpBillingService
             'notification_url' => $notificationUrl ?? $relayUrl ?? $defaultNotificationUrl,
         ];
 
-        // DD-01: Dynamic Descriptor Injection
         $descriptor = $this->descriptorService->getActiveDescriptor(now(), $empAccountId);
 
         if ($descriptor) {
-            // filter removes nulls (e.g. if city/country are not set)
             $params = array_filter([
                 'merchant_name'    => $descriptor->descriptor_name,
                 'merchant_city'    => $descriptor->descriptor_city,
@@ -400,7 +465,7 @@ class EmpBillingService
 
                 Log::info('Injecting dynamic descriptor', [
                     'transaction_id' => $transactionId,
-                    'descriptor' => $params['merchant_name']
+                    'descriptor' => $params['merchant_name'],
                 ]);
             }
         }
@@ -437,6 +502,7 @@ class EmpBillingService
         Log::info('Billing attempt processed', [
             'billing_attempt_id' => $billingAttempt->id,
             'debtor_id' => $billingAttempt->debtor_id,
+            'tether_instance_id' => $billingAttempt->tether_instance_id,
             'status' => $status,
             'unique_id' => $billingAttempt->unique_id,
             'bic' => $billingAttempt->bic,
@@ -477,17 +543,10 @@ class EmpBillingService
      */
     public function voidAttempt(BillingAttempt $attempt): bool
     {
-        $client = $this->defaultClient;
-        if ($attempt->emp_account_id) {
-            $account = EmpAccount::find($attempt->emp_account_id);
-            if ($account) {
-                $client = new EmpClient($account);
-            }
-        }
+        $client = $this->resolveClientForAttempt($attempt);
 
         $voidTransactionId = sprintf('void_%d_%s', $attempt->id, Str::random(8));
 
-        // Send Void Request
         $response = $client->voidTransaction(
             $attempt->unique_id,
             $voidTransactionId,
@@ -496,31 +555,30 @@ class EmpBillingService
 
         $status = $response['status'] ?? 'error';
 
-        // Handle Success
         if ($status === 'approved') {
-            // Update Attempt
             $attempt->update([
                 'status' => BillingAttempt::STATUS_VOIDED,
                 'meta' => array_merge($attempt->meta ?? [], [
                     'voided_at' => now()->toIso8601String(),
                     'void_unique_id' => $response['unique_id'] ?? null,
-                    'void_response' => $response
-                ])
+                    'void_response' => $response,
+                ]),
             ]);
 
-            // Reset Debtor to Uploaded so they can be billed again if necessary
             $attempt->debtor->update([
-                'status' => Debtor::STATUS_UPLOADED
+                'status' => Debtor::STATUS_UPLOADED,
             ]);
 
-            Log::info("Transaction voided successfully", ['attempt_id' => $attempt->id]);
+            Log::info('Transaction voided successfully', [
+                'attempt_id' => $attempt->id,
+                'tether_instance_id' => $attempt->tether_instance_id,
+            ]);
             return true;
         }
 
-        // Handle Failure
-        Log::warning("Void rejected by gateway", [
+        Log::warning('Void rejected by gateway', [
             'attempt_id' => $attempt->id,
-            'response' => $response
+            'response' => $response,
         ]);
 
         return false;

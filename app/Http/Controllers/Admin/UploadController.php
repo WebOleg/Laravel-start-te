@@ -42,10 +42,11 @@ class UploadController extends Controller
         $request->validate([
             'status' => 'nullable|string|in:pending,processing,completed,failed',
             'emp_account_id' => 'nullable|integer|exists:emp_accounts,id',
+            'tether_instance_id' => 'nullable|integer|exists:tether_instances,id',
             'per_page' => 'nullable|integer|min:1|max:100',
         ]);
 
-        $query = Upload::with('empAccount')->withCount([
+        $query = Upload::with(['empAccount', 'tetherInstance'])->withCount([
             'debtors',
             'debtors as valid_count' => function ($q) {
                 $q->where('validation_status', Debtor::VALIDATION_VALID);
@@ -69,7 +70,9 @@ class UploadController extends Controller
             $query->where('status', $request->input('status'));
         }
 
-        if ($request->filled('emp_account_id')) {
+        if ($request->filled('tether_instance_id')) {
+            $query->where('tether_instance_id', $request->input('tether_instance_id'));
+        } elseif ($request->filled('emp_account_id')) {
             $query->where('emp_account_id', $request->input('emp_account_id'));
         }
 
@@ -80,7 +83,7 @@ class UploadController extends Controller
 
     public function show(Upload $upload): UploadResource
     {
-        $upload->load(['uploader', 'empAccount']);
+        $upload->load(['uploader', 'empAccount', 'tetherInstance']);
         $upload->loadCount([
             'debtors',
             'debtors as valid_count' => function ($q) {
@@ -133,7 +136,7 @@ class UploadController extends Controller
             );
 
             $empAccountId = $request->input('emp_account_id');
-
+            $tetherInstanceId = $request->input('tether_instance_id');
             $applyGlobalLock = $request->boolean('apply_global_lock');
 
             $preValidation = $this->preValidationService->validate($file);
@@ -152,7 +155,8 @@ class UploadController extends Controller
                     $request->user()?->id,
                     $billingModel,
                     $empAccountId,
-                    $applyGlobalLock
+                    $applyGlobalLock,
+                    $tetherInstanceId
                 );
 
                 return response()->json([
@@ -169,7 +173,8 @@ class UploadController extends Controller
                 $request->user()?->id,
                 $billingModel,
                 $empAccountId,
-                $applyGlobalLock
+                $applyGlobalLock,
+                $tetherInstanceId
             );
 
             return response()->json([
@@ -302,7 +307,7 @@ class UploadController extends Controller
         ", [
             DebtorProfile::MODEL_FLYWHEEL,
             DebtorProfile::MODEL_RECOVERY,
-            DebtorProfile::MODEL_LEGACY
+            DebtorProfile::MODEL_LEGACY,
         ])
             ->toBase()
             ->first();

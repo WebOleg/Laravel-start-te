@@ -40,6 +40,7 @@ class Debtor extends Model
 
     protected $fillable = [
         'upload_id',
+        'tether_instance_id',
         'iban',
         'iban_hash',
         'iban_valid',
@@ -97,6 +98,11 @@ class Debtor extends Model
         'vop_status' => 'pending',
         'bav_selected' => false,
     ];
+
+    public function tetherInstance(): BelongsTo
+    {
+        return $this->belongsTo(TetherInstance::class);
+    }
 
     public function upload(): BelongsTo
     {
@@ -170,7 +176,6 @@ class Debtor extends Model
     {
         return $query->where('validation_status', self::VALIDATION_VALID)
             ->where('status', self::STATUS_UPLOADED)
-            // Only allow debtors with no VOP check OR passed VOP check
             ->where(function ($q) {
                 $q->whereDoesntHave('vopLogs')
                   ->orWhereHas('vopLogs', function ($vopQuery) {

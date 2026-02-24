@@ -62,7 +62,6 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
             $parsed = $this->parseFile($parser, $tempFilePath);
             $rows = $parsed['rows'];
 
-            // Update total records count immediately
             $this->upload->update(['total_records' => count($rows)]);
 
             $meta = $this->upload->meta ?? [];
@@ -70,13 +69,12 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
             if (!empty($meta['apply_global_lock'])) {
                 $lockResult = FileUploadService::filterCrossAccountIbans(
                     $rows,
-                    $this->upload->emp_account_id,
+                    $this->upload->tether_instance_id,
                     $this->columnMapping
                 );
 
                 $rows = $lockResult['rows'];
 
-                // Update meta with skipped counts/errors
                 $currentMeta = $this->upload->meta ?? [];
                 $currentMeta['skipped_locked'] = $lockResult['excluded_count'];
                 $currentMeta['errors'] = array_merge(
@@ -86,9 +84,10 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
 
                 $this->upload->update(['meta' => $currentMeta]);
 
-                Log::info("Global Lock Applied in Async Job", [
+                Log::info("Cross-instance lock applied in async job", [
                     'upload_id' => $this->upload->id,
-                    'excluded' => $lockResult['excluded_count']
+                    'tether_instance_id' => $this->upload->tether_instance_id,
+                    'excluded' => $lockResult['excluded_count'],
                 ]);
             }
 
@@ -97,10 +96,8 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
                 return;
             }
 
-            // For small files, process directly via Service
             $result = $importer->importRows($this->upload, $rows, $this->columnMapping, false, 1);
 
-            // Adjust skipped counts if lock logic ran
             if (!empty($meta['apply_global_lock'])) {
                 $lockedCount = $lockResult['excluded_count'] ?? 0;
 
@@ -152,7 +149,6 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
             ->name("Upload #{$this->upload->id}")
             ->allowFailures()
             ->finally(function () use ($upload) {
-                // Refresh model to get latest counts from chunk jobs
                 $upload->refresh();
 
                 $status = $upload->failed_records === $upload->total_records && $upload->total_records > 0

@@ -28,6 +28,7 @@ class StoreUploadRequest extends FormRequest
             ],
             'billing_model' => ['sometimes', Rule::enum(BillingModel::class)],
             'emp_account_id' => ['sometimes', 'nullable', 'integer', 'exists:emp_accounts,id'],
+            'tether_instance_id' => ['sometimes', 'nullable', 'integer', 'exists:tether_instances,id'],
         ];
     }
 
@@ -39,6 +40,7 @@ class StoreUploadRequest extends FormRequest
             'file.max' => 'File size cannot exceed 50MB.',
             'file.mimes' => 'Only CSV, TXT and Excel files (xlsx, xls) are allowed.',
             'emp_account_id.exists' => 'Selected EMP account does not exist.',
+            'tether_instance_id.exists' => 'Selected Tether instance does not exist.',
         ];
     }
 }
