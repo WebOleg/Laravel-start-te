@@ -24,33 +24,29 @@ class BicAnalyticsService
     public const CACHE_TTL = 900;
     public const HIGH_RISK_THRESHOLD = 30.0;
 
-    /**
-     * Get BIC analytics with caching.
-     */
     public function getAnalytics(
         string $period = self::DEFAULT_PERIOD,
         ?string $startDate = null,
         ?string $endDate = null,
         ?string $billingModel = null,
         ?int $empAccountId = null,
-       ?string $cbReasonCode = null
+        ?string $cbReasonCode = null,
+        ?int $tetherInstanceId = null
     ): array
     {
-        $cacheKey = $this->buildCacheKey($period, $startDate, $endDate, $billingModel, $empAccountId, $cbReasonCode);
+        $cacheKey = $this->buildCacheKey($period, $startDate, $endDate, $billingModel, $empAccountId, $cbReasonCode, $tetherInstanceId);
 
-        return Cache::remember($cacheKey, self::CACHE_TTL, function () use ($period, $startDate, $endDate, $billingModel, $empAccountId, $cbReasonCode) {
-            return $this->calculateAnalytics($period, $startDate, $endDate, $billingModel, $empAccountId, $cbReasonCode);
+        return Cache::remember($cacheKey, self::CACHE_TTL, function () use ($period, $startDate, $endDate, $billingModel, $empAccountId, $cbReasonCode, $tetherInstanceId) {
+            return $this->calculateAnalytics($period, $startDate, $endDate, $billingModel, $empAccountId, $cbReasonCode, $tetherInstanceId);
         });
     }
 
-    /**
-     * Get breakdown of analytics for a specific BIC grouped by Price Point (Amount).
-     */
     public function getBicPricePointBreakdown(
         string $bic,
         string $period = self::DEFAULT_PERIOD,
         ?string $billingModel = null,
-        ?int $empAccountId = null
+        ?int $empAccountId = null,
+        ?int $tetherInstanceId = null
     ): array {
         [$start, $end] = $this->resolveDateRange($period, null, null);
         $threshold = config('tether.chargeback.alert_threshold', self::HIGH_RISK_THRESHOLD);
@@ -64,7 +60,9 @@ class BicAnalyticsService
             $query->where('billing_model', $billingModel);
         }
 
-        if ($empAccountId) {
+        if ($tetherInstanceId) {
+            $query->where('tether_instance_id', $tetherInstanceId);
+        } elseif ($empAccountId) {
             $query->where('emp_account_id', $empAccountId);
         }
 
@@ -99,14 +97,12 @@ class BicAnalyticsService
         ];
     }
 
-    /**
-     * Get CB reason code breakdown for a specific BIC.
-     */
     public function getBicCbCodeBreakdown(
         string $bic,
         string $period = self::DEFAULT_PERIOD,
         ?string $billingModel = null,
-        ?int $empAccountId = null
+        ?int $empAccountId = null,
+        ?int $tetherInstanceId = null
     ): array {
         [$start, $end] = $this->resolveDateRange($period, null, null);
 
@@ -119,7 +115,9 @@ class BicAnalyticsService
             $query->where('billing_model', $billingModel);
         }
 
-        if ($empAccountId) {
+        if ($tetherInstanceId) {
+            $query->where('tether_instance_id', $tetherInstanceId);
+        } elseif ($empAccountId) {
             $query->where('emp_account_id', $empAccountId);
         }
 
@@ -152,17 +150,14 @@ class BicAnalyticsService
         ];
     }
 
-    /**
-     * Calculate BIC analytics grouped by BIC.
-     * Optionally filter by CB reason code to see which BICs have specific chargeback reasons.
-     */
     public function calculateAnalytics(
         string $period,
         ?string $startDate = null,
         ?string $endDate = null,
         ?string $billingModel = null,
         ?int $empAccountId = null,
-        ?string $cbReasonCode = null
+        ?string $cbReasonCode = null,
+        ?int $tetherInstanceId = null
     ): array
     {
         [$start, $end] = $this->resolveDateRange($period, $startDate, $endDate);
@@ -178,12 +173,12 @@ class BicAnalyticsService
             $query->where('billing_model', $billingModel);
         }
 
-        if ($empAccountId) {
+        if ($tetherInstanceId) {
+            $query->where('tether_instance_id', $tetherInstanceId);
+        } elseif ($empAccountId) {
             $query->where('emp_account_id', $empAccountId);
         }
 
-        // When filtering by CB reason code, override chargeback counting
-        // to only count chargebacks with this specific code
         if ($cbReasonCode) {
             $chargebackCountCase = "SUM(CASE WHEN status = '" . BillingAttempt::STATUS_CHARGEBACKED . "'
                 AND chargeback_reason_code = '" . addslashes($cbReasonCode) . "'
@@ -235,6 +230,7 @@ class BicAnalyticsService
             'period' => $period,
             'model' => $billingModel ?? 'all',
             'emp_account_id' => $empAccountId,
+            'tether_instance_id' => $tetherInstanceId,
             'cb_reason_code' => $cbReasonCode,
             'start_date' => $start->toIso8601String(),
             'end_date' => $end->toIso8601String(),
@@ -245,10 +241,7 @@ class BicAnalyticsService
         ];
     }
 
-    /**
-     * Get summary for a specific BIC.
-     */
-    public function getBicSummary(string $bic, string $period = self::DEFAULT_PERIOD, ?string $billingModel = null, ?int $empAccountId = null): ?array
+    public function getBicSummary(string $bic, string $period = self::DEFAULT_PERIOD, ?string $billingModel = null, ?int $empAccountId = null, ?int $tetherInstanceId = null): ?array
     {
         [$start, $end] = $this->resolveDateRange($period, null, null);
         $excludedCbCodes = config('tether.chargeback.excluded_cb_reason_codes', []);
@@ -261,7 +254,9 @@ class BicAnalyticsService
             $query->where('billing_model', $billingModel);
         }
 
-        if ($empAccountId) {
+        if ($tetherInstanceId) {
+            $query->where('tether_instance_id', $tetherInstanceId);
+        } elseif ($empAccountId) {
             $query->where('emp_account_id', $empAccountId);
         }
 
@@ -288,9 +283,6 @@ class BicAnalyticsService
         return $this->processBicRow((object) array_merge((array) $result, ['bic' => $bic]), $threshold);
     }
 
-    /**
-     * Clear analytics cache.
-     */
     public function clearCache(): void
     {
         $models = array_merge([null], DebtorProfile::BILLING_MODELS);
@@ -337,11 +329,12 @@ class BicAnalyticsService
         ?string $endDate,
         ?string $billingModel,
         ?int $empAccountId = null,
-        ?string $cbReasonCode = null
+        ?string $cbReasonCode = null,
+        ?int $tetherInstanceId = null
     ): string
     {
         $suffix = $billingModel ? "_{$billingModel}" : "";
-        $accountSuffix = $empAccountId ? "_acc{$empAccountId}" : "";
+        $accountSuffix = $tetherInstanceId ? "_ti{$tetherInstanceId}" : ($empAccountId ? "_acc{$empAccountId}" : "");
         $cbSuffix = $cbReasonCode ? "_cb{$cbReasonCode}" : "";
 
         if ($startDate && $endDate) {

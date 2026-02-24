@@ -19,6 +19,7 @@ class ChargebackController extends Controller
     {
         $request->validate([
             'emp_account_id' => 'nullable|integer|exists:emp_accounts,id',
+            'tether_instance_id' => 'nullable|integer|exists:tether_instances,id',
             'code' => 'nullable|string|max:12',
             'period' => 'nullable|string|in:24h,7d,30d,90d,all',
             'date_mode' => 'nullable|string|in:transaction,chargeback',
@@ -38,28 +39,23 @@ class ChargebackController extends Controller
         return response()->json(['data' => $errorCodes]);
     }
 
-    /**
-     * Get chargeback reasons breakdown for a specific upload
-     */
     public function uploadReasons(Request $request, Upload $upload)
     {
         $request->validate([
             'emp_account_id' => 'nullable|integer|exists:emp_accounts,id',
+            'tether_instance_id' => 'nullable|integer|exists:tether_instances,id',
             'start_date' => 'nullable|date',
             'end_date' => 'nullable|date|after_or_equal:date_from',
         ]);
 
         $data = $this->chargebackService->getUploadChargebackReasons(
             $upload,
-            $request->only(['emp_account_id', 'start_date', 'end_date'])
+            $request->only(['emp_account_id', 'tether_instance_id', 'start_date', 'end_date'])
         );
 
         return response()->json($data);
     }
 
-    /**
-     * Get individual records for a specific chargeback reason code within an upload
-     */
     public function uploadReasonRecords(Request $request, Upload $upload, string $code)
     {
         $request->validate([

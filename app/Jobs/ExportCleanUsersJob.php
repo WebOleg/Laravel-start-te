@@ -31,14 +31,16 @@ class ExportCleanUsersJob implements ShouldQueue
     private int $minDays;
     private string $mode;
     private ?int $accountId;
+    private ?int $tetherInstanceId;
 
-    public function __construct(string $jobId, int $limit, int $minDays = 30, string $mode = 'broad', ?int $accountId = null)
+    public function __construct(string $jobId, int $limit, int $minDays = 30, string $mode = 'broad', ?int $accountId = null, ?int $tetherInstanceId = null)
     {
         $this->jobId = $jobId;
         $this->limit = $limit;
         $this->minDays = $minDays;
         $this->mode = $mode;
         $this->accountId = $accountId;
+        $this->tetherInstanceId = $tetherInstanceId;
         $this->onQueue('exports');
     }
 
@@ -50,6 +52,7 @@ class ExportCleanUsersJob implements ShouldQueue
             'min_days' => $this->minDays,
             'mode' => $this->mode,
             'account_id' => $this->accountId,
+            'tether_instance_id' => $this->tetherInstanceId,
         ]);
 
         $this->updateStatus('processing', 0);
@@ -78,7 +81,9 @@ class ExportCleanUsersJob implements ShouldQueue
                 ->whereNotIn('debtor_id', $recentlyChargedSubquery)
                 ->oldest('emp_created_at');
 
-            if ($this->accountId) {
+            if ($this->tetherInstanceId) {
+                $query->where('tether_instance_id', $this->tetherInstanceId);
+            } elseif ($this->accountId) {
                 $query->where('emp_account_id', $this->accountId);
             }
 
@@ -146,6 +151,7 @@ class ExportCleanUsersJob implements ShouldQueue
                 'size' => $size,
                 'mode' => $this->mode,
                 'account_id' => $this->accountId,
+                'tether_instance_id' => $this->tetherInstanceId,
             ]);
 
         } catch (\Exception $e) {
@@ -184,6 +190,7 @@ class ExportCleanUsersJob implements ShouldQueue
             'min_days' => $this->minDays,
             'mode' => $this->mode,
             'account_id' => $this->accountId,
+            'tether_instance_id' => $this->tetherInstanceId,
             'updated_at' => now()->toISOString(),
         ], $extra), now()->addHours(24));
     }
