@@ -378,10 +378,7 @@ class UploadController extends Controller
                 SUM(CASE WHEN billing_attempts.status = 'approved' THEN 1 ELSE 0 END) as approved,
                 SUM(CASE WHEN billing_attempts.status = 'chargebacked' THEN 1 ELSE 0 END) as chargebacks,
                 SUM(CASE WHEN billing_attempts.status = 'approved' THEN billing_attempts.amount ELSE 0 END) as approved_volume,
-                SUM(CASE WHEN billing_attempts.status = 'chargebacked' THEN billing_attempts.amount ELSE 0 END) as cb_volume,
-                CASE WHEN SUM(CASE WHEN billing_attempts.status = 'approved' THEN 1 ELSE 0 END) > 0
-                    THEN ROUND(SUM(CASE WHEN billing_attempts.status = 'chargebacked' THEN 1 ELSE 0 END)::numeric / SUM(CASE WHEN billing_attempts.status = 'approved' THEN 1 ELSE 0 END)::numeric * 100, 2)
-                    ELSE 0 END as cb_rate
+                SUM(CASE WHEN billing_attempts.status = 'chargebacked' THEN billing_attempts.amount ELSE 0 END) as cb_volume
             ")
             ->groupBy('debtors.amount')
             ->orderByDesc('chargebacks')
@@ -392,7 +389,9 @@ class UploadController extends Controller
                 'chargebacks' => (int) $row->chargebacks,
                 'approved_volume' => round((float) $row->approved_volume, 2),
                 'cb_volume' => round((float) $row->cb_volume, 2),
-                'cb_rate' => (float) $row->cb_rate,
+                'cb_rate' => (int) $row->approved > 0
+                    ? round((int) $row->chargebacks / (int) $row->approved * 100, 2)
+                    : 0,
             ]);
 
         return response()->json([

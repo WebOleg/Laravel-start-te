@@ -1,10 +1,7 @@
 <?php
 namespace App\Http\Resources;
-
-use App\Services\IbanValidator;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
-
 class ChargebackResource extends JsonResource
 {
     /**
@@ -14,8 +11,6 @@ class ChargebackResource extends JsonResource
      */
     public function toArray(Request $request): array
     {
-        $ibanValidator = app(IbanValidator::class);
-
         return [
             'id' => $this->id,
             'error_code' => $this->chargeback_reason_code,
@@ -33,7 +28,7 @@ class ChargebackResource extends JsonResource
                 'first_name' => $this->debtor->first_name,
                 'last_name' => $this->debtor->last_name,
                 'email' => $this->debtor->email,
-                'iban' => $this->debtor->iban ? $ibanValidator->mask($this->debtor->iban) : null,
+                'iban' => $this->debtor->iban ?? null,
             ] : null,
             'emp_account' => $this->empAccount ? [
                 'id' => $this->empAccount->id,
