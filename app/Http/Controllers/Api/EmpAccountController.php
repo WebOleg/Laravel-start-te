@@ -153,8 +153,7 @@ class EmpAccountController extends Controller
             ->selectRaw('emp_account_id, COUNT(*) as tx_count')
             ->pluck('tx_count', 'emp_account_id');
 
-        $stats90d = BillingAttempt::whereBetween('emp_created_at', [$cbStartDate, $cbEndDate])
-                    ->whereNotNull('emp_account_id')
+        $stats90d = BillingAttempt::whereNotNull('emp_account_id')
                     ->when(!empty($excludedCbCodes), function ($q) use ($excludedCbCodes) {
                         $q->where(function ($subQ) use ($excludedCbCodes) {
                             $subQ->whereNotIn('chargeback_reason_code', $excludedCbCodes)
@@ -164,13 +163,15 @@ class EmpAccountController extends Controller
                     ->groupBy('emp_account_id')
                     ->selectRaw('
                         emp_account_id,
-                        SUM(CASE WHEN status = ? THEN amount ELSE 0 END) as approved_amount,
+                        SUM(CASE WHEN status = ? AND emp_created_at BETWEEN ? AND ? THEN amount ELSE 0 END) as approved_amount,
                         SUM(CASE WHEN status = ? AND chargebacked_at BETWEEN ? AND ? THEN amount ELSE 0 END) as chargeback_amount
                     ', [
                         BillingAttempt::STATUS_APPROVED,
+                        $cbStartDate,
+                        $cbEndDate,
                         BillingAttempt::STATUS_CHARGEBACKED,
                         $cbStartDate,
-                        $cbEndDate
+                        $cbEndDate,
                     ])
                     ->get()
                     ->keyBy('emp_account_id');
