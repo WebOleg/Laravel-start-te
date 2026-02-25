@@ -11,6 +11,7 @@ use App\Models\Upload;
 use App\Models\Debtor;
 use App\Models\DebtorProfile;
 use App\Models\BillingAttempt;
+use App\Models\TetherInstance;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -1052,5 +1053,60 @@ class BicAnalyticsControllerTest extends TestCase
 
         $this->assertEquals(50.00, $segments[0]['amount']);
         $this->assertEquals(10.00, $segments[1]['amount']);
+    }
+
+    // ==================== tether_instance_id FILTER TESTS ====================
+
+    public function test_bic_analytics_filters_by_tether_instance_id(): void
+    {
+        $instance1 = TetherInstance::factory()->create();
+        $instance2 = TetherInstance::factory()->create();
+
+        $upload = Upload::factory()->create();
+
+        // Each debtor carries the BIC that matches its billing attempt, consistent with the rest of the suite.
+        $debtor1 = Debtor::factory()->create(['upload_id' => $upload->id, 'bic' => 'INSTONE1XXX']);
+        $debtor2 = Debtor::factory()->create(['upload_id' => $upload->id, 'bic' => 'INSTONE2XXX']);
+
+        // BIC owned by instance1
+        BillingAttempt::factory()->create([
+            'debtor_id'          => $debtor1->id,
+            'upload_id'          => $upload->id,
+            'bic'                => 'INSTONE1XXX',
+            'status'             => BillingAttempt::STATUS_APPROVED,
+            'amount'             => 100.00,
+            'tether_instance_id' => $instance1->id,
+        ]);
+
+        // BIC owned by instance2 — must be excluded from both bics list and totals
+        BillingAttempt::factory()->create([
+            'debtor_id'          => $debtor2->id,
+            'upload_id'          => $upload->id,
+            'bic'                => 'INSTONE2XXX',
+            'status'             => BillingAttempt::STATUS_APPROVED,
+            'amount'             => 200.00,
+            'tether_instance_id' => $instance2->id,
+        ]);
+
+        \Illuminate\Support\Facades\Cache::flush();
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/analytics/bic?tether_instance_id=' . $instance1->id . '&period=30d');
+
+        $response->assertStatus(200);
+
+        $bics = $response->json('data.bics');
+
+        // Exactly one BIC returned — a regression returning both would fail here.
+        $this->assertCount(1, $bics);
+        $bicCodes = array_column($bics, 'bic');
+        $this->assertContains('INSTONE1XXX', $bicCodes);
+        $this->assertNotContains('INSTONE2XXX', $bicCodes);
+
+        // Totals must only reflect instance1's transaction, not instance2's leaked amounts.
+        $this->assertEquals(1, $response->json('data.totals.total_transactions'));
+        $this->assertEquals(100.00, $response->json('data.totals.total_volume'));
+
+        $this->assertEquals($instance1->id, $response->json('data.tether_instance_id'));
     }
 }
