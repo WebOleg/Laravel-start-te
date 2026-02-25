@@ -129,9 +129,11 @@ class EmpAccountController extends Controller
         $startDate = \Carbon\Carbon::create($year, $month, 1)->startOfMonth();
         $endDate = $startDate->copy()->endOfMonth();
 
-        // Calculate the last 90 days window for chargeback stats
-        $cbStartDate = now()->subDays(90);
-        $cbEndDate = now();
+        // Calculate the last 90 days window for chargeback stats,
+        // anchored to the end of the selected month for past months,
+        // or today for the current/future month.
+        $cbEndDate = $endDate->copy()->min(now());
+        $cbStartDate = $cbEndDate->copy()->subDays(90);
 
         // Calculate chargeback gross % for last 90 days per account
         $excludedCbCodes = config('tether.chargeback.excluded_cb_reason_codes', []);
@@ -154,6 +156,7 @@ class EmpAccountController extends Controller
             ->pluck('tx_count', 'emp_account_id');
 
         $stats90d = BillingAttempt::whereNotNull('emp_account_id')
+                    ->whereNotNull('upload_id')
                     ->when(!empty($excludedCbCodes), function ($q) use ($excludedCbCodes) {
                         $q->where(function ($subQ) use ($excludedCbCodes) {
                             $subQ->whereNotIn('chargeback_reason_code', $excludedCbCodes)
