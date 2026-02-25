@@ -84,7 +84,11 @@ class DeduplicationService
     }
 
     /**
-     * Check if debtor should be skipped during upload (IBAN + name + email + BIC).
+     * Check if debtor should be skipped during upload (IBAN + name + email).
+     *
+     * Note: BIC blacklist is NOT checked at import stage.
+     * BIC validation is handled separately at the validation stage
+     * (DebtorValidationService) where skip_bic_blacklist flag is respected.
      *
      * @param array $data Debtor data with iban, first_name, last_name, email, bic
      * @return array{reason: string, permanent: bool, days_ago?: int, last_status?: string}|null
@@ -95,7 +99,6 @@ class DeduplicationService
         $firstName = $data['first_name'] ?? '';
         $lastName = $data['last_name'] ?? '';
         $email = $data['email'] ?? '';
-        $bic = $data['bic'] ?? '';
 
         // First check IBAN-based rules (blacklist, chargeback, recovered, recent)
         if (!empty($iban)) {
@@ -120,16 +123,6 @@ class DeduplicationService
             if ($this->blacklistService->isEmailBlacklisted($email)) {
                 return [
                     'reason' => self::SKIP_BLACKLISTED_EMAIL,
-                    'permanent' => true,
-                ];
-            }
-        }
-
-        // Then check BIC blacklist
-        if (!empty($bic)) {
-            if ($this->blacklistService->isBicBlacklisted($bic)) {
-                return [
-                    'reason' => self::SKIP_BLACKLISTED_BIC,
                     'permanent' => true,
                 ];
             }
@@ -269,7 +262,11 @@ class DeduplicationService
     }
 
     /**
-     * Batch check for full debtor data (IBAN + name + email + BIC).
+     * Batch check for full debtor data (IBAN + name + email).
+     *
+     * Note: BIC blacklist is NOT checked at import stage.
+     * BIC validation is handled separately at the validation stage
+     * (DebtorValidationService) where skip_bic_blacklist flag is respected.
      *
      * @param array<array{iban?: string, iban_hash?: string, first_name?: string, last_name?: string, email?: string, bic?: string}> $debtors
      * @return array<int, array{reason: string, permanent: bool}>
@@ -307,7 +304,7 @@ class DeduplicationService
             }
         }
 
-        // Collect blacklisted names, emails, and BICs for batch lookup
+        // Collect blacklisted names and emails for batch lookup
         $blacklistedNames = Blacklist::whereNotNull('first_name')
             ->whereNotNull('last_name')
             ->get(['first_name', 'last_name'])
@@ -321,13 +318,7 @@ class DeduplicationService
             ->flip()
             ->all();
 
-        $blacklistedBics = Blacklist::whereNotNull('bic')
-            ->pluck('bic')
-            ->map(fn($b) => strtolower($b))
-            ->flip()
-            ->all();
-
-        // Check name, email, and BIC for debtors not already flagged
+        // Check name and email for debtors not already flagged
         foreach ($debtors as $index => $debtor) {
             if (isset($results[$index])) {
                 continue; // Already flagged by IBAN
@@ -336,7 +327,6 @@ class DeduplicationService
             $firstName = $debtor['first_name'] ?? '';
             $lastName = $debtor['last_name'] ?? '';
             $email = $debtor['email'] ?? '';
-            $bic = $debtor['bic'] ?? '';
 
             // Check name
             if (!empty($firstName) && !empty($lastName)) {
@@ -358,16 +348,6 @@ class DeduplicationService
                         'permanent' => true,
                     ];
                     continue;
-                }
-            }
-
-            // Check BIC
-            if (!empty($bic)) {
-                if (isset($blacklistedBics[strtolower($bic)])) {
-                    $results[$index] = [
-                        'reason' => self::SKIP_BLACKLISTED_BIC,
-                        'permanent' => true,
-                    ];
                 }
             }
         }
