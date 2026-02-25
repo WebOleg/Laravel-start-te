@@ -326,7 +326,7 @@ class EmpBillingService
             }
         }
 
-        if ($amount < 1) {
+        if ($amount < 0.1) {
             return false;
         }
 

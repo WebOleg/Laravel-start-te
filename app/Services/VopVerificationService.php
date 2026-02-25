@@ -27,6 +27,14 @@ class VopVerificationService
             return null;
         }
 
+        // Prevent duplicate VopLog entries - return existing if already verified
+        if (!$forceRefresh && $this->hasVopLog($debtor)) {
+            Log::debug('VOP already verified, skipping', [
+                'debtor_id' => $debtor->id,
+            ]);
+            return VopLog::where('debtor_id', $debtor->id)->latest()->first();
+        }
+
         $ibanHash = $debtor->iban_hash ?? $this->ibanValidator->hash($debtor->iban);
 
         if (!$forceRefresh) {
@@ -130,7 +138,8 @@ class VopVerificationService
             $vopLogsQuery->whereHas('debtor', $applyDebtorFilter);
         }
 
-        $verified = (clone $vopLogsQuery)->count();
+        // Count unique debtors with VopLog, not total rows (prevents duplicate VopLogs from breaking count)
+        $verified = (clone $vopLogsQuery)->distinct('debtor_id')->count('debtor_id');
 
         $byResult = (clone $vopLogsQuery)
             ->selectRaw('result, COUNT(*) as count')
