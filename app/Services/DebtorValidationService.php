@@ -96,7 +96,7 @@ class DebtorValidationService
             $errors[] = 'Name is required';
         }
 
-        if (empty($debtor->amount) || (float) $debtor->amount < 1) {
+        if (empty($debtor->amount) || (float) $debtor->amount < 0.1) {
             $errors[] = 'Amount is required';
         }
 
