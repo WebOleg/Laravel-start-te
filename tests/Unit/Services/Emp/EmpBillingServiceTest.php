@@ -4,6 +4,7 @@ namespace Tests\Unit\Services\Emp;
 
 use App\Models\BillingAttempt;
 use App\Models\Debtor;
+use App\Models\TransactionDescriptor;
 use App\Models\Upload;
 use App\Services\DescriptorService;
 use App\Services\Emp\EmpBillingService;
@@ -313,6 +314,198 @@ class EmpBillingServiceTest extends TestCase
         ]);
 
         $this->assertTrue($this->service->canBill($debtor));
+    }
+
+    public function test_bill_upload_processes_valid_debtors_only(): void
+    {
+        $upload = Upload::factory()->create();
+
+        Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'validation_status' => 'valid',
+            'status' => Debtor::STATUS_UPLOADED,
+            'amount' => 50.00,
+            'iban' => 'DE89370400440532013000',
+        ]);
+
+        Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'validation_status' => 'invalid',
+            'status' => Debtor::STATUS_UPLOADED,
+        ]);
+
+        $this->mockClient->shouldReceive('sddSale')
+            ->once()
+            ->andReturn([
+                'status' => 'approved',
+                'unique_id' => 'upload_batch_' . uniqid(),
+            ]);
+
+        $result = $this->service->billUpload($upload);
+
+        $this->assertEquals(1, $result['success']);
+    }
+
+    public function test_dynamic_descriptor_is_injected_into_payload(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'validation_status' => 'valid',
+            'status' => Debtor::STATUS_UPLOADED,
+            'amount' => 45.00,
+            'iban' => 'DE89370400440532013000',
+        ]);
+
+        $mockDescriptor = new TransactionDescriptor();
+        $mockDescriptor->descriptor_name = 'TETHER_SAAS';
+        $mockDescriptor->descriptor_city = 'London';
+        $mockDescriptor->descriptor_country = 'UK';
+
+        $this->mockDescriptorService->shouldReceive('getActiveDescriptor')
+            ->once()
+            ->andReturn($mockDescriptor);
+
+        $this->mockClient->shouldReceive('sddSale')
+            ->withArgs(function ($payload) {
+                return isset($payload['dynamic_descriptor_params']) &&
+                    $payload['dynamic_descriptor_params']['merchant_name'] === 'TETHER_SAAS' &&
+                    $payload['dynamic_descriptor_params']['merchant_city'] === 'London';
+            })
+            ->once()
+            ->andReturn([
+                'status' => 'approved',
+                'unique_id' => 'emp_desc_123',
+            ]);
+
+        $result = $this->service->billDebtor($debtor);
+
+        $this->assertInstanceOf(BillingAttempt::class, $result);
+        $this->assertArrayHasKey('dynamic_descriptor_params', $result->request_payload);
+        $this->assertEquals('TETHER_SAAS', $result->request_payload['dynamic_descriptor_params']['merchant_name']);
+        $this->assertEquals('London', $result->request_payload['dynamic_descriptor_params']['merchant_city']);
+        $this->assertEquals('UK', $result->request_payload['dynamic_descriptor_params']['merchant_country']);
+    }
+
+    public function test_void_attempt_success(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'status' => Debtor::STATUS_APPROVED,
+        ]);
+
+        $attempt = BillingAttempt::factory()->create([
+            'debtor_id' => $debtor->id,
+            'upload_id' => $upload->id,
+            'unique_id' => 'original_tx_123',
+            'status' => BillingAttempt::STATUS_APPROVED,
+            'emp_account_id' => null,
+        ]);
+
+        $this->mockClient->shouldReceive('voidTransaction')
+            ->with('original_tx_123', Mockery::type('string'), 'original_tx_123')
+            ->once()
+            ->andReturn([
+                'status' => 'approved',
+                'unique_id' => 'void_response_456',
+            ]);
+
+        $result = $this->service->voidAttempt($attempt);
+
+        $this->assertTrue($result);
+
+        $attempt->refresh();
+        $debtor->refresh();
+
+        $this->assertEquals(BillingAttempt::STATUS_VOIDED, $attempt->status);
+        $this->assertEquals('void_response_456', $attempt->meta['void_unique_id']);
+        $this->assertEquals(Debtor::STATUS_UPLOADED, $debtor->status);
+    }
+
+    public function test_void_attempt_failure(): void
+    {
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'status' => Debtor::STATUS_APPROVED,
+        ]);
+
+        $attempt = BillingAttempt::factory()->create([
+            'debtor_id' => $debtor->id,
+            'upload_id' => $upload->id,
+            'unique_id' => 'original_tx_123',
+            'status' => BillingAttempt::STATUS_APPROVED,
+            'emp_account_id' => null,
+        ]);
+
+        $this->mockClient->shouldReceive('voidTransaction')
+            ->with('original_tx_123', Mockery::type('string'), 'original_tx_123')
+            ->once()
+            ->andReturn([
+                'status' => 'declined',
+                'code' => '100',
+            ]);
+
+        $result = $this->service->voidAttempt($attempt);
+
+        $this->assertFalse($result);
+
+        $attempt->refresh();
+        $debtor->refresh();
+
+        $this->assertEquals(BillingAttempt::STATUS_APPROVED, $attempt->status);
+        $this->assertEquals(Debtor::STATUS_APPROVED, $debtor->status);
+    }
+
+    public function test_webhook_relay_is_used_when_available(): void
+    {
+        $account = \App\Models\EmpAccount::factory()->create();
+
+        $relay = \App\Models\WebhookRelay::factory()->create([
+            'domain' => 'http://my-disposable-relay.com/',
+        ]);
+
+        // Connect the models via the pivot table
+        $relay->empAccounts()->attach($account->id);
+
+        $upload = Upload::factory()->create([
+            'emp_account_id' => $account->id,
+        ]);
+
+        $debtor = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'validation_status' => 'valid',
+            'status' => Debtor::STATUS_UPLOADED,
+            'amount' => 50.00,
+            'iban' => 'DE89370400440532013000',
+        ]);
+
+        $partialService = Mockery::mock(EmpBillingService::class . '[getClientForDebtor]', [
+            $this->mockClient,
+            $this->mockDescriptorService
+        ]);
+
+        // Add this line to allow mocking the protected method
+        $partialService->shouldAllowMockingProtectedMethods();
+
+        $partialService->shouldReceive('getClientForDebtor')
+            ->andReturn($this->mockClient);
+
+        $this->mockClient->shouldReceive('sddSale')
+            ->once()
+            ->andReturn([
+                'status' => 'approved',
+                'unique_id' => 'relay_test_123',
+            ]);
+
+        $result = $partialService->billDebtor($debtor);
+
+        $this->assertInstanceOf(BillingAttempt::class, $result);
+        $this->assertEquals(
+            'https://my-disposable-relay.com',
+            $result->request_payload['notification_url']
+        );
     }
 
     protected function tearDown(): void

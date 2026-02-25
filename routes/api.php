@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Admin\DescriptorController;
+use App\Http\Controllers\Admin\WebhookRelayController;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\ClientController;
@@ -134,6 +135,8 @@ Route::middleware('auth:sanctum')->group(function () {
         });
 
         Route::apiResource('billing-attempts', AdminBillingAttemptController::class)->only(['index', 'show']);
+
+        Route::apiResource('webhook-relays', WebhookRelayController::class)->except(['show']);
 
         Route::apiResource('billing/descriptors', DescriptorController::class);
     });

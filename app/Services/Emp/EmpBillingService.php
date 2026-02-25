@@ -37,7 +37,7 @@ class EmpBillingService
     /**
      * Get EmpClient for a debtor (uses upload's account if set).
      */
-    private function getClientForDebtor(Debtor $debtor): EmpClient
+    protected function getClientForDebtor(Debtor $debtor): EmpClient
     {
         $upload = $debtor->upload;
 
@@ -340,6 +340,35 @@ class EmpBillingService
 
     private function buildRequestPayload(Debtor $debtor, string $transactionId, ?string $notificationUrl, float $amount): array
     {
+        $empAccountId = $debtor->upload?->emp_account_id ?? null;
+        $relayUrl = null;
+
+        if ($empAccountId) {
+            static $relayCache = [];
+
+            if (!array_key_exists($empAccountId, $relayCache)) {
+                $account = EmpAccount::with('webhookRelays')->find($empAccountId);
+                $relayCache[$empAccountId] = $account ? $account->webhookRelays : collect();
+            }
+
+            $relays = $relayCache[$empAccountId];
+
+            if ($relays->isNotEmpty()) {
+                $relay = $relays->random();
+
+                // Strip existing protocols if mistakenly added, then enforce HTTPS
+                $cleanDomain = preg_replace('#^https?://#', '', $relay->domain);
+                $relayUrl = 'https://' . rtrim($cleanDomain, '/');
+
+                Log::info('Routing webhook through disposable relay', [
+                    'transaction_id' => $transactionId,
+                    'relay_domain' => $relayUrl,
+                    'emp_account_id' => $empAccountId
+                ]);
+            }
+        }
+
+        // Default Fallback
         $webhookToken = config('services.emp.webhook_token');
         $defaultNotificationUrl = config('app.url') . '/api/webhooks/emp' . ($webhookToken ? '/' . $webhookToken : '');
 
@@ -352,11 +381,10 @@ class EmpBillingService
             'last_name' => $debtor->last_name,
             'email' => $debtor->email ?? null,
             'usage' => "Debt recovery - {$debtor->id}",
-            'notification_url' => $notificationUrl ?? $defaultNotificationUrl,
+            'notification_url' => $notificationUrl ?? $relayUrl ?? $defaultNotificationUrl,
         ];
 
         // DD-01: Dynamic Descriptor Injection
-        $empAccountId = $debtor->upload?->emp_account_id ?? null;
         $descriptor = $this->descriptorService->getActiveDescriptor(now(), $empAccountId);
 
         if ($descriptor) {
