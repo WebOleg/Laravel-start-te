@@ -154,6 +154,7 @@ class EmpAccountController extends Controller
             ->pluck('tx_count', 'emp_account_id');
 
         $stats90d = BillingAttempt::whereNotNull('emp_account_id')
+                    ->whereNotNull('upload_id')
                     ->when(!empty($excludedCbCodes), function ($q) use ($excludedCbCodes) {
                         $q->where(function ($subQ) use ($excludedCbCodes) {
                             $subQ->whereNotIn('chargeback_reason_code', $excludedCbCodes)
