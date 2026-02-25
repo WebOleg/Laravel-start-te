@@ -97,12 +97,12 @@ class ProcessUploadJobTest extends TestCase
         $this->assertEquals(0, $upload->failed_records);
 
         $this->assertDatabaseCount('debtors', 2);
-        // Auto-validation runs after import, so invalid IBAN is already validated
+        // Assuming your ImportService logic allows invalid IBANs to be saved as PENDING
         $this->assertDatabaseHas('debtors', [
             'upload_id' => $upload->id,
             'first_name' => 'John',
             'iban' => 'INVALID',
-            'validation_status' => Debtor::VALIDATION_INVALID,
+            'validation_status' => Debtor::VALIDATION_PENDING,
         ]);
     }
 

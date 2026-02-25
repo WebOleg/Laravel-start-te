@@ -2,7 +2,6 @@
 
 /**
  * Job for processing uploaded files with batch support for large files.
- * Auto-dispatches validation after import completes.
  */
 
 namespace App\Jobs;
@@ -118,8 +117,6 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
                 'failed' => $result['failed'] ?? null,
             ]);
 
-            $this->dispatchValidation();
-
         } catch (\Throwable $e) {
             Log::error("ProcessUploadJob failed", [
                 'upload_id' => $this->upload->id,
@@ -169,13 +166,6 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
                     'processed' => $upload->processed_records,
                     'failed' => $upload->failed_records,
                 ]);
-
-                if ($status !== Upload::STATUS_FAILED) {
-                    ProcessValidationJob::dispatch($upload);
-                    Log::info("Auto-validation dispatched after batch import", [
-                        'upload_id' => $upload->id,
-                    ]);
-                }
             })
             ->dispatch();
 
@@ -183,24 +173,6 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
             'upload_id' => $this->upload->id,
             'chunks' => count($chunks),
             'total_rows' => count($rows),
-        ]);
-    }
-
-    /**
-     * Dispatch validation automatically after import completes.
-     */
-    private function dispatchValidation(): void
-    {
-        $this->upload->refresh();
-
-        if ($this->upload->status === Upload::STATUS_FAILED) {
-            return;
-        }
-
-        ProcessValidationJob::dispatch($this->upload);
-
-        Log::info("Auto-validation dispatched after import", [
-            'upload_id' => $this->upload->id,
         ]);
     }
 
