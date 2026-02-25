@@ -45,6 +45,8 @@ class UploadController extends Controller
             'per_page' => 'nullable|integer|min:1|max:100',
         ]);
 
+        $excludedCbCodes = config('tether.chargeback.excluded_cb_reason_codes', []);
+
         $query = Upload::with('empAccount')->withCount([
             'debtors',
             'debtors as valid_count' => function ($q) {
@@ -56,13 +58,25 @@ class UploadController extends Controller
             'billingAttempts as billed_with_emp_count' => function ($q) {
                 $q->where('status', BillingAttempt::STATUS_APPROVED);
             },
-            'billingAttempts as chargeback_count' => function ($q) {
-                $q->where('status', BillingAttempt::STATUS_CHARGEBACKED);
+            'billingAttempts as chargeback_count' => function ($q) use ($excludedCbCodes) {
+                $q->where('status', BillingAttempt::STATUS_CHARGEBACKED)
+                    ->when(!empty($excludedCbCodes), function ($subQ) use ($excludedCbCodes) {
+                        $subQ->where(function ($inner) use ($excludedCbCodes) {
+                            $inner->whereNotIn('chargeback_reason_code', $excludedCbCodes)
+                                ->orWhereNull('chargeback_reason_code');
+                        });
+                    });
             },
         ])->withSum(['billingAttempts as approved_amount' => function ($q) {
             $q->where('status', BillingAttempt::STATUS_APPROVED);
-        }], 'amount')->withSum(['billingAttempts as chargeback_amount' => function ($q) {
-            $q->where('status', BillingAttempt::STATUS_CHARGEBACKED);
+        }], 'amount')->withSum(['billingAttempts as chargeback_amount' => function ($q) use ($excludedCbCodes) {
+            $q->where('status', BillingAttempt::STATUS_CHARGEBACKED)
+                ->when(!empty($excludedCbCodes), function ($subQ) use ($excludedCbCodes) {
+                    $subQ->where(function ($inner) use ($excludedCbCodes) {
+                        $inner->whereNotIn('chargeback_reason_code', $excludedCbCodes)
+                            ->orWhereNull('chargeback_reason_code');
+                    });
+                });
         }], 'amount');
 
         if ($request->filled('status')) {
