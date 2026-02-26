@@ -649,17 +649,26 @@ class ChargebackStatsService
         $cacheKey = 'chargeback_all_time_' . $model . '_' . $empAccountId;
         $ttl = config('tether.chargeback.cache_ttl', 900);
 
-        return Cache::remember($cacheKey, $ttl, fn () => $this->calculateChargebackAllTimeStats());
+        return Cache::remember($cacheKey, $ttl, fn () => $this->calculateChargebackAllTimeStats($model, $empAccountId));
     }
     
-    private function calculateChargebackAllTimeStats(): array
+    private function calculateChargebackAllTimeStats(?string $model = null, ?int $empAccountId = null): array
     {
-        $totalRecords = DB::table('billing_attempts')
+        $totalsQuery = DB::table('billing_attempts')
             ->whereIn('status', [
                 BillingAttempt::STATUS_APPROVED,
                 BillingAttempt::STATUS_CHARGEBACKED,
-            ])
-            ->count();
+            ]);
+
+        $this->applyModelFilter($totalsQuery, $model);
+        $this->applyEmpAccountFilter($totalsQuery, $empAccountId);
+
+        $totalsRow = $totalsQuery
+            ->selectRaw('COUNT(*) as total_records, SUM(amount) as total_records_amount')
+            ->first();
+
+        $totalRecords = (int) $totalsRow->total_records;
+        $totalRecordsAmount = (float) $totalsRow->total_records_amount;
 
         $query = DB::table('billing_attempts')
             ->where('status', BillingAttempt::STATUS_CHARGEBACKED);
@@ -671,6 +680,9 @@ class ChargebackStatsService
                   ->orWhereNull('chargeback_reason_code');
             });
         }
+
+        $this->applyModelFilter($query, $model);
+        $this->applyEmpAccountFilter($query, $empAccountId);
 
         $stats = $query
             ->select([
@@ -686,7 +698,7 @@ class ChargebackStatsService
 
         $result = [
             'codes' => [],
-            'totals' => ['total_amount' => 0, 'occurrences' => 0, 'total_records' => (int) $totalRecords],
+            'totals' => ['total_amount' => 0, 'occurrences' => 0, 'total_records' => $totalRecords, 'total_records_amount' => $totalRecordsAmount],
         ];
 
         foreach ($stats as $row) {
@@ -695,8 +707,10 @@ class ChargebackStatsService
                 'chargeback_reason' => $row->chargeback_reason,
                 'total_amount'      => (float) $row->total_amount,
                 'occurrences'       => (int) $row->occurrences,
-                'chargeback_percentage' => 0,
-                'total_percentage'      => 0,
+                'cb_count_percentage'    => 0,
+                'total_count_percentage' => 0,
+                'cb_amount_percentage'   => 0,
+                'total_amount_percentage' => 0,
                 'last_occurence'        => $row->last_occurence,
             ];
             $result['totals']['total_amount'] += (float) $row->total_amount;
@@ -704,12 +718,20 @@ class ChargebackStatsService
         }
 
         foreach ($result['codes'] as &$code) {
-            $code['chargeback_percentage'] = $result['totals']['occurrences'] > 0
+            $code['cb_count_percentage'] = $result['totals']['occurrences'] > 0
                 ? round(($code['occurrences'] / $result['totals']['occurrences']) * 100, 2)
                 : 0;
 
-            $code['total_percentage'] = $result['totals']['total_records'] > 0
+            $code['total_count_percentage'] = $result['totals']['total_records'] > 0
                 ? round(($code['occurrences'] / $result['totals']['total_records']) * 100, 2)
+                : 0;
+
+            $code['cb_amount_percentage'] = $result['totals']['total_amount'] > 0
+                ? round(($code['total_amount'] / $result['totals']['total_amount']) * 100, 2)
+                : 0;
+
+            $code['total_amount_percentage'] = $result['totals']['total_records_amount'] > 0
+                ? round(($code['total_amount'] / $result['totals']['total_records_amount']) * 100, 2)
                 : 0;
         }
         unset($code);
