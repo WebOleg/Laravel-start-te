@@ -642,10 +642,7 @@ class ChargebackStatsService
     }
 
     public function getChargebackAllTimeStats(?string $model = null, ?int $empAccountId = null): array
-    {
-        // TODO: remove this line
-        $this->clearCacheChargebackAllTimeStats($model, $empAccountId);
-        
+    {   
         $cacheKey = 'chargeback_all_time_' . $model . '_' . $empAccountId;
         $ttl = config('tether.chargeback.cache_ttl', 900);
 
