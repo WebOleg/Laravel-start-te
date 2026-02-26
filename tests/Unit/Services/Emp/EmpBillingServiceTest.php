@@ -4,6 +4,8 @@ namespace Tests\Unit\Services\Emp;
 
 use App\Models\BillingAttempt;
 use App\Models\Debtor;
+use App\Models\EmpAccount;
+use App\Models\TetherInstance;
 use App\Models\TransactionDescriptor;
 use App\Models\Upload;
 use App\Services\DescriptorService;
@@ -506,6 +508,124 @@ class EmpBillingServiceTest extends TestCase
             'https://my-disposable-relay.com',
             $result->request_payload['notification_url']
         );
+    }
+
+    // ==================== getClientForDebtor RESOLUTION TESTS ====================
+
+    public function test_getClientForDebtor_uses_debtor_emp_account_id(): void
+    {
+        $account = EmpAccount::factory()->create(['is_active' => true]);
+        $upload  = Upload::factory()->create(['emp_account_id' => null]);
+        $debtor  = Debtor::factory()->create([
+            'upload_id'      => $upload->id,
+            'emp_account_id' => $account->id,
+        ]);
+
+        $testableService = new class($this->mockClient, $this->mockDescriptorService) extends EmpBillingService {
+            public function testGetClientForDebtor(Debtor $debtor): EmpClient
+            {
+                return $this->getClientForDebtor($debtor);
+            }
+        };
+
+        $client = $testableService->testGetClientForDebtor($debtor->load('upload'));
+
+        // The returned client should be built from the debtor's account, not the default mock
+        $this->assertEquals($account->id, $client->getEmpAccountId());
+    }
+
+    public function test_getClientForDebtor_falls_back_to_upload_emp_account_id(): void
+    {
+        $uploadAccount = EmpAccount::factory()->create(['is_active' => true]);
+        $upload        = Upload::factory()->create(['emp_account_id' => $uploadAccount->id]);
+        $debtor        = Debtor::factory()->create([
+            'upload_id'      => $upload->id,
+            'emp_account_id' => null,
+        ]);
+
+        $testableService = new class($this->mockClient, $this->mockDescriptorService) extends EmpBillingService {
+            public function testGetClientForDebtor(Debtor $debtor): EmpClient
+            {
+                return $this->getClientForDebtor($debtor);
+            }
+        };
+
+        $client = $testableService->testGetClientForDebtor($debtor->load('upload'));
+
+        $this->assertEquals($uploadAccount->id, $client->getEmpAccountId());
+    }
+
+    public function test_getClientForDebtor_falls_back_to_default_client(): void
+    {
+        $upload = Upload::factory()->create(['emp_account_id' => null]);
+        $debtor = Debtor::factory()->create([
+            'upload_id'      => $upload->id,
+            'emp_account_id' => null,
+        ]);
+
+        $testableService = new class($this->mockClient, $this->mockDescriptorService) extends EmpBillingService {
+            public function testGetClientForDebtor(Debtor $debtor): EmpClient
+            {
+                return $this->getClientForDebtor($debtor);
+            }
+        };
+
+        $client = $testableService->testGetClientForDebtor($debtor->load('upload'));
+
+        // Default mock client returns null for getEmpAccountId
+        $this->assertNull($client->getEmpAccountId());
+    }
+
+    // ==================== resolveTetherInstanceId TESTS ====================
+
+    public function test_resolveTetherInstanceId_returns_debtor_tether_instance_id(): void
+    {
+        $instance = TetherInstance::factory()->create();
+        $upload   = Upload::factory()->create(['tether_instance_id' => null]);
+        $debtor   = Debtor::factory()->create([
+            'upload_id'          => $upload->id,
+            'tether_instance_id' => $instance->id,
+        ]);
+
+        $method = new \ReflectionMethod($this->service, 'resolveTetherInstanceId');
+        $method->setAccessible(true);
+
+        $result = $method->invoke($this->service, $debtor->load('upload'));
+
+        $this->assertEquals($instance->id, $result);
+    }
+
+    public function test_resolveTetherInstanceId_falls_through_to_upload_tether_instance_id(): void
+    {
+        $instance = TetherInstance::factory()->create();
+        $upload   = Upload::factory()->create(['tether_instance_id' => $instance->id]);
+        $debtor   = Debtor::factory()->create([
+            'upload_id'          => $upload->id,
+            'tether_instance_id' => null,
+        ]);
+
+        $method = new \ReflectionMethod($this->service, 'resolveTetherInstanceId');
+        $method->setAccessible(true);
+
+        $result = $method->invoke($this->service, $debtor->load('upload'));
+
+        $this->assertEquals($instance->id, $result);
+    }
+
+    public function test_resolveTetherInstanceId_returns_null_when_neither_is_set(): void
+    {
+        $upload = Upload::factory()->create(['tether_instance_id' => null]);
+        $debtor = Debtor::factory()->create([
+            'upload_id'          => $upload->id,
+            'tether_instance_id' => null,
+        ]);
+
+        $method = new \ReflectionMethod($this->service, 'resolveTetherInstanceId');
+        $method->setAccessible(true);
+
+        $result = $method->invoke($this->service, $debtor->load('upload'));
+
+        $this->assertNull($result);
     }
 
     protected function tearDown(): void
