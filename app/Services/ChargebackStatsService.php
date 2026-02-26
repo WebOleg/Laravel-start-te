@@ -711,7 +711,7 @@ class ChargebackStatsService
                 'total_count_percentage' => 0,
                 'cb_amount_percentage'   => 0,
                 'total_amount_percentage' => 0,
-                'last_occurence'        => $row->last_occurence,
+                'last_occurrence'        => $row->last_occurence,
             ];
             $result['totals']['total_amount'] += (float) $row->total_amount;
             $result['totals']['occurrences'] += (int) $row->occurrences;
