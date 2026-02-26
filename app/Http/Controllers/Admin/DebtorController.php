@@ -54,6 +54,7 @@ class DebtorController extends Controller
         $query = Debtor::with([
             'upload',
             'debtorProfile',
+            'empAccount',
             'latestVopLog.bankReference',
             'latestBillingAttempt.empAccount',
         ]);
@@ -118,6 +119,7 @@ class DebtorController extends Controller
         $debtor->load([
             'upload',
             'debtorProfile',
+            'empAccount',
             'vopLogs.bankReference',
             'billingAttempts',
             'latestVopLog.bankReference',
@@ -210,7 +212,7 @@ class DebtorController extends Controller
 
         $this->validationService->validateAndUpdate($debtor);
 
-        $debtor->load(['upload', 'debtorProfile', 'latestVopLog.bankReference', 'latestBillingAttempt.empAccount']);
+        $debtor->load(['upload', 'debtorProfile', 'empAccount', 'latestVopLog.bankReference', 'latestBillingAttempt.empAccount']);
 
         return new DebtorResource($debtor);
     }

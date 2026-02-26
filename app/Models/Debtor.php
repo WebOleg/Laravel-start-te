@@ -76,6 +76,7 @@ class Debtor extends Model
         'raw_data',
         'debtor_profile_id',
         'billing_model',
+        'emp_account_id',
     ];
 
     protected $casts = [
@@ -137,6 +138,11 @@ class Debtor extends Model
     public function debtorProfile(): BelongsTo
     {
         return $this->belongsTo(DebtorProfile::class);
+    }
+
+    public function empAccount(): BelongsTo
+    {
+        return $this->belongsTo(EmpAccount::class);
     }
 
     public function getFullNameAttribute(): string
