@@ -136,7 +136,7 @@ class DebtorValidationServiceTest extends TestCase
 
         $errors = $this->service->validateDebtor($debtor);
 
-        $this->assertContains('Amount must be at least 1.00', $errors);
+        $this->assertContains('Amount must be at least 0.10', $errors);
     }
 
     public function test_validates_amount_max(): void
@@ -207,7 +207,7 @@ class DebtorValidationServiceTest extends TestCase
             'upload_id' => $upload->id,
             'first_name' => 'John',
             'iban' => 'DE89370400440532013000',
-            'amount' => 0.50,
+            'amount' => 0.05,
             'city' => 'Berlin',
             'postcode' => '10115',
             'street' => 'Main Street 1',
@@ -215,10 +215,10 @@ class DebtorValidationServiceTest extends TestCase
 
         $errors = $this->service->validateDebtor($debtor);
 
-        $this->assertContains('Amount must be at least 1.00', $errors);
+        $this->assertContains('Amount must be at least 0.10', $errors);
     }
     
-    public function test_validates_amount_exactly_one_euro(): void
+    public function test_validates_amount_exactly_minimum(): void
     {
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create([
@@ -226,7 +226,7 @@ class DebtorValidationServiceTest extends TestCase
             'first_name' => 'John',
             'last_name' => 'Doe',
             'iban' => 'DE89370400440532013000',
-            'amount' => 1.00,
+            'amount' => 0.10,
             'city' => 'Berlin',
             'postcode' => '10115',
             'street' => 'Main Street 1',
@@ -234,7 +234,7 @@ class DebtorValidationServiceTest extends TestCase
 
         $errors = $this->service->validateDebtor($debtor);
 
-        $this->assertNotContains('Amount must be at least 1.00', $errors);
+        $this->assertNotContains('Amount must be at least 0.10', $errors);
     }
 
     public function test_resolve_bic_from_iban_when_bic_is_empty(): void
