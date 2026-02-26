@@ -630,4 +630,90 @@ class ChargebackStatsService
             'totals' => $totals,
         ];
     }
+
+    /**
+     * Get All Time Chargeback Code Stats
+     */
+    public function clearCacheChargebackAllTimeStats($model, $empAccountId): void
+    {
+        $cacheKey = 'chargeback_all_time_' . $model . '_' . $empAccountId;
+        Cache::forget($cacheKey);
+
+    }
+
+    public function getChargebackAllTimeStats(?string $model = null, ?int $empAccountId = null): array
+    {
+        // TODO: remove this line
+        $this->clearCacheChargebackAllTimeStats($model, $empAccountId);
+        
+        $cacheKey = 'chargeback_all_time_' . $model . '_' . $empAccountId;
+        $ttl = config('tether.chargeback.cache_ttl', 900);
+
+        return Cache::remember($cacheKey, $ttl, fn () => $this->calculateChargebackAllTimeStats());
+    }
+    
+    private function calculateChargebackAllTimeStats(): array
+    {
+        $totalRecords = DB::table('billing_attempts')
+            ->whereIn('status', [
+                BillingAttempt::STATUS_APPROVED,
+                BillingAttempt::STATUS_CHARGEBACKED,
+            ])
+            ->count();
+
+        $query = DB::table('billing_attempts')
+            ->where('status', BillingAttempt::STATUS_CHARGEBACKED);
+
+        $excludedCodes = config('tether.chargeback.excluded_cb_reason_codes', []);
+        if (!empty($excludedCodes)) {
+            $query->where(function ($q) use ($excludedCodes) {
+                $q->whereNotIn('chargeback_reason_code', $excludedCodes)
+                  ->orWhereNull('chargeback_reason_code');
+            });
+        }
+
+        $stats = $query
+            ->select([
+                'chargeback_reason_code as chargeback_code',
+                DB::raw("MAX(NULLIF(chargeback_reason_description, '')) as chargeback_reason"),
+                DB::raw('SUM(amount) as total_amount'),
+                DB::raw('COUNT(*) as occurrences'),
+                DB::raw('MAX(COALESCE(chargebacked_at, updated_at)) as last_occurence'),
+            ])
+            ->groupBy('chargeback_reason_code')
+            ->orderBy('total_amount', 'desc')
+            ->get();
+
+        $result = [
+            'codes' => [],
+            'totals' => ['total_amount' => 0, 'occurrences' => 0, 'total_records' => (int) $totalRecords],
+        ];
+
+        foreach ($stats as $row) {
+            $result['codes'][] = [
+                'chargeback_code'   => $row->chargeback_code,
+                'chargeback_reason' => $row->chargeback_reason,
+                'total_amount'      => (float) $row->total_amount,
+                'occurrences'       => (int) $row->occurrences,
+                'chargeback_percentage' => 0,
+                'total_percentage'      => 0,
+                'last_occurence'        => $row->last_occurence,
+            ];
+            $result['totals']['total_amount'] += (float) $row->total_amount;
+            $result['totals']['occurrences'] += (int) $row->occurrences;
+        }
+
+        foreach ($result['codes'] as &$code) {
+            $code['chargeback_percentage'] = $result['totals']['occurrences'] > 0
+                ? round(($code['occurrences'] / $result['totals']['occurrences']) * 100, 2)
+                : 0;
+
+            $code['total_percentage'] = $result['totals']['total_records'] > 0
+                ? round(($code['occurrences'] / $result['totals']['total_records']) * 100, 2)
+                : 0;
+        }
+        unset($code);
+
+        return $result;
+    }
 }
