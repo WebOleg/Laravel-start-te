@@ -59,24 +59,24 @@ class UploadController extends Controller
                 $q->where('status', BillingAttempt::STATUS_APPROVED);
             },
             'billingAttempts as chargeback_count' => function ($q) use ($excludedCbCodes) {
-                $q->where('status', BillingAttempt::STATUS_CHARGEBACKED)
-                    ->when(!empty($excludedCbCodes), function ($subQ) use ($excludedCbCodes) {
-                        $subQ->where(function ($inner) use ($excludedCbCodes) {
-                            $inner->whereNotIn('chargeback_reason_code', $excludedCbCodes)
-                                ->orWhereNull('chargeback_reason_code');
-                        });
+                $q->where('status', BillingAttempt::STATUS_CHARGEBACKED);
+                if (!empty($excludedCbCodes)) {
+                    $q->where(function ($inner) use ($excludedCbCodes) {
+                        $inner->whereNotIn('chargeback_reason_code', $excludedCbCodes)
+                            ->orWhereNull('chargeback_reason_code');
                     });
+                }
             },
         ])->withSum(['billingAttempts as approved_amount' => function ($q) {
             $q->where('status', BillingAttempt::STATUS_APPROVED);
         }], 'amount')->withSum(['billingAttempts as chargeback_amount' => function ($q) use ($excludedCbCodes) {
-            $q->where('status', BillingAttempt::STATUS_CHARGEBACKED)
-                ->when(!empty($excludedCbCodes), function ($subQ) use ($excludedCbCodes) {
-                    $subQ->where(function ($inner) use ($excludedCbCodes) {
-                        $inner->whereNotIn('chargeback_reason_code', $excludedCbCodes)
-                            ->orWhereNull('chargeback_reason_code');
-                    });
+            $q->where('status', BillingAttempt::STATUS_CHARGEBACKED);
+            if (!empty($excludedCbCodes)) {
+                $q->where(function ($inner) use ($excludedCbCodes) {
+                    $inner->whereNotIn('chargeback_reason_code', $excludedCbCodes)
+                        ->orWhereNull('chargeback_reason_code');
                 });
+            }
         }], 'amount');
 
         if ($request->filled('status')) {
