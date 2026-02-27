@@ -8,7 +8,7 @@ use Illuminate\Support\Facades\Storage;
 
 class ExportChargebacksCommand extends Command
 {
-    protected $signature = 'chargebacks:export {--upload_id=} {--disk=local}';
+    protected $signature = 'chargebacks:export {--upload_id=} {--disk=local} {--reason-code= : Filter by chargeback reason code (e.g. XT73)}';
 
     protected $description = 'Export chargebacks to CSV file';
 
@@ -16,7 +16,9 @@ class ExportChargebacksCommand extends Command
     {
         $uploadId = $this->option('upload_id');
         $disk = $this->option('disk');
-        $filename = 'chargebacks_export_' . date('Y-m-d_His') . '.csv';
+        $reasonCode = $this->option('reason-code');
+        $filenameSuffix = $reasonCode ? '_' . strtoupper($reasonCode) : '';
+        $filename = 'chargebacks_export' . $filenameSuffix . '_' . date('Y-m-d_His') . '.csv';
 
         $this->info('Fetching chargebacks');
 
@@ -26,6 +28,11 @@ class ExportChargebacksCommand extends Command
         if ($uploadId) {
             $query->where('upload_id', $uploadId);
             $this->info('Filtering by upload_id: ' . $uploadId);
+        }
+
+        if ($reasonCode) {
+            $query->where('chargeback_reason_code', strtoupper($reasonCode));
+            $this->info('Filtering by reason code: ' . strtoupper($reasonCode));
         }
 
         $chargebacks = $query->get();

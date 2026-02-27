@@ -411,6 +411,9 @@ class UploadController extends Controller
                 'cb_rate' => (int) $row->approved > 0
                     ? round((int) $row->chargebacks / (int) $row->approved * 100, 2)
                     : 0,
+                'cb_rate_amount' => (float) $row->approved_volume > 0
+                    ? round((float) $row->cb_volume / (float) $row->approved_volume * 100, 2)
+                    : 0,
             ]);
 
         return response()->json([

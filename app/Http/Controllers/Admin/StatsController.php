@@ -116,4 +116,19 @@ class StatsController extends Controller
 
         return response()->json(['data' => $stats]);
     }
+
+    public function chargebackAllTime(Request $request): JsonResponse
+    {
+        $request->validate([
+            'model' => 'nullable|string',
+            'emp_account_id' => 'nullable|integer|exists:emp_accounts,id',
+        ]);
+
+        $model = $request->input('model');
+        $empAccountId = $request->input('emp_account_id');
+
+        $stats = $this->chargebackStatsService->getChargebackAllTimeStats($model, $empAccountId);
+
+        return response()->json(['data' => $stats]);
+    }
 }
