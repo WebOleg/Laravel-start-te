@@ -3,17 +3,23 @@
 namespace App\Console\Commands;
 
 use App\Models\BillingAttempt;
+use App\Traits\WithLogContext;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Storage;
 
 class ExportChargebacksCommand extends Command
 {
+    use WithLogContext;
+
     protected $signature = 'chargebacks:export {--upload_id=} {--disk=local} {--reason-code= : Filter by chargeback reason code (e.g. XT73)}';
 
     protected $description = 'Export chargebacks to CSV file';
 
     public function handle()
     {
+        // Initialize the context
+        $this->initLogContext();
+
         $uploadId = $this->option('upload_id');
         $disk = $this->option('disk');
         $reasonCode = $this->option('reason-code');
@@ -89,7 +95,7 @@ class ExportChargebacksCommand extends Command
 
         foreach ($chargebacks as $chargeback) {
             $debtor = $chargeback->debtor;
-            
+
             if ($debtor) {
                 $name = trim($debtor->first_name . ' ' . $debtor->last_name);
                 $iban = $debtor->iban;

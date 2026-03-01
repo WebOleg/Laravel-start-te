@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Models\BillingAttempt;
 use App\Services\ReconciliationService;
+use App\Traits\WithLogContext;
 use Illuminate\Bus\Batchable;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -15,7 +16,7 @@ use Illuminate\Support\Facades\Log;
 
 class ProcessReconciliationChunkJob implements ShouldQueue
 {
-    use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels, WithLogContext;
 
     public int $tries = 3;
     public int $timeout = 120;
@@ -36,6 +37,9 @@ class ProcessReconciliationChunkJob implements ShouldQueue
         if ($this->batch()?->cancelled()) {
             return;
         }
+
+        // Initialize the context
+        $this->initLogContext();
 
         if ($this->isCircuitOpen()) {
             Log::warning('Reconciliation circuit breaker open, releasing job');

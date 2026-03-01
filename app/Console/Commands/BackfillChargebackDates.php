@@ -4,27 +4,32 @@ namespace App\Console\Commands;
 
 use App\Models\BillingAttempt;
 use App\Services\Emp\EmpClient;
+use App\Traits\WithLogContext;
 use Carbon\Carbon;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
 
 class BackfillChargebackDates extends Command
 {
-    protected $signature = 'chargebacks:backfill-dates 
+    use WithLogContext;
+    protected $signature = 'chargebacks:backfill-dates
                             {--limit= : Limit number of records to process}
                             {--dry-run : Show what would be updated without making changes}';
-    
+
     protected $description = 'Backfill chargebacked_at with actual EMP post_date';
 
     private const RATE_LIMIT_DELAY_MS = 500;
 
     public function handle(EmpClient $client): int
     {
+        // Initialize the context
+        $this->initLogContext();
+
         $limit = $this->option('limit');
         $dryRun = $this->option('dry-run');
 
         $query = BillingAttempt::where('status', BillingAttempt::STATUS_CHARGEBACKED);
-        
+
         if ($limit) {
             $query->limit((int) $limit);
         }
@@ -69,7 +74,7 @@ class BackfillChargebackDates extends Command
                 }
 
                 $updated++;
-                
+
                 usleep(self::RATE_LIMIT_DELAY_MS * 1000);
 
             } catch (\Exception $e) {

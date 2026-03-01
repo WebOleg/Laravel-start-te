@@ -3,11 +3,14 @@
 namespace App\Console\Commands;
 
 use App\Models\Blacklist;
+use App\Traits\WithLogContext;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\File;
 
 class BlacklistImportCommand extends Command
 {
+    use WithLogContext;
+
     protected $signature = 'blacklist:import
                             {--path= : Import path (default: database/data/blacklist-seed.json)}
                             {--dry-run : Show what would be imported without making changes}';
@@ -16,6 +19,9 @@ class BlacklistImportCommand extends Command
 
     public function handle(): int
     {
+        // Initialize the context
+        $this->initLogContext();
+
         $path = $this->option('path') ?? database_path('data/blacklist-seed.json');
         $dryRun = $this->option('dry-run');
 
@@ -46,7 +52,7 @@ class BlacklistImportCommand extends Command
 
         foreach ($entries as $entry) {
             $uniqueKey = $this->getUniqueKey($entry);
-            
+
             if (empty($uniqueKey)) {
                 $skipped++;
                 $bar->advance();
@@ -56,7 +62,7 @@ class BlacklistImportCommand extends Command
             if (!$dryRun) {
                 $hashSource = $entry['iban'] ?? $entry['email'] ?? $entry['bic'] ??
                     (($entry['first_name'] ?? '') . ($entry['last_name'] ?? ''));
-                
+
                 $result = Blacklist::updateOrCreate(
                     $uniqueKey,
                     [

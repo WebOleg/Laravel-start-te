@@ -9,6 +9,7 @@ use App\Models\Debtor;
 use App\Models\Upload;
 use App\Models\VopLog;
 use App\Services\IbanBavService;
+use App\Traits\WithLogContext;
 use Illuminate\Bus\Batchable;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -20,7 +21,7 @@ use Illuminate\Support\Facades\Log;
 
 class ProcessBavJob implements ShouldQueue
 {
-    use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels, WithLogContext;
 
     public int $tries = 3;
     public int $timeout = 300;
@@ -41,6 +42,9 @@ class ProcessBavJob implements ShouldQueue
 
     public function handle(IbanBavService $bavService): void
     {
+        // Initialize the context
+        $this->initLogContext();
+
         if ($this->batch()?->cancelled()) {
             Log::channel('bav')->info('ProcessBavJob: Batch cancelled', [
                 'upload_id' => $this->uploadId,

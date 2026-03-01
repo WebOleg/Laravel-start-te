@@ -6,6 +6,7 @@ use App\Models\BillingAttempt;
 use App\Models\Debtor;
 use App\Models\DebtorProfile;
 use App\Services\Emp\EmpBillingService;
+use App\Traits\WithLogContext;
 use Illuminate\Bus\Batchable;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -19,7 +20,7 @@ use Illuminate\Support\Facades\DB;
 
 class ProcessBillingChunkJob implements ShouldQueue
 {
-    use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels, WithLogContext;
 
     public int $tries = 3;
     public int $timeout = 120;
@@ -74,6 +75,9 @@ class ProcessBillingChunkJob implements ShouldQueue
         if ($this->batch()?->cancelled()) {
             return;
         }
+
+        // Initialize the context
+        $this->initLogContext();
 
         // Check circuit breaker
         if ($this->isCircuitOpen()) {

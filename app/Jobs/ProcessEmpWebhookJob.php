@@ -14,6 +14,7 @@ use App\Models\DebtorProfile;
 use App\Models\WebhookEvent;
 use App\Services\BlacklistService;
 use App\Services\ChargebackService;
+use App\Traits\WithLogContext;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Foundation\Queue\Queueable;
@@ -23,7 +24,7 @@ use Illuminate\Support\Facades\Log;
 
 class ProcessEmpWebhookJob implements ShouldQueue
 {
-    use Queueable, Dispatchable, InteractsWithQueue, SerializesModels;
+    use Queueable, Dispatchable, InteractsWithQueue, SerializesModels, WithLogContext;
 
     public int $tries = 3;
     public array $backoff = [10, 60, 300];
@@ -57,6 +58,9 @@ class ProcessEmpWebhookJob implements ShouldQueue
 
     public function handle(BlacklistService $blacklistService, ChargebackService $chargebackService): void
     {
+        // Initialize the context
+        $this->initLogContext();
+
         $uniqueId = $this->webhookData['unique_id'] ?? null;
 
         $this->updateWebhookStatus(WebhookEvent::PROCESSING);

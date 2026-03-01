@@ -4,10 +4,14 @@ namespace App\Console\Commands;
 
 use App\Models\Debtor;
 use App\Models\BillingAttempt;
+use App\Traits\WithLogContext;
 use Illuminate\Console\Command;
 
 class UpdateDebtorToApprovedAndChargebacked extends Command
 {
+
+    use WithLogContext;
+
     /**
      * The name and signature of the console command.
      *
@@ -31,6 +35,9 @@ class UpdateDebtorToApprovedAndChargebacked extends Command
      */
     public function handle(): int
     {
+        // Initialize the context
+        $this->initLogContext();
+
         $dryRun = (bool) $this->option('dry-run');
         $limit = $this->option('limit') ? (int) $this->option('limit') : null;
 

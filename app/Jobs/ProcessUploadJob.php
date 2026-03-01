@@ -10,6 +10,7 @@ use App\Models\Upload;
 use App\Services\DebtorImportService;
 use App\Services\FileUploadService;
 use App\Services\SpreadsheetParserService;
+use App\Traits\WithLogContext;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -22,7 +23,7 @@ use Illuminate\Support\Facades\Storage;
 
 class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
 {
-    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels, WithLogContext;
 
     public int $tries = 3;
     public int $timeout = 600;
@@ -47,6 +48,9 @@ class ProcessUploadJob implements ShouldQueue, ShouldBeUnique
         SpreadsheetParserService $parser,
         DebtorImportService $importer,
     ): void {
+        // Initialize the context
+        $this->initLogContext();
+
         Log::info("ProcessUploadJob started", ['upload_id' => $this->upload->id]);
 
         $tempFilePath = null;

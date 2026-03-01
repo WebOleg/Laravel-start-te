@@ -7,6 +7,7 @@ namespace App\Jobs;
 
 use App\Models\Debtor;
 use App\Services\VopVerificationService;
+use App\Traits\WithLogContext;
 use Illuminate\Bus\Batchable;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -18,7 +19,7 @@ use Illuminate\Support\Facades\Log;
 
 class ProcessVopChunkJob implements ShouldQueue
 {
-    use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels, WithLogContext;
 
     public int $tries = 3;
     public int $timeout = 300;
@@ -41,6 +42,9 @@ class ProcessVopChunkJob implements ShouldQueue
         if ($this->batch()?->cancelled()) {
             return;
         }
+
+        // Initialize the context
+        $this->initLogContext();
 
         Log::info('ProcessVopChunkJob started', [
             'upload_id' => $this->uploadId ?? 'recurring',

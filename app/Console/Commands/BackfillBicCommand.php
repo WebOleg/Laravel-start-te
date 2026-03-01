@@ -2,7 +2,7 @@
 
 /**
  * Backfill BIC for records without BIC data.
- * 
+ *
  * Uses IBAN API v4 (unlimited) to fetch BIC by IBAN.
  * Supports multiple targets: billing_attempts, debtors, vop_logs.
  */
@@ -13,12 +13,15 @@ use App\Models\BillingAttempt;
 use App\Models\Debtor;
 use App\Models\VopLog;
 use App\Services\IbanApiService;
+use App\Traits\WithLogContext;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
 
 class BackfillBicCommand extends Command
 {
-    protected $signature = 'bic:backfill 
+    use WithLogContext;
+
+    protected $signature = 'bic:backfill
                             {--target=billing_attempts : Target table (billing_attempts, debtors, vop_logs, all)}
                             {--limit=1000 : Maximum records to process per target}
                             {--dry-run : Show what would be updated without making changes}
@@ -41,6 +44,9 @@ class BackfillBicCommand extends Command
 
     public function handle(): int
     {
+        // Initialize the context
+        $this->initLogContext();
+
         $target = $this->option('target');
         $limit = (int) $this->option('limit');
         $dryRun = $this->option('dry-run');
@@ -58,7 +64,7 @@ class BackfillBicCommand extends Command
         if ($dryRun) $this->warn('DRY RUN MODE - No changes will be made');
         $this->newLine();
 
-        $targets = $target === 'all' 
+        $targets = $target === 'all'
             ? ['billing_attempts', 'debtors', 'vop_logs']
             : [$target];
 
@@ -141,7 +147,7 @@ class BackfillBicCommand extends Command
     private function processTarget(string $target, int $limit, bool $dryRun, int $sleepMs, ?string $uploadId, ?string $fromDate): void
     {
         $query = $this->buildQuery($target, $uploadId, $fromDate)->limit($limit);
-        
+
         // Eager load debtor for billing_attempts and vop_logs
         if (in_array($target, ['billing_attempts', 'vop_logs'])) {
             $query->with('debtor:id,iban');
@@ -187,7 +193,7 @@ class BackfillBicCommand extends Command
             if ($bic) {
                 $record->update(['bic' => $bic]);
                 $this->updated++;
-                
+
                 if ($result['cached'] ?? false) {
                     $this->cached++;
                 }

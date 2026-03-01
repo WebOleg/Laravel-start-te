@@ -8,6 +8,7 @@ use App\Models\DebtorProfile;
 use App\Models\Upload;
 use App\Services\DebtorImportService;
 use App\Services\DeduplicationService;
+use App\Traits\WithLogContext;
 use Illuminate\Bus\Batchable;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -20,7 +21,7 @@ use Illuminate\Support\Facades\Log;
 
 class ProcessUploadChunkJob implements ShouldQueue
 {
-    use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels, WithLogContext;
 
     public int $tries = 3;
     public int $timeout = 120;
@@ -41,6 +42,9 @@ class ProcessUploadChunkJob implements ShouldQueue
         if ($this->batch()?->cancelled()) {
             return;
         }
+
+        // Initialize the context
+        $this->initLogContext();
 
         Log::info("ProcessUploadChunkJob started", [
             'upload_id' => $this->upload->id,
@@ -86,7 +90,7 @@ class ProcessUploadChunkJob implements ShouldQueue
             'blacklisted_name',
             'already_recovered',
             'blacklisted_email',
-            'blacklisted_bic', 
+            'blacklisted_bic',
             'recently_attempted',
             'duplicates',
         ];

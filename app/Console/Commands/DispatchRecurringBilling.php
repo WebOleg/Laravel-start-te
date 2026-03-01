@@ -7,6 +7,7 @@ use App\Models\Debtor;
 use App\Jobs\ProcessBillingChunkJob;
 use App\Jobs\ProcessValidationChunkJob;
 use App\Jobs\ProcessVopChunkJob;
+use App\Traits\WithLogContext;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Cache;
@@ -15,6 +16,8 @@ use Illuminate\Support\Facades\Log;
 
 class DispatchRecurringBilling extends Command
 {
+    use WithLogContext;
+
     protected $signature = 'billing:dispatch';
     protected $description = 'Dispatch recurring billing pipeline with Redis locking';
 
@@ -29,6 +32,9 @@ class DispatchRecurringBilling extends Command
 
     public function handle()
     {
+        // Initialize the context
+        $this->initLogContext();
+
         $targetModels = [
             DebtorProfile::MODEL_FLYWHEEL,
             DebtorProfile::MODEL_RECOVERY,

@@ -9,6 +9,7 @@ namespace App\Jobs;
 
 use App\Models\BavBatch;
 use App\Services\BavBatchService;
+use App\Traits\WithLogContext;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -18,7 +19,7 @@ use Illuminate\Support\Facades\Log;
 
 class ProcessBavBatchJob implements ShouldQueue
 {
-    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels, WithLogContext;
 
     public int $timeout = 600;
     public int $tries = 1;
@@ -31,6 +32,9 @@ class ProcessBavBatchJob implements ShouldQueue
 
     public function handle(BavBatchService $service): void
     {
+        // Initialize the context
+        $this->initLogContext();
+
         $batch = BavBatch::find($this->bavBatchId);
 
         if (!$batch) {

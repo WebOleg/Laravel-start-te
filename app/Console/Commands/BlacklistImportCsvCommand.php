@@ -3,11 +3,14 @@
 namespace App\Console\Commands;
 
 use App\Models\Blacklist;
+use App\Traits\WithLogContext;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
 
 class BlacklistImportCsvCommand extends Command
 {
+    use WithLogContext;
+
     protected $signature = 'blacklist:import-csv
                             {file : Path to CSV file}
                             {--reason=Manual Import : Reason for blacklisting}
@@ -18,6 +21,9 @@ class BlacklistImportCsvCommand extends Command
 
     public function handle(): int
     {
+        // Initialize the context
+        $this->initLogContext();
+
         $filePath = $this->argument('file');
         $reason = $this->option('reason');
         $source = $this->option('source');

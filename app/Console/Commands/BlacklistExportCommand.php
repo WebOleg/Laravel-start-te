@@ -3,11 +3,14 @@
 namespace App\Console\Commands;
 
 use App\Models\Blacklist;
+use App\Traits\WithLogContext;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\File;
 
 class BlacklistExportCommand extends Command
 {
+    use WithLogContext;
+
     protected $signature = 'blacklist:export
                             {--path= : Export path (default: database/data/blacklist.json)}';
 
@@ -15,8 +18,11 @@ class BlacklistExportCommand extends Command
 
     public function handle(): int
     {
+        // Initialize the context
+        $this->initLogContext();
+
         $path = $this->option('path') ?? database_path('data/blacklist.json');
-        
+
         // Ensure directory exists
         $dir = dirname($path);
         if (!File::isDirectory($dir)) {

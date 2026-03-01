@@ -8,6 +8,7 @@
 namespace App\Jobs;
 
 use App\Services\Emp\EmpRefreshService;
+use App\Traits\WithLogContext;
 use Illuminate\Bus\Batchable;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -19,7 +20,7 @@ use Illuminate\Support\Facades\Log;
 
 class EmpRefreshChunkJob implements ShouldQueue
 {
-    use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels, WithLogContext;
 
     public int $timeout = 600; // 10 min per chunk
     public int $tries = 3;
@@ -40,6 +41,9 @@ class EmpRefreshChunkJob implements ShouldQueue
         if ($this->batch()?->cancelled()) {
             return;
         }
+
+        // Initialize the context
+        $this->initLogContext();
 
         $cacheKey = "emp_refresh_{$this->jobId}";
         $chunkStats = ['inserted' => 0, 'updated' => 0, 'unchanged' => 0, 'errors' => 0, 'total' => 0];
@@ -70,7 +74,7 @@ class EmpRefreshChunkJob implements ShouldQueue
 
             // Process transactions
             $pageStats = $service->processTransactions($result['transactions']);
-            
+
             $chunkStats['inserted'] += $pageStats['inserted'];
             $chunkStats['updated'] += $pageStats['updated'];
             $chunkStats['unchanged'] += $pageStats['unchanged'] ?? 0;

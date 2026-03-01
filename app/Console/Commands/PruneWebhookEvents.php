@@ -3,12 +3,15 @@
 namespace App\Console\Commands;
 
 use App\Models\WebhookEvent;
+use App\Traits\WithLogContext;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Storage;
 
 class PruneWebhookEvents extends Command
 {
-    protected $signature = 'webhooks:prune 
+    use WithLogContext;
+
+    protected $signature = 'webhooks:prune
                             {--days=30 : Days to retain in DB}
                             {--archive : Archive to S3/MinIO before deletion}
                             {--chunk=1000 : Records per batch}';
@@ -17,6 +20,9 @@ class PruneWebhookEvents extends Command
 
     public function handle(): int
     {
+        // Initialize the context
+        $this->initLogContext();
+
         $days = (int) $this->option('days');
         $archive = $this->option('archive');
         $chunk = (int) $this->option('chunk');

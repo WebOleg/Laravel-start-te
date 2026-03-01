@@ -3,10 +3,14 @@
 namespace App\Console\Commands;
 
 use App\Models\Debtor;
+use App\Traits\WithLogContext;
 use Illuminate\Console\Command;
 
 class SearchDebtorCommand extends Command
 {
+
+    use WithLogContext;
+
     protected $signature = 'debtor:search
         {--name= : Search by name (first or last)}
         {--email= : Search by email}
@@ -18,6 +22,9 @@ class SearchDebtorCommand extends Command
 
     public function handle(): int
     {
+        // Initialize the context
+        $this->initLogContext();
+
         $name = $this->option('name');
         $email = $this->option('email');
         $iban = $this->option('iban');

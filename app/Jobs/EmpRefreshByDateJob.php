@@ -10,6 +10,7 @@ namespace App\Jobs;
 use App\Models\EmpAccount;
 use App\Services\Emp\EmpClient;
 use App\Services\Emp\EmpRefreshService;
+use App\Traits\WithLogContext;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -20,7 +21,7 @@ use Illuminate\Support\Facades\Log;
 
 class EmpRefreshByDateJob implements ShouldQueue
 {
-    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels, WithLogContext;
 
     public int $timeout = 3600;
     public int $tries = 1;
@@ -39,6 +40,9 @@ class EmpRefreshByDateJob implements ShouldQueue
 
     public function handle(): void
     {
+        // Initialize the context
+        $this->initLogContext();
+
         $cacheKey = "emp_refresh_{$this->jobId}";
         $totalStats = [
             'inserted' => 0,
@@ -68,7 +72,7 @@ class EmpRefreshByDateJob implements ShouldQueue
 
             foreach ($this->accountIds as $accountId) {
                 $account = EmpAccount::find($accountId);
-                
+
                 if (!$account) {
                     Log::warning('EmpRefreshByDateJob: account not found', ['account_id' => $accountId]);
                     $totalStats['errors']++;
@@ -103,7 +107,7 @@ class EmpRefreshByDateJob implements ShouldQueue
 
                     $transactions = $result['transactions'];
                     $hasMore = $result['has_more'];
-                    
+
                     if (isset($result['pagination']['pages_count'])) {
                         $totalPages = (int) $result['pagination']['pages_count'];
                     }
@@ -124,7 +128,7 @@ class EmpRefreshByDateJob implements ShouldQueue
                     $accountProgress = $totalPages > 0
                         ? min(99, (int) round(($page / $totalPages) * 100))
                         : min(95, $page);
-                    
+
                     $overallProgress = (int) round(
                         ($accountsProcessed / count($this->accountIds) * 100) +
                         ($accountProgress / count($this->accountIds))

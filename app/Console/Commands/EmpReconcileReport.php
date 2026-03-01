@@ -8,12 +8,15 @@
 
 namespace App\Console\Commands;
 
+use App\Traits\WithLogContext;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 
 class EmpReconcileReport extends Command
 {
+    use WithLogContext;
+
     protected $signature = 'emp:reconcile
         {file : Path to EMP CSV export file}
         {--export : Save detailed discrepancies to CSV}';
@@ -39,6 +42,9 @@ class EmpReconcileReport extends Command
 
     public function handle(): int
     {
+        // Initialize the context
+        $this->initLogContext();
+
         $filePath = $this->argument('file');
         $shouldExport = $this->option('export');
 

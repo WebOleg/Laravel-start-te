@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Models\DebtorProfile;
 use App\Models\Upload;
 use App\Models\Debtor;
+use App\Traits\WithLogContext;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -16,7 +17,7 @@ use Illuminate\Support\Facades\Log;
 
 class ProcessBillingJob implements ShouldQueue, ShouldBeUnique
 {
-    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels, WithLogContext;
 
     public int $tries = 3;
     public int $timeout = 600;
@@ -39,6 +40,9 @@ class ProcessBillingJob implements ShouldQueue, ShouldBeUnique
 
     public function handle(): void
     {
+        // Initialize the context
+        $this->initLogContext();
+
         $uploadId = $this->upload->id;
 
         Log::info('ProcessBillingJob started', [

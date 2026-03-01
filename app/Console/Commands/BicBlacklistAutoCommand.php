@@ -4,11 +4,14 @@ namespace App\Console\Commands;
 
 use App\Models\BicBlacklist;
 use App\Models\BillingAttempt;
+use App\Traits\WithLogContext;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 
 class BicBlacklistAutoCommand extends Command
 {
+    use WithLogContext;
+
     protected $signature = 'bic-blacklist:auto
                             {--period=30 : Days to look back}
                             {--dry-run : Show what would be blacklisted without making changes}';
@@ -17,6 +20,9 @@ class BicBlacklistAutoCommand extends Command
 
     public function handle(): int
     {
+        // Initialize the context
+        $this->initLogContext();
+
         $days = (int) $this->option('period');
         $dryRun = $this->option('dry-run');
         $since = now()->subDays($days);

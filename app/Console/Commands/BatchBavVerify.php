@@ -3,17 +3,23 @@
 namespace App\Console\Commands;
 
 use App\Services\IbanBavService;
+use App\Traits\WithLogContext;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
 
 class BatchBavVerify extends Command
 {
+    use WithLogContext;
+
     protected $signature = 'bav:batch {file : Path to CSV file} {--output= : Output CSV path} {--limit=0 : Limit records} {--delay=500 : Delay between requests in ms}';
-    
+
     protected $description = 'Run BAV verification for all records in a CSV file';
 
     public function handle(IbanBavService $bavService): int
     {
+        // Initialize the context
+        $this->initLogContext();
+
         $inputPath = $this->argument('file');
         $outputPath = $this->option('output') ?: storage_path('app/bav_results_' . date('Y-m-d_His') . '.csv');
         $limit = (int) $this->option('limit');
@@ -26,13 +32,13 @@ class BatchBavVerify extends Command
 
         $handle = fopen($inputPath, 'r');
         $header = fgetcsv($handle, 0, ';');
-        
+
         $this->info("Input columns: " . implode(', ', $header));
-        
+
         $ibanCol = $this->findColumn($header, ['iban', 'Iban', 'IBAN']);
         $firstNameCol = $this->findColumn($header, ['first_name', 'FirstName', 'firstname']);
         $lastNameCol = $this->findColumn($header, ['last_name', 'LastName', 'lastname']);
-        
+
         if ($ibanCol === null) {
             $this->error("IBAN column not found");
             return 1;
@@ -43,7 +49,7 @@ class BatchBavVerify extends Command
         $output = fopen($outputPath, 'w');
         fputcsv($output, array_merge($header, [
             'bav_success',
-            'bav_valid', 
+            'bav_valid',
             'bav_name_match',
             'bav_bic',
             'bav_score',
@@ -80,7 +86,7 @@ class BatchBavVerify extends Command
 
             try {
                 $result = $bavService->verify($iban, $fullName);
-                
+
                 $row = array_merge($row, [
                     $result['success'] ? 'true' : 'false',
                     $result['valid'] ? 'true' : 'false',

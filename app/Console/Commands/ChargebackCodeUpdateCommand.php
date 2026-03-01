@@ -3,10 +3,13 @@
 namespace App\Console\Commands;
 
 use App\Services\Emp\EmpChargebackService;
+use App\Traits\WithLogContext;
 use Illuminate\Console\Command;
 
 class ChargebackCodeUpdateCommand extends Command
 {
+    use WithLogContext;
+
     private EmpChargebackService $chargebackService;
 
     /**
@@ -41,6 +44,9 @@ class ChargebackCodeUpdateCommand extends Command
      */
     public function handle(): int
     {
+        // Initialize the context
+        $this->initLogContext();
+
         $this->chargebackService = app(EmpChargebackService::class);
 
         $uniqueId = $this->argument('unique-id');

@@ -8,6 +8,7 @@ namespace App\Jobs;
 
 use App\Models\Upload;
 use App\Models\Debtor;
+use App\Traits\WithLogContext;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -19,7 +20,7 @@ use Illuminate\Support\Facades\Log;
 
 class ProcessValidationJob implements ShouldQueue, ShouldBeUnique
 {
-    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels, WithLogContext;
 
     public int $tries = 3;
     public int $timeout = 300;
@@ -40,6 +41,9 @@ class ProcessValidationJob implements ShouldQueue, ShouldBeUnique
 
     public function handle(): void
     {
+        // Initialize the context
+        $this->initLogContext();
+
         $uploadId = $this->upload->id;
 
         Log::info('ProcessValidationJob started', ['upload_id' => $uploadId]);

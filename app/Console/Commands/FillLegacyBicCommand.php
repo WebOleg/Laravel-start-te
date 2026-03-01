@@ -10,12 +10,15 @@ namespace App\Console\Commands;
 use App\Models\BillingAttempt;
 use App\Services\Emp\EmpBillingService;
 use App\Services\IbanApiService;
+use App\Traits\WithLogContext;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
 
 class FillLegacyBicCommand extends Command
 {
-    protected $signature = 'emp:fill-legacy-bic 
+    use WithLogContext;
+
+    protected $signature = 'emp:fill-legacy-bic
                             {--chunk=100 : Number of records per batch}
                             {--limit=0 : Maximum records to process (0 = all)}
                             {--dry-run : Show what would be done without making changes}
@@ -37,6 +40,9 @@ class FillLegacyBicCommand extends Command
 
     public function handle(): int
     {
+        // Initialize the context
+        $this->initLogContext();
+
         $chunkSize = (int) $this->option('chunk');
         $limit = (int) $this->option('limit');
         $dryRun = $this->option('dry-run');

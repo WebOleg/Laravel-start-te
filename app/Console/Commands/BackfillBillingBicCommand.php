@@ -7,12 +7,15 @@
 
 namespace App\Console\Commands;
 
+use App\Traits\WithLogContext;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 
 class BackfillBillingBicCommand extends Command
 {
-    protected $signature = 'billing:backfill-bic 
+    use WithLogContext;
+
+    protected $signature = 'billing:backfill-bic
                             {--chunk=1000 : Number of records to process per batch}
                             {--dry-run : Show what would be updated without making changes}';
 
@@ -20,6 +23,9 @@ class BackfillBillingBicCommand extends Command
 
     public function handle(): int
     {
+        // Initialize the context
+        $this->initLogContext();
+
         $chunkSize = (int) $this->option('chunk');
         $dryRun = $this->option('dry-run');
 
@@ -39,7 +45,7 @@ class BackfillBillingBicCommand extends Command
 
         if ($dryRun) {
             $this->warn('Dry run mode - no changes will be made.');
-            
+
             $sample = DB::table('billing_attempts as ba')
                 ->join('debtors as d', 'ba.debtor_id', '=', 'd.id')
                 ->whereNull('ba.bic')
@@ -67,7 +73,7 @@ class BackfillBillingBicCommand extends Command
             ->orderBy('id')
             ->chunk($chunkSize, function ($attempts) use (&$updated, $bar) {
                 $debtorIds = $attempts->pluck('debtor_id')->unique()->filter();
-                
+
                 $debtorBics = DB::table('debtors')
                     ->whereIn('id', $debtorIds)
                     ->whereNotNull('bic')

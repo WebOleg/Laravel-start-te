@@ -3,10 +3,13 @@
 namespace App\Console\Commands;
 
 use App\Models\Blacklist;
+use App\Traits\WithLogContext;
 use Illuminate\Console\Command;
 
 class BlacklistListCommand extends Command
 {
+    use WithLogContext;
+
     protected $signature = 'blacklist:list
                             {--search= : Search by IBAN, email, or name}
                             {--source= : Filter by source}
@@ -16,6 +19,9 @@ class BlacklistListCommand extends Command
 
     public function handle(): int
     {
+        // Initialize the context
+        $this->initLogContext();
+
         $query = Blacklist::query();
 
         if ($search = $this->option('search')) {

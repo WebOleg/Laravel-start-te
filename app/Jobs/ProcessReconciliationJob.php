@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Models\BillingAttempt;
 use App\Models\Upload;
+use App\Traits\WithLogContext;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -15,7 +16,7 @@ use Illuminate\Support\Facades\Log;
 
 class ProcessReconciliationJob implements ShouldQueue
 {
-    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels, WithLogContext;
 
     public int $tries = 3;
     public int $timeout = 600;
@@ -34,6 +35,9 @@ class ProcessReconciliationJob implements ShouldQueue
 
     public function handle(): void
     {
+        // Initialize the context
+        $this->initLogContext();
+
         Log::info('ProcessReconciliationJob started', [
             'type' => $this->type,
             'upload_id' => $this->uploadId,
