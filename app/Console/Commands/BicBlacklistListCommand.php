@@ -3,10 +3,13 @@
 namespace App\Console\Commands;
 
 use App\Models\BicBlacklist;
+use App\Traits\WithLogContext;
 use Illuminate\Console\Command;
 
 class BicBlacklistListCommand extends Command
 {
+    use WithLogContext;
+
     protected $signature = 'bic-blacklist:list
                             {--source= : Filter by source (manual/import/auto)}';
 
@@ -14,6 +17,9 @@ class BicBlacklistListCommand extends Command
 
     public function handle(): int
     {
+        // Initialize the context
+        $this->initLogContext();
+
         $query = BicBlacklist::orderBy('source')->orderBy('bic');
 
         if ($source = $this->option('source')) {

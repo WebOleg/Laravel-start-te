@@ -123,4 +123,12 @@ return [
         'store' => env('APP_MAINTENANCE_STORE', 'database'),
     ],
 
+
+    /*
+    |--------------------------------------------------------------------------
+    | Tether Instance ID
+    |--------------------------------------------------------------------------
+    */
+    'tether_instance_id' => env('TETHER_INSTANCE_ID', 'unknown'),
+
 ];

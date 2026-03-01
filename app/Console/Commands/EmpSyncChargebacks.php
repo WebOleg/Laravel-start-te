@@ -8,11 +8,14 @@
 namespace App\Console\Commands;
 
 use App\Services\Emp\EmpChargebackSyncService;
+use App\Traits\WithLogContext;
 use Carbon\Carbon;
 use Illuminate\Console\Command;
 
 class EmpSyncChargebacks extends Command
 {
+    use WithLogContext;
+
     protected $signature = 'emp:sync-chargebacks
                             {--date= : Specific date to sync (YYYY-MM-DD), default: yesterday}
                             {--start-date= : Start date for range sync (YYYY-MM-DD)}
@@ -24,6 +27,9 @@ class EmpSyncChargebacks extends Command
 
     public function handle(EmpChargebackSyncService $service): int
     {
+        // Initialize the context
+        $this->initLogContext();
+
         $dryRun = $this->option('dry-run');
 
         if ($dryRun) {

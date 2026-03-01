@@ -2,11 +2,15 @@
 
 namespace App\Console\Commands;
 
+use App\Traits\WithLogContext;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Http;
 
 class RunBavVerification extends Command
 {
+
+    use WithLogContext;
+
     protected $signature = 'bav:verify {file} {--output=bav_results.csv}';
     protected $description = 'Run BAV verification on CSV file';
 
@@ -14,6 +18,9 @@ class RunBavVerification extends Command
 
     public function handle(): int
     {
+        // Initialize the context
+        $this->initLogContext();
+
         $apiKey = config('services.iban.api_key');
         $inputFile = $this->argument('file');
         $outputFile = $this->option('output');
@@ -55,7 +62,7 @@ class RunBavVerification extends Command
             }
 
             $result = $this->verifyBav($apiKey, $iban, $name);
-            
+
             $stats['total']++;
             $nm = $result['name_match'];
             $stats[$nm] = ($stats[$nm] ?? 0) + 1;
@@ -77,7 +84,7 @@ class RunBavVerification extends Command
             ]);
 
             if ($i % 10 === 0) fflush($out);
-            
+
             $bar->advance();
             usleep(300000); // 0.3s delay
         }

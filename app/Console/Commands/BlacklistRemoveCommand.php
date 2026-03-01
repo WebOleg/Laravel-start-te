@@ -3,10 +3,13 @@
 namespace App\Console\Commands;
 
 use App\Models\Blacklist;
+use App\Traits\WithLogContext;
 use Illuminate\Console\Command;
 
 class BlacklistRemoveCommand extends Command
 {
+    use WithLogContext;
+
     protected $signature = 'blacklist:remove
                             {--id= : Remove by ID}
                             {--iban= : Remove by IBAN}';
@@ -15,6 +18,9 @@ class BlacklistRemoveCommand extends Command
 
     public function handle(): int
     {
+        // Initialize the context
+        $this->initLogContext();
+
         $id = $this->option('id');
         $iban = $this->option('iban');
 
@@ -26,7 +32,7 @@ class BlacklistRemoveCommand extends Command
             }
         }
 
-        $entry = $id 
+        $entry = $id
             ? Blacklist::find($id)
             : Blacklist::where('iban', $iban)->first();
 

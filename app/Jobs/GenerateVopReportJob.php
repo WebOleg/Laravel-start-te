@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Services\VopReportService;
+use App\Traits\WithLogContext;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -12,7 +13,7 @@ use Illuminate\Support\Facades\Log;
 
 class GenerateVopReportJob implements ShouldQueue
 {
-    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels, WithLogContext;
 
     public int $tries = 3;
     public int $timeout = 60;
@@ -25,6 +26,9 @@ class GenerateVopReportJob implements ShouldQueue
 
     public function handle(VopReportService $reportService): void
     {
+        // Initialize the context
+        $this->initLogContext();
+
         try {
             $reportFile = $reportService->generateReport($this->uploadId);
 

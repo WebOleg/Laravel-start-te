@@ -9,6 +9,7 @@
 namespace App\Jobs;
 
 use App\Models\BillingAttempt;
+use App\Traits\WithLogContext;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -20,7 +21,7 @@ use Illuminate\Support\Facades\Storage;
 
 class ExportCleanUsersJob implements ShouldQueue
 {
-    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels, WithLogContext;
 
     public int $tries = 2;
     public int $timeout = 900;
@@ -44,6 +45,9 @@ class ExportCleanUsersJob implements ShouldQueue
 
     public function handle(): void
     {
+        // Initialize the context
+        $this->initLogContext();
+
         Log::info("ExportCleanUsersJob started", [
             'job_id' => $this->jobId,
             'limit' => $this->limit,

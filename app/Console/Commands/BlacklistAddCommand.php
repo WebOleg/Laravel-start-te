@@ -3,10 +3,13 @@
 namespace App\Console\Commands;
 
 use App\Models\Blacklist;
+use App\Traits\WithLogContext;
 use Illuminate\Console\Command;
 
 class BlacklistAddCommand extends Command
 {
+    use WithLogContext;
+
     protected $signature = 'blacklist:add
                             {--iban= : IBAN to blacklist}
                             {--email= : Email to blacklist}
@@ -20,6 +23,9 @@ class BlacklistAddCommand extends Command
 
     public function handle(): int
     {
+        // Initialize the context
+        $this->initLogContext();
+
         $iban = $this->option('iban') ?: null;
         $email = $this->option('email') ?: null;
         $firstName = $this->option('first-name') ?: null;
@@ -35,18 +41,18 @@ class BlacklistAddCommand extends Command
         if (!$hasData) {
             $this->info('Fill at least one field:');
             $this->newLine();
-            
+
             $iban = $this->ask('IBAN') ?: null;
             $email = $this->ask('Email') ?: null;
             $firstName = $this->ask('First name') ?: null;
             $lastName = $this->ask('Last name') ?: null;
             $bic = $this->ask('BIC') ?: null;
-            
+
             if (!$iban && !$email && !$firstName && !$lastName && !$bic) {
                 $this->error('At least one field is required');
                 return 1;
             }
-            
+
             $reason = $this->ask('Reason', 'Manual blacklist');
             $source = $this->choice('Source', ['manual', 'support', 'system-auto', 'chargeback'], 0);
         }
@@ -66,7 +72,7 @@ class BlacklistAddCommand extends Command
         ]);
 
         $this->info("Added blacklist entry ID: {$entry->id}");
-        
+
         $this->table(
             ['Field', 'Value'],
             [

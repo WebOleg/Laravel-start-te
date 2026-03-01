@@ -7,6 +7,7 @@ namespace App\Jobs;
 use App\Models\Upload;
 use App\Models\Debtor;
 use App\Services\VopReportService;
+use App\Traits\WithLogContext;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -18,7 +19,7 @@ use Illuminate\Support\Facades\Log;
 
 class ProcessVopJob implements ShouldQueue, ShouldBeUnique
 {
-    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels, WithLogContext;
 
     public int $tries = 3;
     public int $timeout = 300;
@@ -43,6 +44,9 @@ class ProcessVopJob implements ShouldQueue, ShouldBeUnique
     public function handle(): void
     {
         $uploadId = $this->upload->id;
+
+        // Initialize the context
+        $this->initLogContext();
 
         Log::info('ProcessVopJob started', ['upload_id' => $uploadId]);
 

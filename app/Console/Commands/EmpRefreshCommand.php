@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Jobs\EmpRefreshByDateJob;
 use App\Models\EmpAccount;
+use App\Traits\WithLogContext;
 use Carbon\Carbon;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Cache;
@@ -11,6 +12,8 @@ use Illuminate\Support\Str;
 
 class EmpRefreshCommand extends Command
 {
+    use WithLogContext;
+
     protected $signature = 'emp:refresh
                             {--from= : Start date (YYYY-MM-DD), default: yesterday}
                             {--to= : End date (YYYY-MM-DD), default: yesterday}
@@ -21,12 +24,16 @@ class EmpRefreshCommand extends Command
 
     public function handle(): int
     {
+
+        // Initialize the context
+        $this->initLogContext();
+
         // Determine date range
         try {
-            $from = $this->option('from') 
+            $from = $this->option('from')
                 ? Carbon::parse($this->option('from'))
                 : now()->subDay();
-            
+
             $to = $this->option('to')
                 ? Carbon::parse($this->option('to'))
                 : ($this->option('from') ? Carbon::parse($this->option('from')) : now()->subDay());
@@ -71,7 +78,7 @@ class EmpRefreshCommand extends Command
             $accountIds = [$accountId];
         } else {
             $accountIds = EmpAccount::pluck('id')->toArray();
-            
+
             if (empty($accountIds)) {
                 $this->error('No EMP accounts configured');
                 return 1;

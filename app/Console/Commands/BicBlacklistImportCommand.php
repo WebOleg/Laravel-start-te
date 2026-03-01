@@ -3,11 +3,14 @@
 namespace App\Console\Commands;
 
 use App\Models\BicBlacklist;
+use App\Traits\WithLogContext;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\File;
 
 class BicBlacklistImportCommand extends Command
 {
+    use WithLogContext;
+
     protected $signature = 'bic-blacklist:import
                             {path : Path to text file with BIC codes (one per line, prefix with *)}
                             {--reason=Imported from file : Reason for blacklisting}
@@ -20,6 +23,9 @@ class BicBlacklistImportCommand extends Command
 
     public function handle(): int
     {
+        // Initialize the context
+        $this->initLogContext();
+
         $path = $this->argument('path');
         $dryRun = $this->option('dry-run');
 

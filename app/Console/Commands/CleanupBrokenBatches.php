@@ -6,16 +6,22 @@
 
 namespace App\Console\Commands;
 
+use App\Traits\WithLogContext;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 
 class CleanupBrokenBatches extends Command
 {
+    use WithLogContext;
+
     protected $signature = 'batches:cleanup {--dry-run : Show what would be cleaned without actually cleaning}';
     protected $description = 'Cancel and cleanup broken job batches with negative pending_jobs';
 
     public function handle(): int
     {
+        // Initialize the context
+        $this->initLogContext();
+
         $dryRun = $this->option('dry-run');
 
         // job_batches uses integer timestamps, not datetime
