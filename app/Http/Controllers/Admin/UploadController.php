@@ -546,6 +546,16 @@ class UploadController extends Controller
             'is_30d_cool' => 'required|boolean',
         ]);
 
+        // The 30-day cooling period is only meaningful for Legacy uploads.
+        // Flywheel uses DebtorProfile->due() for cycle control; Recovery is designed
+        // to retry failed payments — both are broken by a 30-day freeze.
+        if ($request->boolean('is_30d_cool') && $upload->billing_model !== BillingModel::Legacy->value) {
+            return response()->json([
+                'message' => 'The 30-day cooling period is only applicable to Legacy billing model uploads. ' .
+                             'Flywheel and Recovery models manage their own billing cycles independently.',
+            ], 422);
+        }
+
         $upload->update([
             'is_30d_cool' => $request->boolean('is_30d_cool'),
         ]);

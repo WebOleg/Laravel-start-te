@@ -13,6 +13,7 @@ use App\Models\Debtor;
 use App\Models\DebtorProfile;
 use App\Models\EmpAccount;
 use App\Models\Upload;
+use App\Services\DeduplicationService;
 use App\Services\DescriptorService;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -22,14 +23,16 @@ class EmpBillingService
 {
     private EmpClient $defaultClient;
     private DescriptorService $descriptorService;
+    private DeduplicationService $deduplicationService;
     private int $requestsPerSecond;
     private int $maxRetries;
     private int $retryDelayMs;
 
-    public function __construct(EmpClient $client, DescriptorService $descriptorService)
+    public function __construct(EmpClient $client, DescriptorService $descriptorService, DeduplicationService $deduplicationService)
     {
         $this->defaultClient = $client;
         $this->descriptorService = $descriptorService;
+        $this->deduplicationService = $deduplicationService;
         $this->requestsPerSecond = config('services.emp.rate_limit.requests_per_second', 50);
         $this->maxRetries = config('services.emp.rate_limit.max_retries', 3);
         $this->retryDelayMs = config('services.emp.rate_limit.retry_delay_ms', 1000);
@@ -377,6 +380,25 @@ class EmpBillingService
                 ->exists();
 
             if ($hasApproved) {
+                return false;
+            }
+        }
+
+        // Enforce 30-day cooling period when enabled on the upload.
+        // If is_30d_cool is true, skip this debtor if its IBAN was attempted within the last 30 days.
+        $upload = $debtor->relationLoaded('upload') ? $debtor->upload : $debtor->upload()->first();
+        if ($upload && $upload->is_30d_cool === true) {
+            $recentAttempt = $this->deduplicationService->getRecentAttempt(
+                $debtor->iban_hash,
+                $upload->id
+            );
+            if ($recentAttempt !== null) {
+                Log::info('Skipped debtor due to 30-day cooling period.', [
+                    'debtor_id'  => $debtor->id,
+                    'upload_id'  => $upload->id,
+                    'days_ago'   => $recentAttempt['days_ago'],
+                    'last_status'=> $recentAttempt['status'],
+                ]);
                 return false;
             }
         }
