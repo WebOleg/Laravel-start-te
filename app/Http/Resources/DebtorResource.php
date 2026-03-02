@@ -49,9 +49,9 @@ class DebtorResource extends JsonResource
             'raw_data' => $this->raw_data,
             'bank_name_reference' => $this->getBankNameReference($bankReference),
             'bank_country_iso_reference' => $this->getBankCountryReference($bankReference),
-            'emp_account_name' => $this->whenLoaded('latestBillingAttempt', function () {
-                return $this->latestBillingAttempt?->empAccount?->name;
-            }),
+            'emp_account_id' => $this->emp_account_id,
+            'emp_account_name' => $this->whenLoaded('empAccount', fn() => $this->empAccount?->name)
+                ?? $this->whenLoaded('latestBillingAttempt', fn() => $this->latestBillingAttempt?->empAccount?->name),
             'created_at' => $this->created_at->toISOString(),
             'updated_at' => $this->updated_at->toISOString(),
             'upload' => new UploadResource($this->whenLoaded('upload')),

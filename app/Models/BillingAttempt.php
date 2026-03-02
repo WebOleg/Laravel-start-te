@@ -46,6 +46,7 @@ class BillingAttempt extends Model
     protected $fillable = [
         'debtor_id',
         'upload_id',
+        'tether_instance_id',
         'transaction_id',
         'unique_id',
         'amount',
@@ -111,6 +112,11 @@ class BillingAttempt extends Model
     public function empAccount(): BelongsTo
     {
         return $this->belongsTo(EmpAccount::class);
+    }
+
+    public function tetherInstance(): BelongsTo
+    {
+        return $this->belongsTo(TetherInstance::class);
     }
 
     public function chargeback(): HasOne

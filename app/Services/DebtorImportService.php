@@ -59,6 +59,7 @@ class DebtorImportService
         $skippedRows = [];
 
         $uploadModel = $upload->billing_model ?? BillingModel::Legacy->value;
+        $tetherInstanceId = $upload->tether_instance_id;
 
         // 1) Map + normalize all rows first (batch dedupe + batch profile prefetch)
         $debtorDataList = [];
@@ -78,18 +79,22 @@ class DebtorImportService
         // 2) Batch dedupe: IBAN + name + email (your existing service)
         $dedupeResults = $this->deduplicationService->checkDebtorBatch($debtorDataList, $upload->id);
 
-        // 3) Prefetch profiles by iban_hash to avoid N+1
+        // 3) Prefetch profiles by iban_hash (scoped by tether_instance_id when available)
         $profilesByHash = [];
         $ibanHashes = array_values(array_unique($ibanHashes));
 
         if (!empty($ibanHashes)) {
-            $profilesByHash = DebtorProfile::query()
-                ->whereIn('iban_hash', $ibanHashes)
-                ->get()
-                ->keyBy('iban_hash')
-                ->all();
-        }
+            $query = DebtorProfile::query()->whereIn('iban_hash', $ibanHashes);
 
+            if ($tetherInstanceId) {
+                $query->where(function ($q) use ($tetherInstanceId) {
+                    $q->where('tether_instance_id', $tetherInstanceId)
+                      ->orWhereNull('tether_instance_id');
+                });
+            }
+
+            $profilesByHash = $query->get()->keyBy('iban_hash')->all();
+        }
 
         // Initialize a tracker for skip reasons
         $skipReasonStats = [];
@@ -104,11 +109,10 @@ class DebtorImportService
                 // 4.1) Dedupe skip
                 if (isset($dedupeResults[$index])) {
                     $skipInfo = $dedupeResults[$index];
-                    $reason = $skipInfo['reason']; // Capture reason
+                    $reason = $skipInfo['reason'];
 
                     $this->pushSkip($skipped, $skippedRows, $index, $debtorData, $reason, $skipInfo);
 
-                    // Track stat
                     $skipReasonStats[$reason] = ($skipReasonStats[$reason] ?? 0) + 1;
                     continue;
                 }
@@ -120,18 +124,22 @@ class DebtorImportService
                     $profile = $profilesByHash[$ibanHash] ?? null;
 
                     if (!$profile) {
-                        $profile = $this->createDebtorProfileFromRowModel($rowModel, $debtorData);
+                        $profile = $this->createDebtorProfileFromRowModel($rowModel, $debtorData, $tetherInstanceId);
                         if ($profile) {
                             $profilesByHash[$ibanHash] = $profile;
+                        }
+                    } else {
+                        // Assign tether_instance_id to existing profile if missing
+                        if ($tetherInstanceId && !$profile->tether_instance_id) {
+                            $profile->update(['tether_instance_id' => $tetherInstanceId]);
                         }
                     }
 
                     if ($profile) {
-                        // If profile is legacy and row is flywheel/recovery: keep old logic stable -> skip
                         if ($profile->billing_model === BillingModel::Legacy->value
                             && $rowModel !== BillingModel::Legacy->value
                         ) {
-                            $reason = DeduplicationService::SKIP_EXISTING_LEGACY_IBAN; // Capture reason
+                            $reason = DeduplicationService::SKIP_EXISTING_LEGACY_IBAN;
 
                             $this->pushSkip($skipped, $skippedRows, $this->rowNumber($index, $startRow), $debtorData, $reason, [
                                 'profile_model' => $profile->billing_model,
@@ -139,17 +147,15 @@ class DebtorImportService
                                 'row_model' => $rowModel,
                             ]);
 
-                            // Track stat
                             $skipReasonStats[$reason] = ($skipReasonStats[$reason] ?? 0) + 1;
                             continue;
                         }
 
-                        // Flywheel vs Recovery conflict
                         if ($profile->billing_model !== BillingModel::Legacy->value
                             && $rowModel !== BillingModel::Legacy->value
                             && $profile->billing_model !== $rowModel
                         ) {
-                            $reason = DeduplicationService::SKIP_MODEL_CONFLICT; // Capture reason
+                            $reason = DeduplicationService::SKIP_MODEL_CONFLICT;
 
                             $this->pushSkip($skipped, $skippedRows, $this->rowNumber($index, $startRow), $debtorData, $reason, [
                                 'profile_model' => $profile->billing_model,
@@ -157,16 +163,14 @@ class DebtorImportService
                                 'row_model' => $rowModel,
                             ]);
 
-                            // Track stat
                             $skipReasonStats[$reason] = ($skipReasonStats[$reason] ?? 0) + 1;
                             continue;
                         }
 
-                        // If rowModel is legacy but profile is flywheel/recovery -> skip (avoid mixing pipelines)
                         if ($rowModel === BillingModel::Legacy->value
                             && $profile->billing_model !== BillingModel::Legacy->value
                         ) {
-                            $reason = DeduplicationService::SKIP_MODEL_CONFLICT; // Capture reason
+                            $reason = DeduplicationService::SKIP_MODEL_CONFLICT;
 
                             $this->pushSkip($skipped, $skippedRows, $this->rowNumber($index, $startRow), $debtorData, $reason, [
                                 'profile_model' => $profile->billing_model,
@@ -174,23 +178,20 @@ class DebtorImportService
                                 'row_model' => $rowModel,
                             ]);
 
-                            // Track stat
                             $skipReasonStats[$reason] = ($skipReasonStats[$reason] ?? 0) + 1;
                             continue;
                         }
 
-                        // Link debtor to profile and use profile model as the source of truth
                         $debtorData['debtor_profile_id'] = $profile->id;
                         $debtorData['billing_model'] = $profile->billing_model;
                     } else {
                         $debtorData['billing_model'] = $rowModel;
                     }
                 } else {
-                    // no iban_hash => rowModel (can be legacy/flywheel/recovery based on amount)
                     $debtorData['billing_model'] = $rowModel;
                 }
 
-                // 4.3) Trace autoswitch (row model differs from upload/controller model)
+                // 4.3) Trace autoswitch
                 if (($debtorData['billing_model'] ?? $uploadModel) !== $uploadModel) {
                     $debtorData['meta'] = array_merge($debtorData['meta'] ?? [], [
                         'upload_billing_model' => $uploadModel,
@@ -200,8 +201,9 @@ class DebtorImportService
                     ]);
                 }
 
-                // 4.4) Create Debtor row
+                // 4.4) Create Debtor row with tether_instance_id
                 $debtorData['upload_id'] = $upload->id;
+                $debtorData['tether_instance_id'] = $tetherInstanceId;
                 $debtorData['raw_data'] = $row;
 
                 if ($validateBasicStructure) {
@@ -234,18 +236,15 @@ class DebtorImportService
             }
         }
 
-
-        // Log the final skip summary
         if ($skipped > 0) {
             Log::info('Debtor import skipped rows summary', [
                 'upload_id' => $upload->id,
+                'tether_instance_id' => $tetherInstanceId,
                 'total_created' => $created,
                 'total_skipped' => $skipped,
                 'skip_reasons_breakdown' => $skipReasonStats,
             ]);
         }
-
-        // -------------------------
 
         return [
             'created' => $created,
@@ -261,12 +260,6 @@ class DebtorImportService
         return ($startRow ?? 1) + $index + 1;
     }
 
-    /**
-     * Model comes from upload/request, but row can override:
-     * - if amount fits upload model => keep upload model
-     * - else if amount fits other model => autoswitch
-     * - else => legacy (out of range)
-     */
     private function resolveRowBillingModel(string $uploadModel, ?float $amount): string
     {
         if ($uploadModel === BillingModel::Legacy->value) {
@@ -286,12 +279,7 @@ class DebtorImportService
         };
     }
 
-    /**
-     * Creates IBAN-level profile for new IBANs.
-     * - billing_model is taken from resolved row model (legacy/flywheel/recovery)
-     * - billing_amount is the row amount (we charge file amount)
-     */
-    private function createDebtorProfileFromRowModel(string $rowModel, array $debtorData): ?DebtorProfile
+    private function createDebtorProfileFromRowModel(string $rowModel, array $debtorData, ?int $tetherInstanceId = null): ?DebtorProfile
     {
         $ibanHash = $debtorData['iban_hash'] ?? null;
         if (empty($ibanHash)) {
@@ -307,24 +295,30 @@ class DebtorImportService
             'is_active' => true,
             'currency' => $debtorData['currency'] ?? 'EUR',
             'billing_amount' => $amount !== null ? round($amount, 2) : null,
+            'tether_instance_id' => $tetherInstanceId,
         ];
 
         try {
             return DebtorProfile::create($defaults);
         } catch (QueryException $e) {
-            // someone created same iban_hash in parallel
-            if (str_contains($e->getMessage(), 'debtor_profiles_iban_hash_unique')
-                || str_contains($e->getMessage(), 'debtor_profiles_iban_hash_key')
+            if (str_contains($e->getMessage(), 'debtor_profiles_iban_hash')
+                || str_contains($e->getMessage(), 'debtor_profiles_iban_hash_tether_instance_id')
             ) {
-                return DebtorProfile::where('iban_hash', $ibanHash)->first();
+                return DebtorProfile::where('iban_hash', $ibanHash)
+                    ->where(function ($q) use ($tetherInstanceId) {
+                        if ($tetherInstanceId) {
+                            $q->where('tether_instance_id', $tetherInstanceId)
+                              ->orWhereNull('tether_instance_id');
+                        } else {
+                            $q->whereNull('tether_instance_id');
+                        }
+                    })
+                    ->first();
             }
             throw $e;
         }
     }
 
-    /**
-     * Convert one raw row to internal debtor data using header mapping.
-     */
     private function mapRowToDebtor(array $row, array $columnMapping): array
     {
         $data = [
@@ -415,7 +409,6 @@ class DebtorImportService
             'last_status' => $extra['last_status'] ?? null,
         ], static fn ($v) => $v !== null);
     }
-
 
     public function finalizeUpload(Upload $upload, array $result): void
     {

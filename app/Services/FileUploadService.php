@@ -2,6 +2,7 @@
 
 /**
  * Service for handling file uploads and creating debtor records.
+ * Resolves tether_instance_id for tenant-scoped upload processing.
  */
 
 namespace App\Services;
@@ -10,6 +11,7 @@ use App\Enums\BillingModel;
 use App\Jobs\ProcessUploadJob;
 use App\Models\BillingAttempt;
 use App\Models\EmpAccount;
+use App\Models\TetherInstance;
 use App\Models\Upload;
 use App\Traits\ParsesDebtorData;
 use Illuminate\Http\UploadedFile;
@@ -109,7 +111,8 @@ class FileUploadService
         ?int $userId = null,
         BillingModel $billingModel = BillingModel::Legacy,
         ?int $empAccountId = null,
-        bool $applyGlobalLock = false
+        bool $applyGlobalLock = false,
+        ?int $tetherInstanceId = null
     ): array {
         $parsed = $this->parser->parse($file);
         $storedPath = $this->storeFile($file);
@@ -120,7 +123,8 @@ class FileUploadService
             $userId,
             $billingModel,
             $empAccountId,
-            $applyGlobalLock
+            $applyGlobalLock,
+            $tetherInstanceId
         );
 
         $columnMapping = $this->buildColumnMapping($parsed['headers']);
@@ -147,7 +151,8 @@ class FileUploadService
         ?int $userId = null,
         BillingModel $billingModel = BillingModel::Legacy,
         ?int $empAccountId = null,
-        bool $applyGlobalLock = false
+        bool $applyGlobalLock = false,
+        ?int $tetherInstanceId = null
     ): array {
         $parsed = $this->parser->parse($file);
         $storedPath = $this->storeFile($file);
@@ -158,7 +163,8 @@ class FileUploadService
             $userId,
             $billingModel,
             $empAccountId,
-            $applyGlobalLock
+            $applyGlobalLock,
+            $tetherInstanceId
         );
 
         $columnMapping = $this->buildColumnMapping($parsed['headers']);
@@ -171,11 +177,10 @@ class FileUploadService
         $globalLockErrors = [];
         $skippedCount = 0;
 
-        // Apply Global Lock Logic
         if ($applyGlobalLock) {
             $lockResult = self::filterCrossAccountIbans(
                 $rows,
-                $upload->emp_account_id,
+                $upload->tether_instance_id,
                 $columnMapping
             );
             $rows = $lockResult['rows'];
@@ -189,17 +194,14 @@ class FileUploadService
             $columnMapping
         );
 
-        // Ensure skipped is an array
         if (!isset($result['skipped']) || !is_array($result['skipped'])) {
             $result['skipped'] = [
                 'total' => 0,
-                'skipped_locked' => 0
+                'skipped_locked' => 0,
             ];
         }
 
-        // Merge lock exclusion errors
         $result['errors'] = array_merge($globalLockErrors, $result['errors']);
-
         $result['skipped']['total'] = ($result['skipped']['total'] ?? 0) + $skippedCount;
 
         $this->finalizeUpload($upload, $result);
@@ -214,16 +216,15 @@ class FileUploadService
     }
 
     /**
-     * Filters rows containing IBANs paid on other accounts.
-     * Static to avoid circular dependency in ProcessUploadJob.
+     * Filters rows containing IBANs billed on other tether instances.
+     * Prevents cross-instance billing for the same IBAN.
      */
-    public static function filterCrossAccountIbans(array $rows, ?int $currentEmpAccountId, array $columnMapping): array
+    public static function filterCrossAccountIbans(array $rows, ?int $currentTetherInstanceId, array $columnMapping): array
     {
-        if ($currentEmpAccountId === null) {
+        if ($currentTetherInstanceId === null) {
             return ['rows' => $rows, 'excluded_count' => 0, 'errors' => []];
         }
 
-        // Identify the IBAN column key from the mapping
         $ibanHeader = null;
         foreach ($columnMapping as $header => $field) {
             if ($field === 'iban') {
@@ -236,7 +237,6 @@ class FileUploadService
             return ['rows' => $rows, 'excluded_count' => 0, 'errors' => []];
         }
 
-        // Extract IBANs for batch query
         $ibans = [];
         foreach ($rows as $row) {
             if (!empty($row[$ibanHeader])) {
@@ -248,15 +248,13 @@ class FileUploadService
             return ['rows' => $rows, 'excluded_count' => 0, 'errors' => []];
         }
 
-        // Query for locked IBANs: Paid (Approved) status AND different Emp Account
         $lockedIbans = DB::table('debtors')
             ->join('billing_attempts', 'debtors.id', '=', 'billing_attempts.debtor_id')
-            ->join('uploads', 'debtors.upload_id', '=', 'uploads.id')
             ->where('billing_attempts.status', BillingAttempt::STATUS_APPROVED)
-            ->where('uploads.emp_account_id', '!=', $currentEmpAccountId)
+            ->where('debtors.tether_instance_id', '!=', $currentTetherInstanceId)
             ->whereIn('debtors.iban', $ibans)
             ->distinct()
-            ->pluck('uploads.emp_account_id', 'debtors.iban') // Key: IBAN, Value: AccountID
+            ->pluck('debtors.tether_instance_id', 'debtors.iban')
             ->toArray();
 
         if (empty($lockedIbans)) {
@@ -271,13 +269,13 @@ class FileUploadService
             $iban = $row[$ibanHeader] ?? null;
 
             if ($iban && isset($lockedIbans[$iban])) {
-                $originalAccount = $lockedIbans[$iban];
-                $msg = "Locked to Account {$originalAccount}";
+                $originalInstance = $lockedIbans[$iban];
+                $msg = "Locked to TetherInstance #{$originalInstance}";
 
                 $errors[] = [
                     'row' => $row,
                     'error' => $msg,
-                    'iban' => $iban
+                    'iban' => $iban,
                 ];
                 $excludedCount++;
                 continue;
@@ -286,10 +284,15 @@ class FileUploadService
             $filteredRows[] = $row;
         }
 
+        Log::info('Cross-instance IBAN lock applied', [
+            'tether_instance_id' => $currentTetherInstanceId,
+            'excluded_count' => $excludedCount,
+        ]);
+
         return [
             'rows' => $filteredRows,
             'excluded_count' => $excludedCount,
-            'errors' => $errors
+            'errors' => $errors,
         ];
     }
 
@@ -327,6 +330,11 @@ class FileUploadService
         return $path;
     }
 
+    /**
+     * Create upload record.
+     * Resolves emp_account from request or default active account.
+     * Resolves tether_instance from request or active EMP instance.
+     */
     private function createUploadRecord(
         UploadedFile $file,
         string $storedPath,
@@ -334,11 +342,19 @@ class FileUploadService
         ?int $userId,
         BillingModel $billingModel,
         ?int $empAccountId = null,
-        bool $applyGlobalLock = false
+        bool $applyGlobalLock = false,
+        ?int $tetherInstanceId = null
     ): Upload {
         if ($empAccountId === null) {
             $activeAccount = EmpAccount::getActive();
             $empAccountId = $activeAccount?->id;
+        }
+
+        if ($tetherInstanceId === null) {
+            $instance = TetherInstance::where('acquirer_type', 'emp')
+                ->where('is_active', true)
+                ->first();
+            $tetherInstanceId = $instance?->id;
         }
 
         return Upload::create([
@@ -350,13 +366,14 @@ class FileUploadService
             'status' => Upload::STATUS_PENDING,
             'billing_model' => $billingModel->value,
             'emp_account_id' => $empAccountId,
+            'tether_instance_id' => $tetherInstanceId,
             'total_records' => $totalRows,
             'processed_records' => 0,
             'failed_records' => 0,
             'uploaded_by' => $userId,
             'meta' => [
-                'apply_global_lock' => $applyGlobalLock
-            ]
+                'apply_global_lock' => $applyGlobalLock,
+            ],
         ]);
     }
 
@@ -382,15 +399,11 @@ class FileUploadService
         return trim($name, '_');
     }
 
-    /**
-     * Finalize upload with skipped counts in meta.
-     */
     private function finalizeUpload(Upload $upload, array $result): void
     {
         $status = $result['failed'] === 0
             ? Upload::STATUS_COMPLETED
             : ($result['created'] > 0 ? Upload::STATUS_COMPLETED : Upload::STATUS_FAILED);
-
 
         $currentMeta = $upload->meta ?? [];
 

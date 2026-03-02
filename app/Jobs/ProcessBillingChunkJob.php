@@ -1,5 +1,10 @@
 <?php
 
+/**
+ * Process billing for a chunk of debtors.
+ * Handles profile resolution, exclusivity checks, and billing execution.
+ */
+
 namespace App\Jobs;
 
 use App\Models\BillingAttempt;
@@ -30,7 +35,7 @@ class ProcessBillingChunkJob implements ShouldQueue
     private const RATE_LIMIT_PER_SECOND = 50;
     private const CIRCUIT_BREAKER_KEY = 'emp_circuit_breaker';
     private const CIRCUIT_BREAKER_THRESHOLD = 10;
-    private const CIRCUIT_BREAKER_TIMEOUT = 300; // 5 minutes
+    private const CIRCUIT_BREAKER_TIMEOUT = 300;
 
     public function __construct(
         public array $debtorIds,
@@ -42,10 +47,6 @@ class ProcessBillingChunkJob implements ShouldQueue
         $this->onQueue('billing');
     }
 
-
-    /**
-     * Check if the kill switch cache key exists.
-     */
     private function shouldStop(): bool
     {
         if (!$this->uploadId) {
@@ -54,17 +55,13 @@ class ProcessBillingChunkJob implements ShouldQueue
         return Cache::has("billing_sync_stop_{$this->uploadId}");
     }
 
-    /**
-     * Actions to take when stopping.
-     */
     private function terminateBatch(): void
     {
         Log::info("Sync Terminated by User", [
             'upload_id' => $this->uploadId,
-            'timestamp' => now()->toIso8601String()
+            'timestamp' => now()->toIso8601String(),
         ]);
 
-        // Cancel the batch
         if ($this->batch()) {
             $this->batch()->cancel();
         }
@@ -76,10 +73,6 @@ class ProcessBillingChunkJob implements ShouldQueue
             return;
         }
 
-        // Initialize the context
-        $this->initLogContext();
-
-        // Check circuit breaker
         if ($this->isCircuitOpen()) {
             Log::warning('ProcessBillingChunkJob: circuit breaker open, releasing job', [
                 'upload_id' => $this->uploadId ?? 'recurring',
@@ -112,18 +105,16 @@ class ProcessBillingChunkJob implements ShouldQueue
         $results = [
             'success' => 0,
             'failed' => 0,
-            'skipped' => 0
+            'skipped' => 0,
         ];
 
         $consecutiveFailures = 0;
 
         foreach ($debtors as $debtor) {
-            // Check if batch cancelled
             if ($this->batch()?->cancelled()) {
                 break;
             }
 
-            // Rate limiting
             $this->rateLimit();
 
             if (!$billingService->canBill($debtor, $debtor->amount)) {
@@ -132,20 +123,17 @@ class ProcessBillingChunkJob implements ShouldQueue
             }
 
             try {
-                // Use helper to handle Profile logic + Billing Service call
                 $attempt = $this->processDebtor($debtor, $billingService);
 
                 if ($attempt && ($attempt->isApproved() || $attempt->isPending())) {
                     $results['success']++;
                     $consecutiveFailures = 0;
                 } elseif ($attempt === null) {
-                    // processDebtor returns null if skipped due to exclusivity logic
                     $results['skipped']++;
                 } else {
                     $results['failed']++;
                     $consecutiveFailures++;
                 }
-
             } catch (Throwable $e) {
                 Log::error('ProcessBillingChunkJob: billing failed', [
                     'debtor_id' => $debtor->id,
@@ -154,7 +142,6 @@ class ProcessBillingChunkJob implements ShouldQueue
                 $results['failed']++;
                 $consecutiveFailures++;
 
-                // Check for circuit breaker
                 if ($consecutiveFailures >= self::CIRCUIT_BREAKER_THRESHOLD) {
                     $this->openCircuit();
                     Log::error('ProcessBillingChunkJob: circuit breaker triggered', [
@@ -176,7 +163,7 @@ class ProcessBillingChunkJob implements ShouldQueue
 
     /**
      * Process individual debtor:
-     * 1. Create/Retrieve Profile
+     * 1. Create/Retrieve Profile (scoped by tether_instance_id)
      * 2. Check Exclusivity
      * 3. Apply Split Test (Amount/Date)
      * 4. Call Billing Service
@@ -185,22 +172,22 @@ class ProcessBillingChunkJob implements ShouldQueue
     {
         return DB::transaction(function () use ($debtor, $billingService) {
 
-            // 1. Find by relationship
             $profile = $debtor->debtorProfile;
 
-            // 2. FALLBACK: If not linked yet, look by hash or create new
-            // This handles the case where we have a repeat debtor in a new file that isn't linked yet.
             if (!$profile) {
-                $profile = DebtorProfile::firstOrNew([
-                    'iban_hash' => $debtor->iban_hash
-                ]);
+                $lookupCriteria = ['iban_hash' => $debtor->iban_hash];
+
+                if ($debtor->tether_instance_id) {
+                    $lookupCriteria['tether_instance_id'] = $debtor->tether_instance_id;
+                }
+
+                $profile = DebtorProfile::firstOrNew($lookupCriteria);
             }
 
             $targetModel = ($this->billingModel === 'all')
                 ? ($profile->billing_model ?? DebtorProfile::MODEL_LEGACY)
                 : $this->billingModel;
 
-            // 2. EXCLUSIVITY CHECK
             if ($this->billingModel !== 'all' &&
                 $profile->exists &&
                 $profile->billing_model !== $targetModel &&
@@ -211,7 +198,6 @@ class ProcessBillingChunkJob implements ShouldQueue
                 return null;
             }
 
-            // If the profile exists and the next bill date is in the future, DO NOT BILL.
             if ($profile->exists &&
                 $targetModel !== DebtorProfile::MODEL_LEGACY &&
                 $profile->next_bill_at &&
@@ -221,21 +207,24 @@ class ProcessBillingChunkJob implements ShouldQueue
                 return null;
             }
 
-            // 4. CONFIGURE PROFILE
             if (!$profile->exists || $profile->billing_model === DebtorProfile::MODEL_LEGACY || $profile->billing_model === $targetModel) {
 
-                // If we are establishing a new non-legacy relationship
                 if ($targetModel !== DebtorProfile::MODEL_LEGACY && $profile->billing_model !== $targetModel) {
                     $profile->billing_model = $targetModel;
                 }
 
-                // Ensure Amount is set if missing (for non-legacy)
                 if ($targetModel !== DebtorProfile::MODEL_LEGACY && !$profile->billing_amount) {
                     $profile->billing_amount = $debtor->amount;
                 }
 
                 $profile->currency = $debtor->currency ?? 'EUR';
-                if (!$profile->iban_masked) $profile->iban_masked = $debtor->iban;
+                if (!$profile->iban_masked) {
+                    $profile->iban_masked = $debtor->iban;
+                }
+
+                if ($debtor->tether_instance_id && !$profile->tether_instance_id) {
+                    $profile->tether_instance_id = $debtor->tether_instance_id;
+                }
 
                 $profile->save();
 
@@ -245,22 +234,18 @@ class ProcessBillingChunkJob implements ShouldQueue
                 }
             }
 
-            // 6. DETERMINE AMOUNT
             $amountToBill = ($targetModel === DebtorProfile::MODEL_LEGACY)
                 ? $debtor->amount
                 : $profile->billing_amount;
 
-            // 7. PREPARE CONTEXT
-            // Determine source based on uploadId presence
             $contextSource = $this->uploadId ? 'batch_upload' : 'recurring_billing';
 
             $context = [
                 'source' => $contextSource,
                 'upload_id' => $this->uploadId,
-                'cycle_anchor' => now()
+                'cycle_anchor' => now(),
             ];
 
-            // 8. EXECUTE
             $attempt = $billingService->billDebtor(
                 $debtor,
                 $this->notificationUrl,
@@ -269,8 +254,6 @@ class ProcessBillingChunkJob implements ShouldQueue
                 $context
             );
 
-            // UPDATE CYCLE
-            // Lock the profile if the attempt was successful/pending
             if ($this->billingModel !== DebtorProfile::MODEL_LEGACY) {
                 if ($attempt->isApproved() || $attempt->isPending()) {
                     if ($attempt->isApproved()) {
@@ -278,7 +261,6 @@ class ProcessBillingChunkJob implements ShouldQueue
                         $profile->last_billed_at = now();
                     }
 
-                    // Lock them for the cycle duration (90 days / 6 months)
                     $profile->next_bill_at = DebtorProfile::calculateNextBillDate($this->billingModel);
                     $profile->save();
                 }
@@ -288,41 +270,28 @@ class ProcessBillingChunkJob implements ShouldQueue
         });
     }
 
-
-    /**
-     * Simple rate limiting using cache.
-     */
     private function rateLimit(): void
     {
         $key = self::RATE_LIMIT_KEY . '_' . now()->format('YmdHis');
         $count = Cache::get($key, 0);
 
         if ($count >= self::RATE_LIMIT_PER_SECOND) {
-            usleep(100000); // Wait 100ms
+            usleep(100000);
         }
 
-        Cache::put($key, $count + 1, 2); // TTL 2 seconds
+        Cache::put($key, $count + 1, 2);
     }
 
-    /**
-     * Check if circuit breaker is open.
-     */
     private function isCircuitOpen(): bool
     {
         return Cache::has(self::CIRCUIT_BREAKER_KEY);
     }
 
-    /**
-     * Open circuit breaker.
-     */
     private function openCircuit(): void
     {
         Cache::put(self::CIRCUIT_BREAKER_KEY, true, self::CIRCUIT_BREAKER_TIMEOUT);
     }
 
-    /**
-     * Handle job failure.
-     */
     public function failed(Throwable $exception): void
     {
         Log::error('ProcessBillingChunkJob failed', [
