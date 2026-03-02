@@ -152,6 +152,7 @@ class UploadController extends Controller
             $empAccountId = $request->input('emp_account_id');
             $tetherInstanceId = $request->input('tether_instance_id');
             $applyGlobalLock = $request->boolean('apply_global_lock');
+            $is30dCool = $request->boolean('is_30d_cool');
 
             $preValidation = $this->preValidationService->validate($file);
             if (!$preValidation['valid']) {
@@ -170,7 +171,8 @@ class UploadController extends Controller
                     $billingModel,
                     $empAccountId,
                     $applyGlobalLock,
-                    $tetherInstanceId
+                    $tetherInstanceId,
+                    $is30dCool
                 );
 
                 return response()->json([
@@ -188,7 +190,8 @@ class UploadController extends Controller
                 $billingModel,
                 $empAccountId,
                 $applyGlobalLock,
-                $tetherInstanceId
+                $tetherInstanceId,
+                $is30dCool
             );
 
             return response()->json([
@@ -535,6 +538,21 @@ class UploadController extends Controller
         fclose($handle);
 
         return $lineCount > self::ASYNC_THRESHOLD;
+    }
+
+    public function setCooldown(Request $request, Upload $upload): JsonResponse
+    {
+        $request->validate([
+            'is_30d_cool' => 'required|boolean',
+        ]);
+
+        $upload->update([
+            'is_30d_cool' => $request->boolean('is_30d_cool'),
+        ]);
+
+        return response()->json([
+            'data' => new UploadResource($upload->fresh()),
+        ]);
     }
 
     private function calculateProgress(Upload $upload): float

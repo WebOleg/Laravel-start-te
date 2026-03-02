@@ -69,6 +69,7 @@ class Upload extends Model
         'reconciliation_started_at',
         'reconciliation_completed_at',
         'skip_bic_blacklist',
+        'is_30d_cool',
     ];
 
     protected $casts = [
@@ -94,6 +95,7 @@ class Upload extends Model
         'reconciliation_started_at' => 'datetime',
         'reconciliation_completed_at' => 'datetime',
         'skip_bic_blacklist' => 'boolean',
+        'is_30d_cool' => 'boolean',
     ];
 
     public function uploader(): BelongsTo

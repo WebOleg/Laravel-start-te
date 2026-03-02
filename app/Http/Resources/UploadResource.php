@@ -93,6 +93,7 @@ class UploadResource extends JsonResource
             // Relations
             'uploader' => new UserResource($this->whenLoaded('uploader')),
             'is_deletable' => $this->isDeletable(),
+            'is_30d_cool' => (bool) ($this->is_30d_cool ?? false),
         ];
     }
 }

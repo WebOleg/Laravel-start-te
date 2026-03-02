@@ -29,6 +29,7 @@ class StoreUploadRequest extends FormRequest
             'billing_model' => ['sometimes', Rule::enum(BillingModel::class)],
             'emp_account_id' => ['sometimes', 'nullable', 'integer', 'exists:emp_accounts,id'],
             'tether_instance_id' => ['sometimes', 'nullable', 'integer', 'exists:tether_instances,id'],
+            'is_30d_cool' => ['sometimes', 'nullable', 'boolean'],
         ];
     }
 
