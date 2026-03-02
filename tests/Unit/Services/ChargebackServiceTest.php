@@ -5,6 +5,7 @@ namespace Tests\Unit\Services;
 use App\Models\BillingAttempt;
 use App\Models\Chargeback;
 use App\Models\Debtor;
+use App\Models\TetherInstance;
 use App\Models\Upload;
 use App\Services\ChargebackService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -649,5 +650,70 @@ class ChargebackServiceTest extends TestCase
         $versionAfter = \Illuminate\Support\Facades\Cache::get('chargeback_stats_version');
 
         $this->assertGreaterThan($versionBefore, $versionAfter);
+    }
+
+    // ==================== tether_instance_id FILTER TESTS ====================
+
+    public function test_get_chargebacks_filters_by_tether_instance_id(): void
+    {
+        $instance1 = TetherInstance::factory()->create();
+        $instance2 = TetherInstance::factory()->create();
+
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
+
+        $attempt1 = BillingAttempt::factory()->create([
+            'debtor_id'          => $debtor->id,
+            'upload_id'          => $upload->id,
+            'status'             => BillingAttempt::STATUS_CHARGEBACKED,
+            'tether_instance_id' => $instance1->id,
+        ]);
+
+        BillingAttempt::factory()->create([
+            'debtor_id'          => $debtor->id,
+            'upload_id'          => $upload->id,
+            'status'             => BillingAttempt::STATUS_CHARGEBACKED,
+            'tether_instance_id' => $instance2->id,
+        ]);
+
+        $request = new \Illuminate\Http\Request(['tether_instance_id' => $instance1->id]);
+        $result  = $this->service->getChargebacks($request);
+
+        $this->assertCount(1, $result);
+        $this->assertEquals($attempt1->id, $result->first()->id);
+    }
+
+    public function test_get_chargeback_statistics_filters_by_tether_instance_id(): void
+    {
+        $instance1 = TetherInstance::factory()->create();
+        $instance2 = TetherInstance::factory()->create();
+
+        $upload = Upload::factory()->create();
+        $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
+
+        // 2 chargebacks for instance1
+        BillingAttempt::factory()->count(2)->create([
+            'debtor_id'          => $debtor->id,
+            'upload_id'          => $upload->id,
+            'status'             => BillingAttempt::STATUS_CHARGEBACKED,
+            'amount'             => 100,
+            'tether_instance_id' => $instance1->id,
+        ]);
+
+        // 5 chargebacks for instance2 — must be excluded
+        BillingAttempt::factory()->count(5)->create([
+            'debtor_id'          => $debtor->id,
+            'upload_id'          => $upload->id,
+            'status'             => BillingAttempt::STATUS_CHARGEBACKED,
+            'amount'             => 100,
+            'tether_instance_id' => $instance2->id,
+        ]);
+
+        \Illuminate\Support\Facades\Cache::flush();
+
+        $request = new \Illuminate\Http\Request(['tether_instance_id' => $instance1->id]);
+        $result  = $this->service->getChargebackStatistics($request);
+
+        $this->assertEquals(2, $result['total_chargebacks_count']);
     }
 }

@@ -2,6 +2,7 @@
 
 /**
  * Admin controller for debtor management.
+ * Handles CRUD, validation, orphan cleanup, and bulk reassignment.
  */
 
 namespace App\Http\Controllers\Admin;
@@ -10,11 +11,14 @@ use App\Http\Controllers\Controller;
 use App\Http\Resources\DebtorResource;
 use App\Models\Debtor;
 use App\Models\DebtorProfile;
+use App\Models\EmpAccount;
 use App\Services\DebtorValidationService;
 use App\Services\IbanValidator;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class DebtorController extends Controller
 {
@@ -50,6 +54,7 @@ class DebtorController extends Controller
         $query = Debtor::with([
             'upload',
             'debtorProfile',
+            'empAccount',
             'latestVopLog.bankReference',
             'latestBillingAttempt.empAccount',
         ]);
@@ -74,13 +79,10 @@ class DebtorController extends Controller
             $query->where('risk_class', $request->input('risk_class'));
         }
 
-
-        // Filters based on the related DebtorProfile's billing_model
         if ($request->filled('model') && $request->input('model') !== 'all') {
             $model = $request->input('model');
 
             if ($model === 'legacy') {
-                // Legacy = explicitly 'legacy' OR has no profile at all
                 $query->where(function ($q) {
                     $q->doesntHave('debtorProfile')
                         ->orWhereHas('debtorProfile', function ($p) {
@@ -88,22 +90,19 @@ class DebtorController extends Controller
                         });
                 });
             } else {
-                // Flywheel or Recovery
                 $query->whereHas('debtorProfile', function ($p) use ($model) {
                     $p->where('billing_model', $model);
                 });
             }
         }
 
-        // Search Filter
-        // Searches Debtor fields + Profile Masked IBAN
         if ($request->filled('search')) {
             $search = $request->input('search');
             $query->where(function ($q) use ($search) {
                 $q->where('first_name', 'like', "%{$search}%")
                     ->orWhere('last_name', 'like', "%{$search}%")
                     ->orWhere('email', 'like', "%{$search}%")
-                    ->orWhere('iban', 'like', "%{$search}%") // Raw IBAN on Debtor table
+                    ->orWhere('iban', 'like', "%{$search}%")
                     ->orWhereHas('debtorProfile', function ($p) use ($search) {
                         $p->where('iban_masked', 'like', "%{$search}%");
                     });
@@ -120,6 +119,7 @@ class DebtorController extends Controller
         $debtor->load([
             'upload',
             'debtorProfile',
+            'empAccount',
             'vopLogs.bankReference',
             'billingAttempts',
             'latestVopLog.bankReference',
@@ -131,7 +131,6 @@ class DebtorController extends Controller
 
     public function update(Request $request, Debtor $debtor): DebtorResource
     {
-        // Handle Raw Data (Only if present in request)
         if ($request->has('raw_data')) {
             $rawData = $request->input('raw_data');
             $debtor->raw_data = $rawData;
@@ -153,28 +152,21 @@ class DebtorController extends Controller
             $debtor->fill($debtorFields);
         }
 
-        // Handle Billing Model Update
         if ($request->filled('model')) {
             $newModel = $request->input('model');
 
-            // Switching TO Legacy -> Delete the profile completely
             if ($newModel === DebtorProfile::MODEL_LEGACY) {
                 if ($debtor->debtorProfile) {
-                    $debtor->debtorProfile->delete(); // Delete the record
+                    $debtor->debtorProfile->delete();
                 }
                 $debtor->debtorProfile()->dissociate();
-            }
-            // Switching TO Flywheel or Recovery
-            elseif (in_array($newModel, DebtorProfile::BILLING_MODELS)) {
+            } elseif (in_array($newModel, DebtorProfile::BILLING_MODELS)) {
                 $profile = $debtor->debtorProfile;
 
                 if ($profile) {
-                    // Update existing profile if model changed
                     if ($profile->billing_model !== $newModel) {
+                        $newNextBillAt = null;
 
-                        $newNextBillAt = null; // Default to NULL (Bill Immediately)
-
-                        // If they have paid before, try to preserve the cycle
                         if ($profile->last_success_at) {
                             $calculatedDate = match ($newModel) {
                                 DebtorProfile::MODEL_FLYWHEEL => $profile->last_success_at->copy()->addDays(90),
@@ -182,8 +174,6 @@ class DebtorController extends Controller
                                 default => null,
                             };
 
-                            // Only set a specific future date if it hasn't passed yet.
-                            // If calculated date is in the past, we leave it as NULL to trigger immediate billing.
                             if ($calculatedDate && $calculatedDate->isFuture()) {
                                 $newNextBillAt = $calculatedDate;
                             }
@@ -195,7 +185,6 @@ class DebtorController extends Controller
                         ]);
                     }
                 } else {
-                    // Create new profile logic
                     if ($debtor->iban_hash) {
                         $profile = DebtorProfile::firstOrCreate(
                             ['iban_hash' => $debtor->iban_hash],
@@ -212,7 +201,6 @@ class DebtorController extends Controller
             }
         }
 
-        // Handle Generic Fields (e.g. email, status)
         $directFields = ['email', 'status', 'risk_class'];
         foreach ($directFields as $field) {
             if ($request->has($field)) {
@@ -222,10 +210,9 @@ class DebtorController extends Controller
 
         $debtor->save();
 
-        // Validate and Refresh
         $this->validationService->validateAndUpdate($debtor);
 
-        $debtor->load(['upload', 'debtorProfile', 'latestVopLog.bankReference', 'latestBillingAttempt.empAccount']);
+        $debtor->load(['upload', 'debtorProfile', 'empAccount', 'latestVopLog.bankReference', 'latestBillingAttempt.empAccount']);
 
         return new DebtorResource($debtor);
     }
@@ -254,6 +241,113 @@ class DebtorController extends Controller
         ]);
     }
 
+    /**
+     * Bulk reassign debtors to a different EMP account.
+     * Updates debtors and their unsent pending billing attempts.
+     * Does NOT touch attempts already submitted to EMP (have unique_id)
+     * or approved/chargebacked attempts (immutable).
+     */
+    public function bulkReassign(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'debtor_ids' => 'required|array|min:1|max:1000',
+            'debtor_ids.*' => 'integer|exists:debtors,id',
+            'emp_account_id' => 'required|integer|exists:emp_accounts,id',
+        ]);
+
+        $debtorIds = $validated['debtor_ids'];
+        $targetAccountId = $validated['emp_account_id'];
+
+        $targetAccount = EmpAccount::findOrFail($targetAccountId);
+
+        if (!$targetAccount->is_active) {
+            return response()->json([
+                'message' => 'Target EMP account is not active.',
+            ], 422);
+        }
+
+        Log::info('Bulk reassign started', [
+            'target_account_id' => $targetAccountId,
+            'target_account_name' => $targetAccount->name,
+            'debtor_count' => count($debtorIds),
+            'admin_id' => $request->user()?->id,
+        ]);
+
+        try {
+            $result = DB::transaction(function () use ($debtorIds, $targetAccountId) {
+                $debtorsUpdated = Debtor::whereIn('id', $debtorIds)
+                    ->where(function ($q) use ($targetAccountId) {
+                        $q->where('emp_account_id', '!=', $targetAccountId)
+                            ->orWhereNull('emp_account_id');
+                    })
+                    ->update(['emp_account_id' => $targetAccountId]);
+
+                $pendingBillingUpdated = DB::table('billing_attempts')
+                    ->whereIn('debtor_id', $debtorIds)
+                    ->where('status', 'pending')
+                    ->whereNull('unique_id')
+                    ->where(function ($q) use ($targetAccountId) {
+                        $q->where('emp_account_id', '!=', $targetAccountId)
+                            ->orWhereNull('emp_account_id');
+                    })
+                    ->update(['emp_account_id' => $targetAccountId]);
+
+                $skippedSubmitted = DB::table('billing_attempts')
+                    ->whereIn('debtor_id', $debtorIds)
+                    ->where('status', 'pending')
+                    ->whereNotNull('unique_id')
+                    ->count();
+
+                return [
+                    'debtors_updated' => $debtorsUpdated,
+                    'pending_billing_updated' => $pendingBillingUpdated,
+                    'skipped_submitted' => $skippedSubmitted,
+                ];
+            });
+
+            Log::info('Bulk reassign completed', [
+                'target_account_id' => $targetAccountId,
+                'target_account_name' => $targetAccount->name,
+                'debtors_updated' => $result['debtors_updated'],
+                'pending_billing_updated' => $result['pending_billing_updated'],
+                'skipped_submitted' => $result['skipped_submitted'],
+                'total_requested' => count($debtorIds),
+                'admin_id' => $request->user()?->id,
+            ]);
+
+            $message = "Reassigned {$result['debtors_updated']} debtors to {$targetAccount->name}.";
+            if ($result['skipped_submitted'] > 0) {
+                $message .= " {$result['skipped_submitted']} pending attempts already submitted to EMP were left unchanged.";
+            }
+
+            return response()->json([
+                'message' => $message,
+                'data' => [
+                    'debtors_updated' => $result['debtors_updated'],
+                    'pending_billing_updated' => $result['pending_billing_updated'],
+                    'skipped_submitted' => $result['skipped_submitted'],
+                    'target_account' => [
+                        'id' => $targetAccount->id,
+                        'name' => $targetAccount->name,
+                        'slug' => $targetAccount->slug,
+                    ],
+                ],
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Bulk reassign failed', [
+                'target_account_id' => $targetAccountId,
+                'debtor_count' => count($debtorIds),
+                'error' => $e->getMessage(),
+                'admin_id' => $request->user()?->id,
+            ]);
+
+            return response()->json([
+                'message' => 'Bulk reassign failed. No changes were made.',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
+    }
+
     private function castValue(string $field, $value)
     {
         if ($value === null || $value === '') {
@@ -266,7 +360,6 @@ class DebtorController extends Controller
             default => trim($value),
         };
     }
-
 
     /**
      * Get the count of debtors attached to non-existent (or soft-deleted) uploads.
@@ -284,8 +377,6 @@ class DebtorController extends Controller
 
     /**
      * Remove all debtors that are attached to non-existent (or soft-deleted) uploads.
-     *
-     * @return JsonResponse
      */
     public function pruneOrphans(): JsonResponse
     {

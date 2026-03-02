@@ -26,16 +26,18 @@ class StatsController extends Controller
             'date_mode' => 'nullable|string|in:transaction,chargeback',
             'model' => 'nullable|string',
             'emp_account_id' => 'nullable|integer|exists:emp_accounts,id',
+            'tether_instance_id' => 'nullable|integer|exists:tether_instances,id',
         ]);
 
-        $period = $request->input('period');
-        $month = $request->input('month');
-        $year = $request->input('year');
-        $dateMode = $request->input('date_mode', ChargebackStatsService::DATE_MODE_TRANSACTION);
-        $model = $request->input('model');
-        $empAccountId = $request->input('emp_account_id');
-
-        $stats = $this->chargebackStatsService->getStats($period, $month, $year, $dateMode, $model, $empAccountId);
+        $stats = $this->chargebackStatsService->getStats(
+            $request->input('period'),
+            $request->input('month'),
+            $request->input('year'),
+            $request->input('date_mode', ChargebackStatsService::DATE_MODE_TRANSACTION),
+            $request->input('model'),
+            $request->input('emp_account_id'),
+            $request->input('tether_instance_id')
+        );
 
         return response()->json(['data' => $stats]);
     }
@@ -49,16 +51,18 @@ class StatsController extends Controller
             'date_mode' => 'nullable|string|in:transaction,chargeback',
             'model' => 'nullable|string',
             'emp_account_id' => 'nullable|integer|exists:emp_accounts,id',
+            'tether_instance_id' => 'nullable|integer|exists:tether_instances,id',
         ]);
 
-        $period = $request->input('period');
-        $month = $request->input('month');
-        $year = $request->input('year');
-        $dateMode = $request->input('date_mode', ChargebackStatsService::DATE_MODE_TRANSACTION);
-        $model = $request->input('model');
-        $empAccountId = $request->input('emp_account_id');
-
-        $codes = $this->chargebackStatsService->getChargebackCodes($period, $month, $year, $dateMode, $model, $empAccountId);
+        $codes = $this->chargebackStatsService->getChargebackCodes(
+            $request->input('period'),
+            $request->input('month'),
+            $request->input('year'),
+            $request->input('date_mode', ChargebackStatsService::DATE_MODE_TRANSACTION),
+            $request->input('model'),
+            $request->input('emp_account_id'),
+            $request->input('tether_instance_id')
+        );
 
         return response()->json(['data' => $codes]);
     }
@@ -72,16 +76,18 @@ class StatsController extends Controller
             'date_mode' => 'nullable|string|in:transaction,chargeback',
             'model' => 'nullable|string',
             'emp_account_id' => 'nullable|integer|exists:emp_accounts,id',
+            'tether_instance_id' => 'nullable|integer|exists:tether_instances,id',
         ]);
 
-        $period = $request->input('period');
-        $month = $request->input('month');
-        $year = $request->input('year');
-        $dateMode = $request->input('date_mode', ChargebackStatsService::DATE_MODE_TRANSACTION);
-        $model = $request->input('model');
-        $empAccountId = $request->input('emp_account_id');
-
-        $banks = $this->chargebackStatsService->getChargebackBanks($period, $month, $year, $dateMode, $model, $empAccountId);
+        $banks = $this->chargebackStatsService->getChargebackBanks(
+            $request->input('period'),
+            $request->input('month'),
+            $request->input('year'),
+            $request->input('date_mode', ChargebackStatsService::DATE_MODE_TRANSACTION),
+            $request->input('model'),
+            $request->input('emp_account_id'),
+            $request->input('tether_instance_id')
+        );
 
         return response()->json(['data' => $banks]);
     }
@@ -95,16 +101,18 @@ class StatsController extends Controller
             'date_mode' => 'nullable|string|in:transaction,chargeback',
             'model' => 'nullable|string',
             'emp_account_id' => 'nullable|integer|exists:emp_accounts,id',
+            'tether_instance_id' => 'nullable|integer|exists:tether_instances,id',
         ]);
 
-        $period = $request->input('period', '30d');
-        $month = $request->input('month');
-        $year = $request->input('year');
-        $dateMode = $request->input('date_mode', ChargebackStatsService::DATE_MODE_TRANSACTION);
-        $model = $request->input('model');
-        $empAccountId = $request->input('emp_account_id');
-
-        $stats = $this->chargebackStatsService->getPricePointStats($period, $month, $year, $dateMode, $model, $empAccountId);
+        $stats = $this->chargebackStatsService->getPricePointStats(
+            $request->input('period', '30d'),
+            $request->input('month'),
+            $request->input('year'),
+            $request->input('date_mode', ChargebackStatsService::DATE_MODE_TRANSACTION),
+            $request->input('model'),
+            $request->input('emp_account_id'),
+            $request->input('tether_instance_id')
+        );
 
         return response()->json(['data' => $stats]);
     }
@@ -114,12 +122,14 @@ class StatsController extends Controller
         $request->validate([
             'model' => 'nullable|string',
             'emp_account_id' => 'nullable|integer|exists:emp_accounts,id',
+            'tether_instance_id' => 'nullable|integer|exists:tether_instances,id',
         ]);
 
-        $model = $request->input('model');
-        $empAccountId = $request->input('emp_account_id');
-
-        $stats = $this->chargebackStatsService->getChargebackAllTimeStats($model, $empAccountId);
+        $stats = $this->chargebackStatsService->getChargebackAllTimeStats(
+            $request->input('model'),
+            $request->input('emp_account_id'),
+            $request->input('tether_instance_id')
+        );
 
         return response()->json(['data' => $stats]);
     }

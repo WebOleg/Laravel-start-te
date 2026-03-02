@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Carbon\Carbon;
 
@@ -27,6 +28,7 @@ class DebtorProfile extends Model
     protected $fillable = [
         'iban_hash',
         'iban_masked',
+        'tether_instance_id',
         'billing_model',
         'is_active',
         'billing_amount',
@@ -52,6 +54,11 @@ class DebtorProfile extends Model
         'currency' => 'EUR',
     ];
 
+    public function tetherInstance(): BelongsTo
+    {
+        return $this->belongsTo(TetherInstance::class);
+    }
+
     public function debtors(): HasMany
     {
         return $this->hasMany(Debtor::class);
@@ -68,11 +75,8 @@ class DebtorProfile extends Model
     public static function calculateNextBillDate(string $model): Carbon
     {
         return match ($model) {
-            // Flywheel: Retention every 90 days
             self::MODEL_FLYWHEEL => now()->addDays(90),
-            // Recovery: Billed every 6 months
             self::MODEL_RECOVERY => now()->addMonths(6),
-            // Legacy: immediate
             default => now(),
         };
     }
@@ -92,11 +96,9 @@ class DebtorProfile extends Model
     public function deductLifetimeRevenue(float $amount): void
     {
         $current = $this->lifetime_charged_amount ?? 0;
-        // Prevent negative lifetime value if data was out of sync
         $this->lifetime_charged_amount = max(0, $current - $amount);
         $this->save();
     }
-
 
     /**
      * Scope profiles that are due for billing.

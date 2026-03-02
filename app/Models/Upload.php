@@ -45,6 +45,7 @@ class Upload extends Model
         'meta',
         'billing_model',
         'emp_account_id',
+        'tether_instance_id',
         'validation_status',
         'validation_batch_id',
         'validation_started_at',
@@ -103,6 +104,11 @@ class Upload extends Model
     public function empAccount(): BelongsTo
     {
         return $this->belongsTo(EmpAccount::class);
+    }
+
+    public function tetherInstance(): BelongsTo
+    {
+        return $this->belongsTo(TetherInstance::class);
     }
 
     public function debtors(): HasMany
@@ -429,26 +435,26 @@ class Upload extends Model
             'reconciliation_completed_at' => now(),
         ]);
     }
-    
+
     protected static function booted(): void
     {
         static::created(function () {
             self::clearSearchCache();
         });
-    
+
         static::updated(function () {
             self::clearSearchCache();
         });
-    
+
         static::deleted(function () {
             self::clearSearchCache();
         });
-    
+
         static::restored(function () {
             self::clearSearchCache();
         });
     }
-    
+
     private static function clearSearchCache(): void
     {
         try {

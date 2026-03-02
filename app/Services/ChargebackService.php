@@ -35,7 +35,11 @@ class ChargebackService
             $chargebacks->where('chargeback_reason_code', $request->input('code'));
         }
 
-        if ($request->filled('emp_account_id'))
+        if ($request->filled('tether_instance_id'))
+        {
+            $chargebacks->where('tether_instance_id', $request->input('tether_instance_id'));
+        }
+        elseif ($request->filled('emp_account_id'))
         {
             $chargebacks->where('emp_account_id', $request->input('emp_account_id'));
         }
@@ -50,7 +54,6 @@ class ChargebackService
                 if ($dateMode === 'chargeback') {
                     $chargebacks->where('chargebacked_at', '>=', $startDate);
                 } else {
-                    // transaction mode (default)
                     $chargebacks->whereRaw('COALESCE(billing_attempts.emp_created_at, billing_attempts.created_at) >= ?', [$startDate]);
                 }
             }
@@ -96,9 +99,6 @@ class ChargebackService
         );
     }
 
-    /**
-     * Get chargeback reasons breakdown for a specific upload
-     */
     public function getUploadChargebackReasons(Upload $upload, array $filters = []): array
     {
         $this->loadUploadCounts($upload);
@@ -121,9 +121,6 @@ class ChargebackService
         ];
     }
 
-    /**
-     * Load basic upload counts (total records and valid debtors)
-     */
     private function loadUploadCounts(Upload $upload): void
     {
         $upload->loadCount([
@@ -142,9 +139,6 @@ class ChargebackService
         ]);
     }
 
-    /**
-     * Get approved billing attempts statistics (count and sum)
-     */
     private function getApprovedStats(int $uploadId): object
     {
         return BillingAttempt::where('upload_id', $uploadId)
@@ -153,9 +147,6 @@ class ChargebackService
             ->first();
     }
 
-    /**
-     * Get chargeback statistics with optional filters (count and sum)
-     */
     private function getChargebackStats(int $uploadId, array $filters = []): object
     {
         $query = BillingAttempt::where('upload_id', $uploadId)
@@ -168,9 +159,6 @@ class ChargebackService
             ->first();
     }
 
-    /**
-     * Get detailed chargeback reason breakdown
-     */
     private function getChargebackReasonBreakdown(int $uploadId, array $filters = []): \Illuminate\Support\Collection
     {
         $query = BillingAttempt::select([
@@ -191,12 +179,11 @@ class ChargebackService
             ->get();
     }
 
-    /**
-     * Apply common chargeback filters to a query
-     */
     private function applyChargebackFilters($query, array $filters): void
     {
-        if (!empty($filters['emp_account_id'])) {
+        if (!empty($filters['tether_instance_id'])) {
+            $query->where('tether_instance_id', $filters['tether_instance_id']);
+        } elseif (!empty($filters['emp_account_id'])) {
             $query->where('emp_account_id', $filters['emp_account_id']);
         }
         if (!empty($filters['start_date'])) {
@@ -215,9 +202,6 @@ class ChargebackService
         }
     }
 
-    /**
-     * Calculate percentages for each chargeback reason
-     */
     private function calculateReasonPercentages($reasons, int $totalChargebacks, int $totalRecords): array
     {
         return $reasons->map(function ($reason) use ($totalChargebacks, $totalRecords) {
@@ -238,9 +222,6 @@ class ChargebackService
         })->toArray();
     }
 
-    /**
-     * Build summary statistics for upload chargebacks
-     */
     private function buildUploadSummary(Upload $upload, object $approvedStats, object $chargebackStats): array
     {
         $billedCount = $approvedStats->count ?? 0;
@@ -259,9 +240,6 @@ class ChargebackService
         ];
     }
 
-    /**
-     * Get individual billing attempts for a specific chargeback reason code
-     */
     public function getUploadChargebackRecordsByCode(Upload $upload, string $code, int $perPage = 100)
     {
         $query = BillingAttempt::with([
@@ -420,31 +398,30 @@ class ChargebackService
         }
     }
 
-
-    /**
-     * Get comprehensive chargeback statistics (optimized — single query)
-     */
     public function getChargebackStatistics(Request $request): array
     {
         $period = $request->input('period', 'all');
         $dateMode = $request->input('date_mode', 'transaction');
         $empAccountId = $request->filled('emp_account_id') ? $request->input('emp_account_id') : null;
+        $tetherInstanceId = $request->filled('tether_instance_id') ? $request->input('tether_instance_id') : null;
         $code = $request->filled('code') ? $request->input('code') : null;
 
-        $cacheKey = $this->buildStatsCacheKey($period, $dateMode, $empAccountId, $code);
+        $cacheKey = $this->buildStatsCacheKey($period, $dateMode, $empAccountId, $code, $tetherInstanceId);
         $ttl = config('tether.cache.ttl_short', 900);
 
-        return Cache::remember($cacheKey, $ttl, function () use ($period, $dateMode, $empAccountId, $code) {
+        return Cache::remember($cacheKey, $ttl, function () use ($period, $dateMode, $empAccountId, $tetherInstanceId, $code) {
             $cb = BillingAttempt::STATUS_CHARGEBACKED;
             $ap = BillingAttempt::STATUS_APPROVED;
 
             $excludedCodes = config('tether.chargeback.excluded_cb_reason_codes', []);
 
-            // Build shared date/emp conditions as raw SQL fragments + bindings
             $conditions = [];
             $bindings = [];
 
-            if ($empAccountId) {
+            if ($tetherInstanceId) {
+                $conditions[] = 'ba.tether_instance_id = ?';
+                $bindings[] = $tetherInstanceId;
+            } elseif ($empAccountId) {
                 $conditions[] = 'ba.emp_account_id = ?';
                 $bindings[] = $empAccountId;
             }
@@ -461,7 +438,6 @@ class ChargebackService
             $codeFilter = $code ? 'AND ba.chargeback_reason_code = ?' : '';
             $codeBindings = $code ? [$code] : [];
 
-            // Exclusion filter for chargebacked rows
             $excludeFilter = '';
             $excludeBindings = [];
             if (!empty($excludedCodes)) {
@@ -470,7 +446,6 @@ class ChargebackService
                 $excludeBindings = array_merge([$cb], $excludedCodes);
             }
 
-            // Single raw query using CTE
             $sql = "
                 WITH filtered AS (
                     SELECT 
@@ -482,9 +457,7 @@ class ChargebackService
                     FROM billing_attempts ba
                     WHERE ba.status IN (?, ?)
                       {$whereClause}
-                      -- code filter only applies to chargebacked rows
                       AND (ba.status = ? OR (ba.status = ? {$codeFilter}))
-                      -- exclude configured reason codes from chargebacked rows
                       {$excludeFilter}
                 ),
                 stats AS (
@@ -511,13 +484,13 @@ class ChargebackService
             ";
 
             $allBindings = array_merge(
-                [$ap, $cb],                         // WHERE status IN (?, ?)
-                $bindings,                           // date/emp conditions
-                [$ap, $cb],                          // AND (status = ? OR (status = ? ...))
-                $codeBindings,                       // code filter inside OR
-                $excludeBindings,                    // exclusion filter
-                [$cb, $cb, $cb, $ap, $cb, $ap],     // stats CTE CASE WHENs
-                [$cb],                               // top_reason CTE WHERE
+                [$ap, $cb],
+                $bindings,
+                [$ap, $cb],
+                $codeBindings,
+                $excludeBindings,
+                [$cb, $cb, $cb, $ap, $cb, $ap],
+                [$cb],
             );
 
             $result = DB::selectOne($sql, $allBindings);
@@ -540,18 +513,13 @@ class ChargebackService
                     'count' => (int) $result->top_reason_count,
                 ] : null,
                 'affected_accounts' => (int) $result->affected_accounts,
-                // --- new statistics ---
                 'unique_debtors_count' => (int) $result->unique_debtors,
                 'total_approved_amount' => round((float) $result->approved_amount, 2),
             ];
         });
     }
 
-    /**
-     * Build the cache key for chargeback statistics.
-     * Embeds a version number so that bumping the version invalidates all permutations at once.
-     */
-    private function buildStatsCacheKey(?string $period = 'all', ?string $dateMode = 'transaction', ?string $empAccountId = null, ?string $code = null): string
+    private function buildStatsCacheKey(?string $period = 'all', ?string $dateMode = 'transaction', ?string $empAccountId = null, ?string $code = null, ?int $tetherInstanceId = null): string
     {
         $version = Cache::get('chargeback_stats_version', 1);
 
@@ -559,18 +527,11 @@ class ChargebackService
             'period'         => $period,
             'date_mode'      => $dateMode,
             'emp_account_id' => $empAccountId,
+            'tether_instance_id' => $tetherInstanceId,
             'code'           => $code,
         ]));
     }
 
-    /**
-     * Clear cached chargeback statistics.
-     *
-     * Bumps the cache version, which effectively orphans every existing
-     * chargeback_stats entry regardless of filter combination (period,
-     * date_mode, emp_account_id, code). Orphaned entries expire naturally
-     * via their TTL — no enumeration needed.
-     */
     public function clearChargebackStatisticsCache(): void
     {
         Cache::increment('chargeback_stats_version');

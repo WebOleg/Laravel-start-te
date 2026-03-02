@@ -4,10 +4,7 @@
  * Chargeback Statistics Service.
  *
  * CB Rate formula aligned with EMP: chargebacks / approved * 100
- *
- * Note: When a billing attempt gets chargebacked, its status changes from
- * 'approved' to 'chargebacked'. The 'approved' count reflects only currently
- * approved transactions, not those that later became chargebacks.
+ * Supports filtering by tether_instance_id (preferred) or emp_account_id (legacy).
  */
 
 namespace App\Services;
@@ -40,19 +37,15 @@ class ChargebackStatsService
         }
     }
 
-    private function applyEmpAccountFilter(Builder $query, ?int $empAccountId): void
+    private function applyAccountFilter(Builder $query, ?int $empAccountId, ?int $tetherInstanceId = null): void
     {
-        if (empty($empAccountId)) {
-            return;
+        if (!empty($tetherInstanceId)) {
+            $query->where('billing_attempts.tether_instance_id', $tetherInstanceId);
+        } elseif (!empty($empAccountId)) {
+            $query->where('billing_attempts.emp_account_id', $empAccountId);
         }
-        $query->where('billing_attempts.emp_account_id', $empAccountId);
     }
 
-    /**
-     * Calculate CB Rate vs Approved (EMP-aligned).
-     *
-     * Formula: chargebacks / approved * 100
-     */
     private function calculateCbRateApproved(int $chargebacks, int $approved): float
     {
         if ($approved > 0) {
@@ -62,11 +55,6 @@ class ChargebackStatsService
         return $chargebacks > 0 ? 100.00 : 0.00;
     }
 
-    /**
-     * Calculate CB Rate vs Approved Amount (EMP-aligned).
-     *
-     * Formula: chargeback_amount / approved_amount * 100
-     */
     private function calculateCbRateAmountApproved(float $chargebackAmount, float $approvedAmount): float
     {
         if ($approvedAmount > 0) {
@@ -76,16 +64,16 @@ class ChargebackStatsService
         return $chargebackAmount > 0 ? 100.00 : 0.00;
     }
 
-    public function getStats(?string $period = null, ?int $month = null, ?int $year = null, string $dateMode = self::DATE_MODE_TRANSACTION, ?string $model = null, ?int $empAccountId = null): array
+    public function getStats(?string $period = null, ?int $month = null, ?int $year = null, string $dateMode = self::DATE_MODE_TRANSACTION, ?string $model = null, ?int $empAccountId = null, ?int $tetherInstanceId = null): array
     {
         $period = $period ?? 'all';
-        $cacheKey = $this->getCacheKey('chargeback_stats', $period, $month, $year, $dateMode, $model, $empAccountId);
+        $cacheKey = $this->getCacheKey('chargeback_stats', $period, $month, $year, $dateMode, $model, $empAccountId, $tetherInstanceId);
         $ttl = config('tether.chargeback.cache_ttl', 900);
 
-        return Cache::remember($cacheKey, $ttl, fn () => $this->calculateStats($period, $month, $year, $dateMode, $model, $empAccountId));
+        return Cache::remember($cacheKey, $ttl, fn () => $this->calculateStats($period, $month, $year, $dateMode, $model, $empAccountId, $tetherInstanceId));
     }
 
-    public function calculateStats(?string $period, ?int $month = null, ?int $year = null, string $dateMode = self::DATE_MODE_TRANSACTION, ?string $model = null, ?int $empAccountId = null): array
+    public function calculateStats(?string $period, ?int $month = null, ?int $year = null, string $dateMode = self::DATE_MODE_TRANSACTION, ?string $model = null, ?int $empAccountId = null, ?int $tetherInstanceId = null): array
     {
         $dateFilter = $this->buildDateFilter($period, $month, $year, $dateMode);
         $threshold = config('tether.chargeback.alert_threshold', 25);
@@ -102,7 +90,7 @@ class ChargebackStatsService
 
         $this->applyDateFilter($query, $dateFilter);
         $this->applyModelFilter($query, $model);
-        $this->applyEmpAccountFilter($query, $empAccountId);
+        $this->applyAccountFilter($query, $empAccountId, $tetherInstanceId);
 
         $stats = $query
             ->groupBy('debtors.country')
@@ -210,6 +198,7 @@ class ChargebackStatsService
             'period' => $month && $year ? 'monthly' : $period,
             'model' => $model ?? 'all',
             'emp_account_id' => $empAccountId,
+            'tether_instance_id' => $tetherInstanceId,
             'start_date' => $dateFilter['start']?->toIso8601String(),
             'end_date' => $dateFilter['end']?->toIso8601String(),
             'month' => $month,
@@ -290,11 +279,11 @@ class ChargebackStatsService
         };
     }
 
-    private function getCacheKey(string $prefix, string $period, ?int $month, ?int $year, string $dateMode = self::DATE_MODE_TRANSACTION, ?string $model = null, ?int $empAccountId = null): string
+    private function getCacheKey(string $prefix, string $period, ?int $month, ?int $year, string $dateMode = self::DATE_MODE_TRANSACTION, ?string $model = null, ?int $empAccountId = null, ?int $tetherInstanceId = null): string
     {
         $modeSuffix = $dateMode === self::DATE_MODE_CHARGEBACK ? '_cb' : '_tx';
         $modelKey = $model ?? 'all';
-        $accountKey = $empAccountId ? "_acc{$empAccountId}" : '';
+        $accountKey = $tetherInstanceId ? "_ti{$tetherInstanceId}" : ($empAccountId ? "_acc{$empAccountId}" : '');
 
         if ($month && $year) {
             return "{$prefix}_monthly_{$year}_{$month}{$modeSuffix}_{$modelKey}{$accountKey}";
@@ -321,16 +310,16 @@ class ChargebackStatsService
         }
     }
 
-    public function getChargebackCodes(?string $period = null, ?int $month = null, ?int $year = null, string $dateMode = self::DATE_MODE_TRANSACTION, ?string $model = null, ?int $empAccountId = null): array
+    public function getChargebackCodes(?string $period = null, ?int $month = null, ?int $year = null, string $dateMode = self::DATE_MODE_TRANSACTION, ?string $model = null, ?int $empAccountId = null, ?int $tetherInstanceId = null): array
     {
         $period = $period ?? 'all';
-        $cacheKey = $this->getCacheKey('chargeback_codes', $period, $month, $year, $dateMode, $model, $empAccountId);
+        $cacheKey = $this->getCacheKey('chargeback_codes', $period, $month, $year, $dateMode, $model, $empAccountId, $tetherInstanceId);
         $ttl = config('tether.chargeback.cache_ttl', 900);
 
-        return Cache::remember($cacheKey, $ttl, fn () => $this->calculateChargebackCodes($period, $month, $year, $dateMode, $model, $empAccountId));
+        return Cache::remember($cacheKey, $ttl, fn () => $this->calculateChargebackCodes($period, $month, $year, $dateMode, $model, $empAccountId, $tetherInstanceId));
     }
 
-    public function calculateChargebackCodes(?string $period, ?int $month = null, ?int $year = null, string $dateMode = self::DATE_MODE_TRANSACTION, ?string $model = null, ?int $empAccountId = null): array
+    public function calculateChargebackCodes(?string $period, ?int $month = null, ?int $year = null, string $dateMode = self::DATE_MODE_TRANSACTION, ?string $model = null, ?int $empAccountId = null, ?int $tetherInstanceId = null): array
     {
         $dateFilter = $this->buildDateFilter($period, $month, $year, $dateMode);
 
@@ -347,13 +336,13 @@ class ChargebackStatsService
 
         $this->applyDateFilter($query, $dateFilter);
         $this->applyModelFilter($query, $model);
-        $this->applyEmpAccountFilter($query, $empAccountId);
+        $this->applyAccountFilter($query, $empAccountId, $tetherInstanceId);
 
         $codes = $query
             ->select([
                 'chargeback_reason_code as chargeback_code',
                 DB::raw('SUM(amount) as total_amount'),
-                DB::raw('COUNT(*) as occurrences')
+                DB::raw('COUNT(*) as occurrences'),
             ])
             ->groupBy('chargeback_reason_code')
             ->orderBy('total_amount', 'desc')
@@ -363,6 +352,7 @@ class ChargebackStatsService
             'period' => $month && $year ? 'monthly' : $period,
             'model' => $model ?? 'all',
             'emp_account_id' => $empAccountId,
+            'tether_instance_id' => $tetherInstanceId,
             'start_date' => $dateFilter['start']?->toIso8601String(),
             'end_date' => $dateFilter['end']?->toIso8601String(),
             'month' => $month,
@@ -385,16 +375,16 @@ class ChargebackStatsService
         return $result;
     }
 
-    public function getChargebackBanks(?string $period = null, ?int $month = null, ?int $year = null, string $dateMode = self::DATE_MODE_TRANSACTION, ?string $model = null, ?int $empAccountId = null): array
+    public function getChargebackBanks(?string $period = null, ?int $month = null, ?int $year = null, string $dateMode = self::DATE_MODE_TRANSACTION, ?string $model = null, ?int $empAccountId = null, ?int $tetherInstanceId = null): array
     {
         $period = $period ?? 'all';
-        $cacheKey = $this->getCacheKey('chargeback_banks', $period, $month, $year, $dateMode, $model, $empAccountId);
+        $cacheKey = $this->getCacheKey('chargeback_banks', $period, $month, $year, $dateMode, $model, $empAccountId, $tetherInstanceId);
         $ttl = config('tether.chargeback.cache_ttl', 900);
 
-        return Cache::remember($cacheKey, $ttl, fn () => $this->calculateChargebackBanks($period, $month, $year, $dateMode, $model, $empAccountId));
+        return Cache::remember($cacheKey, $ttl, fn () => $this->calculateChargebackBanks($period, $month, $year, $dateMode, $model, $empAccountId, $tetherInstanceId));
     }
 
-    public function calculateChargebackBanks(?string $period, ?int $month = null, ?int $year = null, string $dateMode = self::DATE_MODE_TRANSACTION, ?string $model = null, ?int $empAccountId = null): array
+    public function calculateChargebackBanks(?string $period, ?int $month = null, ?int $year = null, string $dateMode = self::DATE_MODE_TRANSACTION, ?string $model = null, ?int $empAccountId = null, ?int $tetherInstanceId = null): array
     {
         $dateFilter = $this->buildDateFilter($period, $month, $year, $dateMode);
         $threshold = config('tether.chargeback.alert_threshold', 25);
@@ -419,7 +409,7 @@ class ChargebackStatsService
 
         $this->applyDateFilter($query, $dateFilter);
         $this->applyModelFilter($query, $model);
-        $this->applyEmpAccountFilter($query, $empAccountId);
+        $this->applyAccountFilter($query, $empAccountId, $tetherInstanceId);
 
         $banks = $query
             ->select([
@@ -437,6 +427,7 @@ class ChargebackStatsService
             'period' => $month && $year ? 'monthly' : $period,
             'model' => $model ?? 'all',
             'emp_account_id' => $empAccountId,
+            'tether_instance_id' => $tetherInstanceId,
             'start_date' => $dateFilter['start']?->toIso8601String(),
             'end_date' => $dateFilter['end']?->toIso8601String(),
             'month' => $month,
@@ -510,19 +501,16 @@ class ChargebackStatsService
         return $result;
     }
 
-    /**
-     * Get price point statistics with CB rates per amount.
-     */
-    public function getPricePointStats(?string $period = null, ?int $month = null, ?int $year = null, string $dateMode = self::DATE_MODE_TRANSACTION, ?string $model = null, ?int $empAccountId = null): array
+    public function getPricePointStats(?string $period = null, ?int $month = null, ?int $year = null, string $dateMode = self::DATE_MODE_TRANSACTION, ?string $model = null, ?int $empAccountId = null, ?int $tetherInstanceId = null): array
     {
         $period = $period ?? '30d';
-        $cacheKey = $this->getCacheKey('price_points', $period, $month, $year, $dateMode, $model, $empAccountId);
+        $cacheKey = $this->getCacheKey('price_points', $period, $month, $year, $dateMode, $model, $empAccountId, $tetherInstanceId);
         $ttl = config('tether.chargeback.cache_ttl', 900);
 
-        return Cache::remember($cacheKey, $ttl, fn () => $this->calculatePricePointStats($period, $month, $year, $dateMode, $model, $empAccountId));
+        return Cache::remember($cacheKey, $ttl, fn () => $this->calculatePricePointStats($period, $month, $year, $dateMode, $model, $empAccountId, $tetherInstanceId));
     }
 
-    private function calculatePricePointStats(?string $period, ?int $month = null, ?int $year = null, string $dateMode = self::DATE_MODE_TRANSACTION, ?string $model = null, ?int $empAccountId = null): array
+    private function calculatePricePointStats(?string $period, ?int $month = null, ?int $year = null, string $dateMode = self::DATE_MODE_TRANSACTION, ?string $model = null, ?int $empAccountId = null, ?int $tetherInstanceId = null): array
     {
         $dateFilter = $this->buildDateFilter($period, $month, $year, $dateMode);
         $threshold = config('tether.chargeback.alert_threshold', 25);
@@ -538,7 +526,7 @@ class ChargebackStatsService
 
         $this->applyDateFilter($query, $dateFilter);
         $this->applyModelFilter($query, $model);
-        $this->applyEmpAccountFilter($query, $empAccountId);
+        $this->applyAccountFilter($query, $empAccountId, $tetherInstanceId);
 
         $rows = $query
             ->groupBy('billing_attempts.amount')
@@ -620,6 +608,7 @@ class ChargebackStatsService
             'period' => $month && $year ? 'monthly' : $period,
             'model' => $model ?? 'all',
             'emp_account_id' => $empAccountId,
+            'tether_instance_id' => $tetherInstanceId,
             'start_date' => $dateFilter['start']?->toIso8601String(),
             'end_date' => $dateFilter['end']?->toIso8601String(),
             'month' => $month,
@@ -632,24 +621,26 @@ class ChargebackStatsService
     }
 
     /**
-     * Get All Time Chargeback Code Stats
+     * Get All Time Chargeback Code Stats.
+     * Supports filtering by tether_instance_id or emp_account_id.
      */
-    public function clearCacheChargebackAllTimeStats($model, $empAccountId): void
+    public function clearCacheChargebackAllTimeStats(?string $model = null, ?int $empAccountId = null, ?int $tetherInstanceId = null): void
     {
-        $cacheKey = 'chargeback_all_time_' . $model . '_' . $empAccountId;
+        $accountKey = $tetherInstanceId ? "_ti{$tetherInstanceId}" : ($empAccountId ? "_acc{$empAccountId}" : '');
+        $cacheKey = 'chargeback_all_time_' . ($model ?? 'all') . $accountKey;
         Cache::forget($cacheKey);
-
     }
 
-    public function getChargebackAllTimeStats(?string $model = null, ?int $empAccountId = null): array
-    {   
-        $cacheKey = 'chargeback_all_time_' . $model . '_' . $empAccountId;
+    public function getChargebackAllTimeStats(?string $model = null, ?int $empAccountId = null, ?int $tetherInstanceId = null): array
+    {
+        $accountKey = $tetherInstanceId ? "_ti{$tetherInstanceId}" : ($empAccountId ? "_acc{$empAccountId}" : '');
+        $cacheKey = 'chargeback_all_time_' . ($model ?? 'all') . $accountKey;
         $ttl = config('tether.chargeback.cache_ttl', 900);
 
-        return Cache::remember($cacheKey, $ttl, fn () => $this->calculateChargebackAllTimeStats($model, $empAccountId));
+        return Cache::remember($cacheKey, $ttl, fn () => $this->calculateChargebackAllTimeStats($model, $empAccountId, $tetherInstanceId));
     }
-    
-    private function calculateChargebackAllTimeStats(?string $model = null, ?int $empAccountId = null): array
+
+    private function calculateChargebackAllTimeStats(?string $model = null, ?int $empAccountId = null, ?int $tetherInstanceId = null): array
     {
         $totalsQuery = DB::table('billing_attempts')
             ->whereIn('status', [
@@ -658,7 +649,7 @@ class ChargebackStatsService
             ]);
 
         $this->applyModelFilter($totalsQuery, $model);
-        $this->applyEmpAccountFilter($totalsQuery, $empAccountId);
+        $this->applyAccountFilter($totalsQuery, $empAccountId, $tetherInstanceId);
 
         $totalsRow = $totalsQuery
             ->selectRaw('COUNT(*) as total_records, SUM(amount) as total_records_amount')
@@ -679,7 +670,7 @@ class ChargebackStatsService
         }
 
         $this->applyModelFilter($query, $model);
-        $this->applyEmpAccountFilter($query, $empAccountId);
+        $this->applyAccountFilter($query, $empAccountId, $tetherInstanceId);
 
         $stats = $query
             ->select([

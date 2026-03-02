@@ -6,8 +6,10 @@
 
 namespace Tests\Feature\Admin;
 
+use App\Models\BillingAttempt;
 use App\Models\Debtor;
 use App\Models\DebtorProfile;
+use App\Models\EmpAccount;
 use App\Models\Upload;
 use App\Models\User;
 use App\Models\Blacklist;
@@ -717,5 +719,155 @@ class DebtorControllerTest extends TestCase
 
         $response->assertStatus(200)
             ->assertJsonPath('data.risk_class', 'high');
+    }
+
+    // ==================== bulkReassign TESTS ====================
+
+    public function test_bulk_reassign_happy_path(): void
+    {
+        $account = EmpAccount::factory()->create(['is_active' => true]);
+        $upload  = Upload::factory()->create();
+        $debtor1 = Debtor::factory()->create(['upload_id' => $upload->id, 'emp_account_id' => null]);
+        $debtor2 = Debtor::factory()->create(['upload_id' => $upload->id, 'emp_account_id' => null]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->postJson('/api/admin/debtors/bulk-reassign', [
+                'debtor_ids'    => [$debtor1->id, $debtor2->id],
+                'emp_account_id' => $account->id,
+            ]);
+
+        $response->assertStatus(200);
+        $this->assertEquals(2, $response->json('data.debtors_updated'));
+        $this->assertEquals($account->id, $debtor1->fresh()->emp_account_id);
+        $this->assertEquals($account->id, $debtor2->fresh()->emp_account_id);
+    }
+
+    public function test_bulk_reassign_updates_unsubmitted_pending_billing_attempts(): void
+    {
+        $fromAccount = EmpAccount::factory()->create(['is_active' => true]);
+        $toAccount   = EmpAccount::factory()->create(['is_active' => true]);
+        $upload      = Upload::factory()->create();
+        $debtor      = Debtor::factory()->create(['upload_id' => $upload->id, 'emp_account_id' => $fromAccount->id]);
+
+        // Unsubmitted pending attempt (no unique_id) — should be reassigned
+        $unsubmitted = BillingAttempt::factory()->create([
+            'debtor_id'      => $debtor->id,
+            'upload_id'      => $upload->id,
+            'status'         => BillingAttempt::STATUS_PENDING,
+            'unique_id'      => null,
+            'emp_account_id' => $fromAccount->id,
+        ]);
+
+        $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->postJson('/api/admin/debtors/bulk-reassign', [
+                'debtor_ids'    => [$debtor->id],
+                'emp_account_id' => $toAccount->id,
+            ])->assertStatus(200);
+
+        $this->assertEquals($toAccount->id, $unsubmitted->fresh()->emp_account_id);
+    }
+
+    public function test_bulk_reassign_skips_submitted_pending_billing_attempts(): void
+    {
+        $fromAccount = EmpAccount::factory()->create(['is_active' => true]);
+        $toAccount   = EmpAccount::factory()->create(['is_active' => true]);
+        $upload      = Upload::factory()->create();
+        $debtor      = Debtor::factory()->create(['upload_id' => $upload->id, 'emp_account_id' => $fromAccount->id]);
+
+        // Submitted pending attempt (has unique_id) — must NOT be reassigned
+        $submitted = BillingAttempt::factory()->create([
+            'debtor_id'      => $debtor->id,
+            'upload_id'      => $upload->id,
+            'status'         => BillingAttempt::STATUS_PENDING,
+            'unique_id'      => 'EMP-ALREADY-SENT',
+            'emp_account_id' => $fromAccount->id,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->postJson('/api/admin/debtors/bulk-reassign', [
+                'debtor_ids'    => [$debtor->id],
+                'emp_account_id' => $toAccount->id,
+            ])->assertStatus(200);
+
+        $this->assertGreaterThan(0, $response->json('data.skipped_submitted'));
+        $this->assertEquals($fromAccount->id, $submitted->fresh()->emp_account_id);
+    }
+
+    public function test_bulk_reassign_returns_422_for_inactive_target_account(): void
+    {
+        $inactiveAccount = EmpAccount::factory()->create(['is_active' => false]);
+        $debtor          = Debtor::factory()->create();
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->postJson('/api/admin/debtors/bulk-reassign', [
+                'debtor_ids'    => [$debtor->id],
+                'emp_account_id' => $inactiveAccount->id,
+            ]);
+
+        $response->assertStatus(422);
+    }
+
+    public function test_bulk_reassign_returns_422_for_empty_debtor_ids(): void
+    {
+        $account = EmpAccount::factory()->create(['is_active' => true]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->postJson('/api/admin/debtors/bulk-reassign', [
+                'debtor_ids'    => [],
+                'emp_account_id' => $account->id,
+            ]);
+
+        $response->assertStatus(422);
+    }
+
+    public function test_bulk_reassign_returns_422_for_more_than_1000_debtor_ids(): void
+    {
+        $account = EmpAccount::factory()->create(['is_active' => true]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->postJson('/api/admin/debtors/bulk-reassign', [
+                'debtor_ids'    => range(1, 1001),
+                'emp_account_id' => $account->id,
+            ]);
+
+        $response->assertStatus(422);
+    }
+
+    public function test_bulk_reassign_returns_422_for_nonexistent_emp_account(): void
+    {
+        $debtor = Debtor::factory()->create();
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->postJson('/api/admin/debtors/bulk-reassign', [
+                'debtor_ids'    => [$debtor->id],
+                'emp_account_id' => 999999,
+            ]);
+
+        $response->assertStatus(422);
+    }
+
+    public function test_bulk_reassign_returns_200_when_debtors_already_on_target_account(): void
+    {
+        $account = EmpAccount::factory()->create(['is_active' => true]);
+        $debtor  = Debtor::factory()->create(['emp_account_id' => $account->id]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->postJson('/api/admin/debtors/bulk-reassign', [
+                'debtor_ids'    => [$debtor->id],
+                'emp_account_id' => $account->id,
+            ]);
+
+        $response->assertStatus(200);
+        $this->assertEquals(0, $response->json('data.debtors_updated'));
+    }
+
+    public function test_bulk_reassign_requires_authentication(): void
+    {
+        $response = $this->postJson('/api/admin/debtors/bulk-reassign', [
+            'debtor_ids'    => [1],
+            'emp_account_id' => 1,
+        ]);
+
+        $response->assertStatus(401);
     }
 }
