@@ -122,12 +122,14 @@ class StatsController extends Controller
         $request->validate([
             'model' => 'nullable|string',
             'emp_account_id' => 'nullable|integer|exists:emp_accounts,id',
+            'tether_instance_id' => 'nullable|integer|exists:tether_instances,id',
         ]);
 
-        $model = $request->input('model');
-        $empAccountId = $request->input('emp_account_id');
-
-        $stats = $this->chargebackStatsService->getChargebackAllTimeStats($model, $empAccountId);
+        $stats = $this->chargebackStatsService->getChargebackAllTimeStats(
+            $request->input('model'),
+            $request->input('emp_account_id'),
+            $request->input('tether_instance_id')
+        );
 
         return response()->json(['data' => $stats]);
     }

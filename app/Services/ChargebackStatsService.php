@@ -621,24 +621,26 @@ class ChargebackStatsService
     }
 
     /**
-     * Get All Time Chargeback Code Stats
+     * Get All Time Chargeback Code Stats.
+     * Supports filtering by tether_instance_id or emp_account_id.
      */
-    public function clearCacheChargebackAllTimeStats($model, $empAccountId): void
+    public function clearCacheChargebackAllTimeStats(?string $model = null, ?int $empAccountId = null, ?int $tetherInstanceId = null): void
     {
-        $cacheKey = 'chargeback_all_time_' . $model . '_' . $empAccountId;
+        $accountKey = $tetherInstanceId ? "_ti{$tetherInstanceId}" : ($empAccountId ? "_acc{$empAccountId}" : '');
+        $cacheKey = 'chargeback_all_time_' . ($model ?? 'all') . $accountKey;
         Cache::forget($cacheKey);
-
     }
 
-    public function getChargebackAllTimeStats(?string $model = null, ?int $empAccountId = null): array
-    {   
-        $cacheKey = 'chargeback_all_time_' . $model . '_' . $empAccountId;
+    public function getChargebackAllTimeStats(?string $model = null, ?int $empAccountId = null, ?int $tetherInstanceId = null): array
+    {
+        $accountKey = $tetherInstanceId ? "_ti{$tetherInstanceId}" : ($empAccountId ? "_acc{$empAccountId}" : '');
+        $cacheKey = 'chargeback_all_time_' . ($model ?? 'all') . $accountKey;
         $ttl = config('tether.chargeback.cache_ttl', 900);
 
-        return Cache::remember($cacheKey, $ttl, fn () => $this->calculateChargebackAllTimeStats($model, $empAccountId));
+        return Cache::remember($cacheKey, $ttl, fn () => $this->calculateChargebackAllTimeStats($model, $empAccountId, $tetherInstanceId));
     }
-    
-    private function calculateChargebackAllTimeStats(?string $model = null, ?int $empAccountId = null): array
+
+    private function calculateChargebackAllTimeStats(?string $model = null, ?int $empAccountId = null, ?int $tetherInstanceId = null): array
     {
         $totalsQuery = DB::table('billing_attempts')
             ->whereIn('status', [
@@ -647,7 +649,7 @@ class ChargebackStatsService
             ]);
 
         $this->applyModelFilter($totalsQuery, $model);
-        $this->applyEmpAccountFilter($totalsQuery, $empAccountId);
+        $this->applyAccountFilter($totalsQuery, $empAccountId, $tetherInstanceId);
 
         $totalsRow = $totalsQuery
             ->selectRaw('COUNT(*) as total_records, SUM(amount) as total_records_amount')
@@ -668,7 +670,7 @@ class ChargebackStatsService
         }
 
         $this->applyModelFilter($query, $model);
-        $this->applyEmpAccountFilter($query, $empAccountId);
+        $this->applyAccountFilter($query, $empAccountId, $tetherInstanceId);
 
         $stats = $query
             ->select([
