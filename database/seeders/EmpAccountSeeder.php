@@ -1,15 +1,11 @@
 <?php
-
 /**
  * Seeder for EMP merchant accounts.
- * Populates all 6 production terminals.
+ * Populates all 7 production terminals.
  */
-
 namespace Database\Seeders;
-
 use App\Models\EmpAccount;
 use Illuminate\Database\Seeder;
-
 class EmpAccountSeeder extends Seeder
 {
     public function run(): void
@@ -24,6 +20,7 @@ class EmpAccountSeeder extends Seeder
                 'terminal_token' => '5f882a6148de0f4115e1d51d8e9b0d956d23e7b7',
                 'is_active' => false,
                 'sort_order' => 1,
+                'monthly_cap' => 450000,
             ],
             [
                 'name' => 'Optivest',
@@ -34,6 +31,7 @@ class EmpAccountSeeder extends Seeder
                 'terminal_token' => 'dc037916d0078da32f7d3d509b262b7cd412a7ce',
                 'is_active' => false,
                 'sort_order' => 2,
+                'monthly_cap' => 400000,
             ],
             [
                 'name' => 'Lunaro',
@@ -44,6 +42,7 @@ class EmpAccountSeeder extends Seeder
                 'terminal_token' => '72a28b55154f93f57bb1d037f565391245a5e3cf',
                 'is_active' => true,
                 'sort_order' => 3,
+                'monthly_cap' => 300000,
             ],
             [
                 'name' => 'Corellia Ads',
@@ -54,6 +53,7 @@ class EmpAccountSeeder extends Seeder
                 'terminal_token' => 'f03f41cb47ee21463b2481c8d5f6f272e8599318',
                 'is_active' => false,
                 'sort_order' => 4,
+                'monthly_cap' => 300000,
             ],
             [
                 'name' => 'SmartThings Ventures',
@@ -64,6 +64,7 @@ class EmpAccountSeeder extends Seeder
                 'terminal_token' => 'f06b187300bcef6a58fd600c09739906f74c5cd7',
                 'is_active' => false,
                 'sort_order' => 5,
+                'monthly_cap' => 300000,
             ],
             [
                 'name' => 'Danieli Soft',
@@ -74,9 +75,20 @@ class EmpAccountSeeder extends Seeder
                 'terminal_token' => '34a89a6a837412347281eae8806942ba1148bf4a',
                 'is_active' => false,
                 'sort_order' => 6,
+                'monthly_cap' => 300000,
+            ],
+            [
+                'name' => 'Vinci Payments FR',
+                'slug' => 'vinci-payments-fr',
+                'endpoint' => 'gate.emerchantpay.net',
+                'username' => 'deff5617dfa912f114bd5419902319dedff737e9',
+                'password' => '7fa3a339b14c29450682415704b84bb1cec4f7c4',
+                'terminal_token' => '496251c0424ec2c4094d183362f876d2e4c127a9',
+                'is_active' => false,
+                'sort_order' => 7,
+                'monthly_cap' => 300000,
             ],
         ];
-
         foreach ($accounts as $account) {
             EmpAccount::updateOrCreate(
                 ['slug' => $account['slug']],
