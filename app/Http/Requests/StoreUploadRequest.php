@@ -66,7 +66,10 @@ class StoreUploadRequest extends FormRequest
                 return;
             }
 
-            $is30dCool = filter_var($this->input('is_30d_cool'), FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+            $raw = $this->input('is_30d_cool');
+            $is30dCool = ($raw !== null)
+                ? filter_var($raw, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE)
+                : null;
 
             if ($is30dCool !== null) {
                 $v->errors()->add(
