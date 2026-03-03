@@ -3,7 +3,7 @@
 /**
  * Service for syncing SDD chargebacks from EMP via /chargebacks/by_date API.
  * Backup mechanism for missed webhooks - runs daily to catch any missed chargeback events.
- * 
+ *
  * Note: For SDD, the API does NOT return post_date (bank registration date).
  * We use import_date as the chargeback discovery date instead.
  */
@@ -52,6 +52,7 @@ class EmpChargebackSyncService
             'blacklisted' => 0,
             'pages_processed' => 0,
             'chargebacks_created' => 0,
+            'reason_backfilled' => 0,
         ];
 
         Log::info('EMP Chargeback Sync: Starting', ['date' => $date, 'dry_run' => $dryRun]);
@@ -175,8 +176,32 @@ class EmpChargebackSyncService
         return $this->applyChargeback($billingAttempt, $chargeback, $stats, $importDate);
     }
 
+    /**
+     * Ensure chargeback record exists for already-chargebacked billing attempts.
+     * Also backfill reason_code on billing_attempt if missing (reconciliation sets
+     * status to chargebacked without reason; Chargeback API provides the reason).
+     */
     private function ensureChargebackRecord(BillingAttempt $billingAttempt, array $chargeback, array &$stats, string $importDate): void
     {
+        $reasonCode = $chargeback['reason_code'] ?? null;
+        $reasonDescription = $chargeback['reason_description'] ?? null;
+
+        // Backfill reason_code on billing_attempt if missing
+        if ($reasonCode && !$billingAttempt->chargeback_reason_code) {
+            $billingAttempt->update([
+                'chargeback_reason_code' => $reasonCode,
+                'chargeback_reason_description' => $reasonDescription,
+            ]);
+
+            $stats['reason_backfilled'] = ($stats['reason_backfilled'] ?? 0) + 1;
+
+            Log::info('EMP Chargeback Sync: Backfilled reason code', [
+                'billing_attempt_id' => $billingAttempt->id,
+                'reason_code' => $reasonCode,
+            ]);
+        }
+
+        // Ensure chargeback record in chargebacks table
         $existing = $billingAttempt->chargeback;
 
         if (!$existing) {
