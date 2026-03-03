@@ -16,8 +16,8 @@
  *  - Recovery is designed to retry failed payments — the 30-day cooldown directly
  *    contradicts its purpose by freezing declined/errored debtors for 30 days.
  *
- * Passing is_30d_cool = true with billing_model = flywheel or recovery is rejected
- * at the API level.
+ * Passing is_30d_cool with any value (true or false) for billing_model = flywheel
+ * or recovery is rejected at the API level. Legacy accepts both true and false.
  */
 
 namespace App\Http\Requests;
@@ -51,19 +51,29 @@ class StoreUploadRequest extends FormRequest
     }
 
     /**
-     * Reject is_30d_cool = true for non-legacy billing models.
+     * Reject is_30d_cool when set to any value (true or false) for non-legacy billing models.
+     *
+     * is_30d_cool is only meaningful for Legacy uploads. Flywheel uses DebtorProfile->due()
+     * to manage billing cycles, and Recovery is designed to retry failed payments — applying
+     * a 30-day cooldown to either model is incorrect and must be blocked at the API level.
      */
     public function withValidator(Validator $validator): void
     {
         $validator->after(function (Validator $v) {
-            $is30dCool = filter_var($this->input('is_30d_cool'), FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
             $billingModel = $this->input('billing_model', BillingModel::Legacy->value);
 
-            if ($is30dCool === true && $billingModel !== BillingModel::Legacy->value) {
+            if ($billingModel === BillingModel::Legacy->value) {
+                return;
+            }
+
+            $is30dCool = filter_var($this->input('is_30d_cool'), FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+
+            if ($is30dCool !== null) {
                 $v->errors()->add(
                     'is_30d_cool',
                     'The 30-day cooling period is only applicable to the Legacy billing model. ' .
-                    'Flywheel and Recovery models manage their own billing cycles independently.'
+                    'Flywheel and Recovery models manage their own billing cycles independently. ' .
+                    'Do not select 30 days cool for non-legacy uploads.'
                 );
             }
         });
