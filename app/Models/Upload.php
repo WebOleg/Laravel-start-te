@@ -27,7 +27,7 @@ class Upload extends Model
     public const JOB_COMPLETED = 'completed';
     public const JOB_FAILED = 'failed';
 
-    public const MAX_RESYNC_ATTEMPTS = 5;
+    public const MAX_RESYNC_ATTEMPTS = 3;
 
     protected $fillable = [
         'filename',

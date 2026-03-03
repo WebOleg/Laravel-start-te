@@ -184,7 +184,7 @@ class BillingController extends Controller
                             'completed_at' => $upload->billing_completed_at?->toISOString(),
                         ];
                         $upload->billing_runs         = $existingRuns;
-                        $upload->billing_status       = null;
+                        $upload->billing_status       = Upload::JOB_IDLE;
                         $upload->billing_batch_id     = null;
                         $upload->billing_started_at   = null;
                         $upload->billing_completed_at = null;
