@@ -8,6 +8,7 @@ use App\Models\EmpAccount;
 use App\Models\TetherInstance;
 use App\Models\TransactionDescriptor;
 use App\Models\Upload;
+use App\Services\DeduplicationService;
 use App\Services\DescriptorService;
 use App\Services\Emp\EmpBillingService;
 use App\Services\Emp\EmpClient;
@@ -22,6 +23,7 @@ class EmpBillingServiceTest extends TestCase
     private EmpBillingService $service;
     private mixed $mockClient;
     private mixed $mockDescriptorService;
+    private mixed $mockDeduplicationService;
 
     protected function setUp(): void
     {
@@ -42,8 +44,14 @@ class EmpBillingServiceTest extends TestCase
             ->byDefault()
             ->andReturn(null);
 
-        // 3. Instantiate Service with both dependencies
-        $this->service = new EmpBillingService($this->mockClient, $this->mockDescriptorService);
+        // 3. Mock Deduplication Service
+        $this->mockDeduplicationService = Mockery::mock(DeduplicationService::class);
+        $this->mockDeduplicationService->shouldReceive('getRecentAttempt')
+            ->byDefault()
+            ->andReturn(null);
+
+        // 4. Instantiate Service with all dependencies
+        $this->service = new EmpBillingService($this->mockClient, $this->mockDescriptorService, $this->mockDeduplicationService);
     }
 
     public function test_bill_debtor_creates_billing_attempt(): void
@@ -485,7 +493,8 @@ class EmpBillingServiceTest extends TestCase
 
         $partialService = Mockery::mock(EmpBillingService::class . '[getClientForDebtor]', [
             $this->mockClient,
-            $this->mockDescriptorService
+            $this->mockDescriptorService,
+            $this->mockDeduplicationService,
         ]);
 
         // Add this line to allow mocking the protected method
@@ -521,7 +530,7 @@ class EmpBillingServiceTest extends TestCase
             'emp_account_id' => $account->id,
         ]);
 
-        $testableService = new class($this->mockClient, $this->mockDescriptorService) extends EmpBillingService {
+        $testableService = new class($this->mockClient, $this->mockDescriptorService, $this->mockDeduplicationService) extends EmpBillingService {
             public function testGetClientForDebtor(Debtor $debtor): EmpClient
             {
                 return $this->getClientForDebtor($debtor);
@@ -543,7 +552,7 @@ class EmpBillingServiceTest extends TestCase
             'emp_account_id' => null,
         ]);
 
-        $testableService = new class($this->mockClient, $this->mockDescriptorService) extends EmpBillingService {
+        $testableService = new class($this->mockClient, $this->mockDescriptorService, $this->mockDeduplicationService) extends EmpBillingService {
             public function testGetClientForDebtor(Debtor $debtor): EmpClient
             {
                 return $this->getClientForDebtor($debtor);
@@ -563,7 +572,7 @@ class EmpBillingServiceTest extends TestCase
             'emp_account_id' => null,
         ]);
 
-        $testableService = new class($this->mockClient, $this->mockDescriptorService) extends EmpBillingService {
+        $testableService = new class($this->mockClient, $this->mockDescriptorService, $this->mockDeduplicationService) extends EmpBillingService {
             public function testGetClientForDebtor(Debtor $debtor): EmpClient
             {
                 return $this->getClientForDebtor($debtor);
