@@ -152,7 +152,7 @@ class UploadController extends Controller
             $empAccountId = $request->input('emp_account_id');
             $tetherInstanceId = $request->input('tether_instance_id');
             $applyGlobalLock = $request->boolean('apply_global_lock');
-            $is30dCool = $request->boolean('is_30d_cool');
+            $is30dCool = $request->has('is_30d_cool') ? $request->boolean('is_30d_cool') : null;
 
             $preValidation = $this->preValidationService->validate($file);
             if (!$preValidation['valid']) {

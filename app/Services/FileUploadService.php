@@ -113,7 +113,7 @@ class FileUploadService
         ?int $empAccountId = null,
         bool $applyGlobalLock = false,
         ?int $tetherInstanceId = null,
-        bool $is30dCool = false
+        ?bool $is30dCool = null
     ): array {
         $parsed = $this->parser->parse($file);
         $storedPath = $this->storeFile($file);
@@ -155,7 +155,7 @@ class FileUploadService
         ?int $empAccountId = null,
         bool $applyGlobalLock = false,
         ?int $tetherInstanceId = null,
-        bool $is30dCool = false
+        ?bool $is30dCool = null
     ): array {
         $parsed = $this->parser->parse($file);
         $storedPath = $this->storeFile($file);
@@ -348,7 +348,7 @@ class FileUploadService
         ?int $empAccountId = null,
         bool $applyGlobalLock = false,
         ?int $tetherInstanceId = null,
-        bool $is30dCool = false
+        ?bool $is30dCool = null
     ): Upload {
         if ($empAccountId === null) {
             $activeAccount = EmpAccount::getActive();
