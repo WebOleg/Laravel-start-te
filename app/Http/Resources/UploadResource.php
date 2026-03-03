@@ -6,6 +6,7 @@
 
 namespace App\Http\Resources;
 
+use App\Models\Upload;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -94,6 +95,19 @@ class UploadResource extends JsonResource
             'uploader' => new UserResource($this->whenLoaded('uploader')),
             'is_deletable' => $this->isDeletable(),
             'is_30d_cool' => $this->is_30d_cool === null ? null : (bool) $this->is_30d_cool,
+
+            // Billing run history (archived snapshots of previous syncs)
+            'billing_runs' => $this->billing_runs ?? [],
+
+            // True when cooldown is explicitly OFF, billing is not currently running,
+            // and the per-upload resync cap has not yet been reached.
+            'can_resync' => $this->is_30d_cool === false
+                && $this->billing_status !== Upload::JOB_PROCESSING
+                && count($this->billing_runs ?? []) < Upload::MAX_RESYNC_ATTEMPTS,
+
+            // Expose the cap and current usage so the frontend can render progress (e.g. "2 / 5 resyncs used").
+            'resync_count' => count($this->billing_runs ?? []),
+            'max_resync'   => Upload::MAX_RESYNC_ATTEMPTS,
         ];
     }
 }

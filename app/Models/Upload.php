@@ -27,6 +27,8 @@ class Upload extends Model
     public const JOB_COMPLETED = 'completed';
     public const JOB_FAILED = 'failed';
 
+    public const MAX_RESYNC_ATTEMPTS = 5;
+
     protected $fillable = [
         'filename',
         'original_filename',
@@ -70,6 +72,7 @@ class Upload extends Model
         'reconciliation_completed_at',
         'skip_bic_blacklist',
         'is_30d_cool',
+        'billing_runs',
     ];
 
     protected $casts = [
@@ -96,6 +99,7 @@ class Upload extends Model
         'reconciliation_completed_at' => 'datetime',
         'skip_bic_blacklist' => 'boolean',
         'is_30d_cool' => 'boolean',
+        'billing_runs' => 'array',
     ];
 
     public function uploader(): BelongsTo

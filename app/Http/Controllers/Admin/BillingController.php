@@ -12,8 +12,8 @@ use App\Models\Upload;
 use App\Models\VopLog;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Http\Request;
-use Illuminate\Database\Query\Builder;
 
 class BillingController extends Controller
 {
@@ -132,6 +132,74 @@ class BillingController extends Controller
                     'vop_pending' => $vopCheck['pending'],
                 ],
             ], 422);
+        }
+
+        // Resync mode: cooldown is explicitly OFF for this upload.
+        // Reset now — at the moment the user deliberately presses "Sync to Gateway".
+        // This archives the previous billing run, clears the live lifecycle fields, and
+        // moves all valid (non-chargebacked) debtors back to 'uploaded' so they are eligible again.
+        // Invalid and BIC-blacklisted debtors (validation_status != valid) are untouched.
+        // Chargebacked debtors are excluded and never re-billed.
+        if ($upload->is_30d_cool === false) {
+            // Use a per-upload (not per-debtor-type) lock so that concurrent sync requests
+            // with different debtor_type values cannot both enter this section simultaneously
+            // and produce a double-archive or a partial debtor reset.
+            $resyncLockKey = "billing_resync_{$upload->id}";
+            if (Cache::has($resyncLockKey)) {
+                return response()->json([
+                    'message' => 'A resync is already in progress for this upload.',
+                    'data'    => ['upload_id' => $upload->id, 'queued' => false],
+                ], 409);
+            }
+            Cache::put($resyncLockKey, true, 300);
+
+            // Guard: enforce the per-upload resync cap defined on the model.
+            $resyncCount = count($upload->billing_runs ?? []);
+            if ($resyncCount >= Upload::MAX_RESYNC_ATTEMPTS) {
+                Cache::forget($resyncLockKey);
+                return response()->json([
+                    'message' => 'Resync limit reached. This upload has already been resynced ' .
+                                 Upload::MAX_RESYNC_ATTEMPTS . ' time(s), which is the maximum allowed.',
+                    'data' => [
+                        'upload_id'    => $upload->id,
+                        'resync_count' => $resyncCount,
+                        'max_resync'   => Upload::MAX_RESYNC_ATTEMPTS,
+                        'queued'       => false,
+                    ],
+                ], 422);
+            }
+
+            // Wrap archive + debtor reset in a transaction so both succeed or both
+            // roll back — prevents partial state where billing_runs is updated but
+            // debtors are not reset (or vice versa) due to a DB error mid-way.
+            try {
+                DB::transaction(function () use ($upload) {
+                    if ($upload->billing_started_at !== null) {
+                        $existingRuns = $upload->billing_runs ?? [];
+                        $existingRuns[] = [
+                            'run'          => count($existingRuns) + 1,
+                            'status'       => $upload->billing_status,
+                            'batch_id'     => $upload->billing_batch_id,
+                            'started_at'   => $upload->billing_started_at?->toISOString(),
+                            'completed_at' => $upload->billing_completed_at?->toISOString(),
+                        ];
+                        $upload->billing_runs         = $existingRuns;
+                        $upload->billing_status       = null;
+                        $upload->billing_batch_id     = null;
+                        $upload->billing_started_at   = null;
+                        $upload->billing_completed_at = null;
+                        $upload->save();
+                    }
+
+                    Debtor::where('upload_id', $upload->id)
+                        ->where('validation_status', Debtor::VALIDATION_VALID)
+                        ->where('status', '!=', Debtor::STATUS_CHARGEBACKED)
+                        ->update(['status' => Debtor::STATUS_UPLOADED]);
+                });
+            } catch (\Throwable $e) {
+                Cache::forget($resyncLockKey);
+                throw $e;
+            }
         }
 
         // If we are syncing 'flywheel', we MUST NOT process IBANs that are already 'recovery', and vice versa.
