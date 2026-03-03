@@ -12,6 +12,7 @@ use App\Http\Requests\StoreUploadRequest;
 use App\Http\Resources\UploadResource;
 use App\Http\Resources\DebtorResource;
 use App\Models\DebtorProfile;
+use App\Models\EmpAccount;
 use App\Models\Upload;
 use App\Models\Debtor;
 use App\Models\BillingAttempt;
@@ -439,6 +440,126 @@ class UploadController extends Controller
                 'cb_breakdown' => $cbBreakdown,
             ],
         ]);
+    }
+
+    /**
+     * Reassign upload and its debtors to a different EMP account.
+     * Updates upload, debtors, and unsent pending billing attempts.
+     * Does NOT touch attempts already submitted to EMP (have unique_id)
+     * or approved/chargebacked attempts (immutable).
+     */
+    public function reassign(Request $request, Upload $upload): JsonResponse
+    {
+        $validated = $request->validate([
+            'emp_account_id' => 'required|integer|exists:emp_accounts,id',
+        ]);
+
+        $targetAccountId = $validated['emp_account_id'];
+        $targetAccount = EmpAccount::findOrFail($targetAccountId);
+
+        if (!$targetAccount->is_active) {
+            return response()->json([
+                'message' => 'Target EMP account is not active.',
+            ], 422);
+        }
+
+        if ($upload->emp_account_id === $targetAccountId) {
+            return response()->json([
+                'message' => 'Upload is already assigned to this account.',
+            ], 422);
+        }
+
+        $previousAccountId = $upload->emp_account_id;
+
+        Log::info('Upload reassign started', [
+            'upload_id' => $upload->id,
+            'from_account_id' => $previousAccountId,
+            'to_account_id' => $targetAccountId,
+            'to_account_name' => $targetAccount->name,
+            'admin_id' => $request->user()?->id,
+        ]);
+
+        try {
+            $result = DB::transaction(function () use ($upload, $targetAccountId) {
+                $upload->update(['emp_account_id' => $targetAccountId]);
+
+                $debtorsUpdated = Debtor::where('upload_id', $upload->id)
+                    ->where(function ($q) use ($targetAccountId) {
+                        $q->where('emp_account_id', '!=', $targetAccountId)
+                            ->orWhereNull('emp_account_id');
+                    })
+                    ->update(['emp_account_id' => $targetAccountId]);
+
+                $debtorIds = Debtor::where('upload_id', $upload->id)->pluck('id');
+
+                $pendingBillingUpdated = 0;
+                $skippedSubmitted = 0;
+
+                if ($debtorIds->isNotEmpty()) {
+                    $pendingBillingUpdated = DB::table('billing_attempts')
+                        ->whereIn('debtor_id', $debtorIds)
+                        ->where('status', 'pending')
+                        ->whereNull('unique_id')
+                        ->where(function ($q) use ($targetAccountId) {
+                            $q->where('emp_account_id', '!=', $targetAccountId)
+                                ->orWhereNull('emp_account_id');
+                        })
+                        ->update(['emp_account_id' => $targetAccountId]);
+
+                    $skippedSubmitted = DB::table('billing_attempts')
+                        ->whereIn('debtor_id', $debtorIds)
+                        ->where('status', 'pending')
+                        ->whereNotNull('unique_id')
+                        ->count();
+                }
+
+                return [
+                    'debtors_updated' => $debtorsUpdated,
+                    'pending_billing_updated' => $pendingBillingUpdated,
+                    'skipped_submitted' => $skippedSubmitted,
+                ];
+            });
+
+            Log::info('Upload reassign completed', [
+                'upload_id' => $upload->id,
+                'from_account_id' => $previousAccountId,
+                'to_account_id' => $targetAccountId,
+                'debtors_updated' => $result['debtors_updated'],
+                'pending_billing_updated' => $result['pending_billing_updated'],
+                'skipped_submitted' => $result['skipped_submitted'],
+                'admin_id' => $request->user()?->id,
+            ]);
+
+            $upload->load('empAccount');
+
+            $message = "Upload reassigned to {$targetAccount->name}.";
+            if ($result['skipped_submitted'] > 0) {
+                $message .= " {$result['skipped_submitted']} pending attempts already submitted to EMP were left unchanged.";
+            }
+
+            return response()->json([
+                'message' => $message,
+                'data' => [
+                    'upload' => new UploadResource($upload),
+                    'debtors_updated' => $result['debtors_updated'],
+                    'pending_billing_updated' => $result['pending_billing_updated'],
+                    'skipped_submitted' => $result['skipped_submitted'],
+                ],
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Upload reassign failed', [
+                'upload_id' => $upload->id,
+                'target_account_id' => $targetAccountId,
+                'error' => $e->getMessage(),
+                'admin_id' => $request->user()?->id,
+            ]);
+
+            return response()->json([
+                'message' => 'Reassign failed. No changes were made.',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
     }
 
     public function destroy(Upload $upload): JsonResponse
