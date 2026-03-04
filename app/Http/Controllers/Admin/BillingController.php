@@ -193,7 +193,10 @@ class BillingController extends Controller
 
                     Debtor::where('upload_id', $upload->id)
                         ->where('validation_status', Debtor::VALIDATION_VALID)
-                        ->where('status', '!=', Debtor::STATUS_CHARGEBACKED)
+                        ->whereNotIn('status', [
+                            Debtor::STATUS_APPROVED,
+                            Debtor::STATUS_CHARGEBACKED,
+                        ])
                         ->update(['status' => Debtor::STATUS_UPLOADED]);
                 });
             } catch (\Throwable $e) {
