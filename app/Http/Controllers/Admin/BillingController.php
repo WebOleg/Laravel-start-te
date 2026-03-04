@@ -198,6 +198,12 @@ class BillingController extends Controller
                             Debtor::STATUS_CHARGEBACKED,
                         ])
                         ->update(['status' => Debtor::STATUS_UPLOADED]);
+
+                    // Abandon any pending billing attempts from the previous run so they
+                    // no longer block the eligibility check for legacy/no-profile debtors.
+                    BillingAttempt::where('upload_id', $upload->id)
+                        ->where('status', BillingAttempt::STATUS_PENDING)
+                        ->update(['status' => BillingAttempt::STATUS_ERROR]);
                 });
             } catch (\Throwable $e) {
                 Cache::forget($resyncLockKey);
@@ -283,6 +289,11 @@ class BillingController extends Controller
 
         // Set lock and dispatch
         Cache::put($lockKey, true, 300);
+        // Store the eligible count in the resync cache so billing-stats can display
+        // a stable total from the moment the resync starts (overwrites the initial 'true' lock signal).
+        if (isset($resyncLockKey)) {
+            Cache::put($resyncLockKey, $eligibleCount, 300);
+        }
         // Note: Ensure ProcessBillingJob constructor accepts $debtorType
         ProcessBillingJob::dispatch($upload, null, $debtorType);
 
@@ -319,13 +330,17 @@ class BillingController extends Controller
         $declined = $stats->get(BillingAttempt::STATUS_DECLINED);
         $error = $stats->get(BillingAttempt::STATUS_ERROR);
 
-        $isProcessing = Cache::has("billing_sync_{$upload->id}_{$debtorType}");
+        $isResyncProcessing = Cache::has("billing_resync_{$upload->id}")
+            && count($upload->billing_runs ?? []) > 0;
+        $isProcessing       = Cache::has("billing_sync_{$upload->id}_{$debtorType}")
+            && !$isResyncProcessing;
 
         return response()->json([
             'data' => [
                 'upload_id' => $upload->id,
                 'filter_type' => $debtorType ?? DebtorProfile::ALL,
                 'is_processing' => $isProcessing,
+                'is_resync_processing' => $isResyncProcessing,
                 'billing_status' => $upload->billing_status,
                 'billing_started_at' => $upload->billing_started_at?->toIso8601String(),
                 'billing_completed_at' => $upload->billing_completed_at?->toIso8601String(),

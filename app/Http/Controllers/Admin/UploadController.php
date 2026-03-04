@@ -15,6 +15,7 @@ use App\Models\DebtorProfile;
 use App\Models\Upload;
 use App\Models\Debtor;
 use App\Models\BillingAttempt;
+use App\Models\VopLog;
 use App\Services\FileUploadService;
 use App\Services\FilePreValidationService;
 use App\Services\DebtorValidationService;
@@ -420,6 +421,17 @@ class UploadController extends Controller
                     : 0,
             ]);
 
+        $isResyncProcessing = Cache::has("billing_resync_{$upload->id}")
+            && count($upload->billing_runs ?? []) > 0;
+
+        $currentResyncCount = 0;
+        if ($isResyncProcessing) {
+            $currentResyncCount = (clone $query)
+                ->where('validation_status', Debtor::VALIDATION_VALID)
+                ->where('status', Debtor::STATUS_UPLOADED)
+                ->count();
+        }
+
         return response()->json([
             'data' => [
                 'total' => (int) $stats->total,
@@ -429,6 +441,7 @@ class UploadController extends Controller
                 'blacklisted' => $blacklisted,
                 'chargebacked' => $chargebacked,
                 'ready_for_sync' => (clone $query)->readyForSync()->count(),
+                'current_resync_count' => $currentResyncCount,
                 'skipped' => $skipped,
                 'is_processing' => $upload->isValidationProcessing(),
                 'skip_bic_blacklist' => $upload->skip_bic_blacklist ?? false,
@@ -568,12 +581,33 @@ class UploadController extends Controller
 
     private function enrichShowStats(Upload $upload): void
     {
-        // Debtors eligible for the next billing sync and their total amount
-        $upload->ready_for_sync_count  = $upload->debtors()->readyForSync()->count();
-        $upload->ready_for_sync_amount = round(
-            (float) $upload->debtors()->readyForSync()->sum('amount'),
-            2
-        );
+        // Debtors eligible for the next billing sync and their total amount.
+        // When the upload is in resync mode (is_30d_cool === false), a sync will first
+        // reset all valid non-approved/non-chargebacked debtors back to 'uploaded', so
+        // we count those instead of only the ones already in 'uploaded' status.
+        if ($upload->is_30d_cool === false) {
+            $resyncEligible = $upload->debtors()
+                ->where('validation_status', Debtor::VALIDATION_VALID)
+                ->whereNotIn('status', [Debtor::STATUS_APPROVED, Debtor::STATUS_CHARGEBACKED])
+                ->where(function ($q) {
+                    $q->whereDoesntHave('vopLogs')
+                      ->orWhereHas('vopLogs', function ($vopQuery) {
+                          $vopQuery->whereIn('result', [
+                              VopLog::RESULT_VERIFIED,
+                              VopLog::RESULT_LIKELY_VERIFIED,
+                          ]);
+                      });
+                });
+
+            $upload->ready_for_sync_count  = $resyncEligible->count();
+            $upload->ready_for_sync_amount = round((float) (clone $resyncEligible)->sum('amount'), 2);
+        } else {
+            $upload->ready_for_sync_count  = $upload->debtors()->readyForSync()->count();
+            $upload->ready_for_sync_amount = round(
+                (float) $upload->debtors()->readyForSync()->sum('amount'),
+                2
+            );
+        }
 
         // Enrich each archived billing run with recovered_count / recovered_amount
         // using a single query and a time-window filter per run.
