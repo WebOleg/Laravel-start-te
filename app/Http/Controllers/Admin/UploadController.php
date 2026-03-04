@@ -136,6 +136,8 @@ class UploadController extends Controller
             $q->where('status', BillingAttempt::STATUS_CHARGEBACKED);
         }], 'amount');
 
+        $this->enrichShowStats($upload);
+
         return new UploadResource($upload);
     }
 
@@ -562,6 +564,54 @@ class UploadController extends Controller
         return response()->json([
             'data' => new UploadResource($upload->fresh()),
         ]);
+    }
+
+    private function enrichShowStats(Upload $upload): void
+    {
+        // Debtors eligible for the next billing sync and their total amount
+        $upload->ready_for_sync_count  = $upload->debtors()->readyForSync()->count();
+        $upload->ready_for_sync_amount = round(
+            (float) $upload->debtors()->readyForSync()->sum('amount'),
+            2
+        );
+
+        // Enrich each archived billing run with recovered_count / recovered_amount
+        // using a single query and a time-window filter per run.
+        $billingRuns = $upload->billing_runs ?? [];
+
+        if (!empty($billingRuns)) {
+            $approvedAttempts = $upload->billingAttempts()
+                ->where('status', BillingAttempt::STATUS_APPROVED)
+                ->select(['amount', 'created_at'])
+                ->get();
+
+            $billingRuns = array_map(function (array $run) use ($approvedAttempts) {
+                try {
+                    $startedAt   = isset($run['started_at'])   ? \Carbon\Carbon::parse($run['started_at'])   : null;
+                    $completedAt = isset($run['completed_at']) ? \Carbon\Carbon::parse($run['completed_at']) : null;
+                } catch (\Carbon\Exceptions\InvalidFormatException $e) {
+                    return array_merge($run, [
+                        'recovered_count'  => 0,
+                        'recovered_amount' => 0.0,
+                    ]);
+                }
+
+                $runAttempts = $approvedAttempts->filter(function ($attempt) use ($startedAt, $completedAt) {
+                    if (!$startedAt) {
+                        return false;
+                    }
+                    return $attempt->created_at->gte($startedAt)
+                        && (!$completedAt || $attempt->created_at->lte($completedAt));
+                });
+
+                return array_merge($run, [
+                    'recovered_count'  => $runAttempts->count(),
+                    'recovered_amount' => round((float) $runAttempts->sum('amount'), 2),
+                ]);
+            }, $billingRuns);
+        }
+
+        $upload->enriched_billing_runs = $billingRuns;
     }
 
     private function calculateProgress(Upload $upload): float

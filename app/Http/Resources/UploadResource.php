@@ -56,6 +56,14 @@ class UploadResource extends JsonResource
             'chargeback_count' => $this->when(isset($this->chargeback_count), $this->chargeback_count),
             'approved_amount' => $this->when(isset($this->approved_amount), (float) $this->approved_amount),
             'chargeback_amount' => $this->when(isset($this->chargeback_amount), (float) $this->chargeback_amount),
+            'ready_for_sync_count' => $this->when(
+                array_key_exists('ready_for_sync_count', $this->resource->getAttributes()),
+                fn() => (int) $this->ready_for_sync_count
+            ),
+            'ready_for_sync_amount' => $this->when(
+                array_key_exists('ready_for_sync_amount', $this->resource->getAttributes()),
+                fn() => (float) $this->ready_for_sync_amount
+            ),
 
             // Percentages
             'approved_percentage' => $this->when(
@@ -96,8 +104,9 @@ class UploadResource extends JsonResource
             'is_deletable' => $this->isDeletable(),
             'is_30d_cool' => $this->is_30d_cool === null ? null : (bool) $this->is_30d_cool,
 
-            // Billing run history (archived snapshots of previous syncs)
-            'billing_runs' => $this->billing_runs ?? [],
+            // Billing run history (archived snapshots of previous syncs),
+            // enriched with per-run recovered_count and recovered_amount when available.
+            'billing_runs' => $this->enriched_billing_runs ?? $this->billing_runs ?? [],
 
             // True when cooldown is explicitly OFF, billing is not currently running,
             // and the per-upload resync cap has not yet been reached.
