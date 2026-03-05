@@ -12,17 +12,13 @@ use App\Models\Upload;
 use App\Models\VopLog;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Http\Request;
-use Illuminate\Database\Query\Builder;
 
 class BillingController extends Controller
 {
-    /**
-     * Void all successful transactions for an upload via Queue.
-     */
     public function void(Upload $upload): JsonResponse
     {
-        // Time window
         $lastActivity = $upload->billing_completed_at ?? $upload->billing_started_at;
         if ($lastActivity && $lastActivity->diffInHours(now()) > 24) {
             return response()->json([
@@ -30,7 +26,6 @@ class BillingController extends Controller
             ], 422);
         }
 
-        // Is anything actually billable?
         $count = BillingAttempt::where('upload_id', $upload->id)
             ->whereIn('status', [
                 BillingAttempt::STATUS_APPROVED,
@@ -45,10 +40,8 @@ class BillingController extends Controller
             ], 422);
         }
 
-        // Dispatch Job
         VoidUploadJob::dispatch($upload);
 
-        // Update UI Status
         $upload->update([
             'billing_status' => Upload::STATUS_VOIDING,
             'status' => Upload::STATUS_VOIDING
@@ -62,18 +55,12 @@ class BillingController extends Controller
         ], 202);
     }
 
-    /**
-     * Cancel an active billing sync.
-     * Sets a signal flag that running jobs check to terminate execution.
-     */
     public function cancel(Upload $upload): JsonResponse
     {
         $lockKey = "billing_sync_stop_{$upload->id}";
 
-        // Set the Kill Switch (Valid for 60 minutes)
         Cache::put($lockKey, true, 3600);
 
-        // Mark upload status immediately for UI feedback
         $upload->update([
             'billing_status' => Upload::STATUS_CANCELLING,
             'status' => Upload::STATUS_CANCELLING
@@ -89,25 +76,18 @@ class BillingController extends Controller
         ]);
     }
 
-    /**
-     * Start billing process for upload (async).
-     * Returns 202 Accepted - client should poll stats endpoint.
-     */
     public function sync(Upload $upload, Request $request): JsonResponse
     {
-        // 1. Handle Input: Default to 'all' if empty
         $debtorType = $request->input('debtor_type') ?: DebtorProfile::ALL;
 
         $lockKey = "billing_sync_{$upload->id}_{$debtorType}";
 
-        // Validate: Allow 'all' OR specific models
         $validTypes = array_merge([DebtorProfile::ALL], DebtorProfile::BILLING_MODELS);
 
         if (!in_array($debtorType, $validTypes)) {
             return response()->json(['message' => 'Invalid billing model provided'], 422);
         }
 
-        // Prevent duplicate dispatches (5 min lock)
         if (Cache::has($lockKey)) {
             return response()->json([
                 'message' => 'Billing already in progress',
@@ -134,20 +114,16 @@ class BillingController extends Controller
             ], 422);
         }
 
-        // If we are syncing 'flywheel', we MUST NOT process IBANs that are already 'recovery', and vice versa.
         $conflictingModel = match($debtorType) {
             DebtorProfile::MODEL_FLYWHEEL => DebtorProfile::MODEL_RECOVERY,
             DebtorProfile::MODEL_RECOVERY => DebtorProfile::MODEL_FLYWHEEL,
             default => null
         };
 
-        // 3. Count eligible debtors
         $query = Debtor::where('upload_id', $upload->id)
             ->where('validation_status', Debtor::VALIDATION_VALID)
             ->where('status', Debtor::STATUS_UPLOADED);
 
-        // Filter by requested Debtor Type (if not 'all')
-        // Matches logic: (Has Profile == Type) OR (Has No Profile)
         if ($debtorType !== DebtorProfile::ALL) {
             $query->where(function ($q) use ($debtorType) {
                 $q->whereHas('debtorProfile', function ($p) use ($debtorType) {
@@ -157,14 +133,10 @@ class BillingController extends Controller
             });
         }
 
-        // Conditional Billing Attempt Check
-        // Logic: (Is Non-Legacy Profile) OR (Has No Active Attempts)
         $query->where(function ($q) {
-            // A. If non-legacy (Flywheel/Recovery), ignore attempts (Always True)
             $q->whereHas('debtorProfile', function ($p) {
                 $p->where('billing_model', '!=', DebtorProfile::MODEL_LEGACY);
             })
-                // B. If Legacy or No Profile, must not have pending/approved attempts
                 ->orWhereDoesntHave('billingAttempts', function ($ba) {
                     $ba->whereIn('status', [
                         BillingAttempt::STATUS_PENDING,
@@ -173,8 +145,6 @@ class BillingController extends Controller
                 });
         });
 
-        // Exclude VOP failed results (mismatch, rejected, inconclusive)
-        // Only allow debtors with no VOP check OR passed VOP check
         $query->where(function ($q) {
             $q->whereDoesntHave('vopLogs')
               ->orWhereHas('vopLogs', function ($vopQuery) {
@@ -185,7 +155,6 @@ class BillingController extends Controller
               });
         });
 
-        // Apply strict cross-contamination check
         if ($conflictingModel) {
             $query->whereNotExists(function ($subQuery) use ($conflictingModel) {
                 $subQuery->select('id')
@@ -195,41 +164,73 @@ class BillingController extends Controller
             });
         }
 
+        if ($upload->max_billing_amount !== null && (float) $upload->max_billing_amount > 0) {
+            $maxAmount = (float) $upload->max_billing_amount;
+            $query->where(function ($q) use ($maxAmount) {
+                $q->whereRaw(
+                    'COALESCE((SELECT SUM(ba.amount) FROM billing_attempts ba WHERE ba.debtor_id = debtors.id AND ba.status IN (?, ?)), 0) < ?',
+                    [BillingAttempt::STATUS_APPROVED, BillingAttempt::STATUS_PENDING, $maxAmount]
+                );
+            });
+        }
+
         $eligibleCount = $query->count();
+        $cappedCount = 0;
+
+        if ($upload->max_billing_amount !== null && (float) $upload->max_billing_amount > 0) {
+            $cappedCount = Debtor::where('upload_id', $upload->id)
+                ->where('validation_status', Debtor::VALIDATION_VALID)
+                ->where('status', Debtor::STATUS_UPLOADED)
+                ->whereRaw(
+                    'COALESCE((SELECT SUM(ba.amount) FROM billing_attempts ba WHERE ba.debtor_id = debtors.id AND ba.status IN (?, ?)), 0) >= ?',
+                    [BillingAttempt::STATUS_APPROVED, BillingAttempt::STATUS_PENDING, (float) $upload->max_billing_amount]
+                )
+                ->count();
+        }
 
         if ($eligibleCount === 0) {
+            $message = $conflictingModel
+                ? "No eligible debtors found (duplicates or {$conflictingModel} conflicts removed)"
+                : 'No eligible debtors to bill';
+
+            if ($cappedCount > 0) {
+                $message = "No eligible debtors to bill. {$cappedCount} debtors reached billing cap ({$upload->max_billing_amount} EUR).";
+            }
+
             return response()->json([
-                'message' => $conflictingModel
-                    ? "No eligible debtors found (duplicates or {$conflictingModel} conflicts removed)"
-                    : 'No eligible debtors to bill',
+                'message' => $message,
                 'data' => [
                     'upload_id' => $upload->id,
                     'eligible' => 0,
+                    'capped' => $cappedCount,
                     'queued' => false,
                 ],
             ]);
         }
 
-        // Set lock and dispatch
         Cache::put($lockKey, true, 300);
-        // Note: Ensure ProcessBillingJob constructor accepts $debtorType
         ProcessBillingJob::dispatch($upload, null, $debtorType);
 
+        $responseData = [
+            'upload_id' => $upload->id,
+            'eligible' => $eligibleCount,
+            'queued' => true,
+            'model' => $debtorType,
+        ];
+
+        $message = "Billing queued for {$eligibleCount} debtors ({$debtorType} model)";
+
+        if ($cappedCount > 0) {
+            $responseData['capped'] = $cappedCount;
+            $message .= ". {$cappedCount} debtors skipped (billing cap reached).";
+        }
+
         return response()->json([
-            'message' => "Billing queued for {$eligibleCount} debtors ({$debtorType} model)",
-            'data' => [
-                'upload_id' => $upload->id,
-                'eligible' => $eligibleCount,
-                'queued' => true,
-                'model' => $debtorType
-            ],
+            'message' => $message,
+            'data' => $responseData,
         ], 202);
     }
 
-    /**
-     * Get billing statistics for upload.
-     * Used for polling progress.
-     */
     public function stats(Upload $upload, Request $request): JsonResponse
     {
         $debtorType = $request->input('debtor_type') ?: DebtorProfile::ALL;
