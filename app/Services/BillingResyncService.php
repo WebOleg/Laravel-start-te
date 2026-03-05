@@ -118,7 +118,8 @@ class BillingResyncService
             return new ResyncEligibility(
                 allowed: false,
                 reason: 'No eligible Legacy debtors found for resync. '
-                    . 'All debtors are either approved, chargebacked, or belong to non-Legacy billing models.',
+                    . 'All debtors are either approved, chargebacked, or belong to non-Legacy billing models. '
+                    . 'Note: debtors with pending billing attempts are also eligible for resync.',
                 billingModel: $effectiveModel,
             );
         }
@@ -138,8 +139,8 @@ class BillingResyncService
      *  - validation_status = 'valid'
      *  - debtor.billing_model = 'legacy' (debtor-level snapshot)
      *  - debtor has no profile OR profile.billing_model = 'legacy' (source of truth)
-     *  - Latest billing attempt is NOT approved and NOT chargebacked
-     *    (i.e. failed/declined/error/voided, or no attempt at all)
+     *  - No billing attempt is in a terminal non-retriable state (approved or chargebacked);
+     *    pending attempts are treated as stuck/unresolved and are retriable
      *  - VOP verification passed or was never required
      */
     public function getResyncableDebtors(Upload $upload): Builder
@@ -154,10 +155,10 @@ class BillingResyncService
                   ->orWhereHas('debtorProfile', fn (Builder $p) => $p->where('billing_model', DebtorProfile::MODEL_LEGACY));
             })
             // Status check: exclude debtors that have ANY billing attempt in a
-            // non-retriable state (pending, approved, chargebacked).
+            // terminal non-retriable state (approved, chargebacked).
+            // Pending attempts are treated as stuck/unresolved and are retriable.
             ->whereDoesntHave('billingAttempts', function (Builder $ba) {
                 $ba->whereIn('status', [
-                    BillingAttempt::STATUS_PENDING,
                     BillingAttempt::STATUS_APPROVED,
                     BillingAttempt::STATUS_CHARGEBACKED,
                 ]);
@@ -227,6 +228,12 @@ class BillingResyncService
 
                 // Reset eligible debtors back to 'uploaded' so ProcessBillingJob picks them up.
                 if ($resyncDebtorIds->isNotEmpty()) {
+                    // Void any stuck pending billing attempts so ProcessBillingJob
+                    // does not re-exclude these debtors via its active-attempt guard.
+                    BillingAttempt::whereIn('debtor_id', $resyncDebtorIds)
+                        ->where('status', BillingAttempt::STATUS_PENDING)
+                        ->update(['status' => BillingAttempt::STATUS_VOIDED]);
+
                     $resetCount = Debtor::whereIn('id', $resyncDebtorIds)
                         ->update(['status' => Debtor::STATUS_UPLOADED]);
                 }
