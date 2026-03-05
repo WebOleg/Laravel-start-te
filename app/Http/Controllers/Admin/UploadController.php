@@ -15,10 +15,10 @@ use App\Models\DebtorProfile;
 use App\Models\Upload;
 use App\Models\Debtor;
 use App\Models\BillingAttempt;
-use App\Models\VopLog;
 use App\Services\FileUploadService;
 use App\Services\FilePreValidationService;
 use App\Services\DebtorValidationService;
+use App\Services\BillingResyncService;
 use App\Jobs\ProcessValidationJob;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
@@ -34,7 +34,8 @@ class UploadController extends Controller
     public function __construct(
         private FileUploadService $uploadService,
         private FilePreValidationService $preValidationService,
-        private DebtorValidationService $validationService
+        private DebtorValidationService $validationService,
+        private BillingResyncService $resyncService,
     ) {}
 
     public function index(Request $request): AnonymousResourceCollection
@@ -426,10 +427,7 @@ class UploadController extends Controller
 
         $currentResyncCount = 0;
         if ($isResyncProcessing) {
-            $currentResyncCount = (clone $query)
-                ->where('validation_status', Debtor::VALIDATION_VALID)
-                ->where('status', Debtor::STATUS_UPLOADED)
-                ->count();
+            $currentResyncCount = $this->resyncService->getResyncableDebtors($upload)->count();
         }
 
         return response()->json([
@@ -582,22 +580,10 @@ class UploadController extends Controller
     private function enrichShowStats(Upload $upload): void
     {
         // Debtors eligible for the next billing sync and their total amount.
-        // When the upload is in resync mode (is_30d_cool === false), a sync will first
-        // reset all valid non-approved/non-chargebacked debtors back to 'uploaded', so
-        // we count those instead of only the ones already in 'uploaded' status.
+        // When the upload is in resync mode (is_30d_cool === false), use the
+        // resync service for consistent Legacy-only debtor counting.
         if ($upload->is_30d_cool === false) {
-            $resyncEligible = $upload->debtors()
-                ->where('validation_status', Debtor::VALIDATION_VALID)
-                ->whereNotIn('status', [Debtor::STATUS_APPROVED, Debtor::STATUS_CHARGEBACKED])
-                ->where(function ($q) {
-                    $q->whereDoesntHave('vopLogs')
-                      ->orWhereHas('vopLogs', function ($vopQuery) {
-                          $vopQuery->whereIn('result', [
-                              VopLog::RESULT_VERIFIED,
-                              VopLog::RESULT_LIKELY_VERIFIED,
-                          ]);
-                      });
-                });
+            $resyncEligible = $this->resyncService->getResyncableDebtors($upload);
 
             $upload->ready_for_sync_count  = $resyncEligible->count();
             $upload->ready_for_sync_amount = round((float) (clone $resyncEligible)->sum('amount'), 2);

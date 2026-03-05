@@ -239,6 +239,7 @@ class Upload extends Model
             'billing_status' => self::JOB_COMPLETED,
             'billing_completed_at' => now(),
         ]);
+        $this->clearBillingCacheLocks();
     }
 
     public function markBillingFailed(): void
@@ -247,6 +248,16 @@ class Upload extends Model
             'billing_status' => self::JOB_FAILED,
             'billing_completed_at' => now(),
         ]);
+        $this->clearBillingCacheLocks();
+    }
+
+    private function clearBillingCacheLocks(): void
+    {
+        Cache::forget("billing_resync_{$this->id}");
+        Cache::forget("billing_sync_stop_{$this->id}");
+        foreach (['all', 'legacy', 'flywheel', 'recovery'] as $model) {
+            Cache::forget("billing_sync_{$this->id}_{$model}");
+        }
     }
 
     public function isVopProcessing(): bool

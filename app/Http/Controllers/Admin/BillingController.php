@@ -10,13 +10,16 @@ use App\Models\Debtor;
 use App\Models\DebtorProfile;
 use App\Models\Upload;
 use App\Models\VopLog;
+use App\Services\BillingResyncService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Http\Request;
 
 class BillingController extends Controller
 {
+    public function __construct(
+        private readonly BillingResyncService $resyncService,
+    ) {}
     /**
      * Void all successful transactions for an upload via Queue.
      */
@@ -135,80 +138,35 @@ class BillingController extends Controller
         }
 
         // Resync mode: cooldown is explicitly OFF for this upload.
-        // Reset now — at the moment the user deliberately presses "Sync to Gateway".
-        // This archives the previous billing run, clears the live lifecycle fields, and
-        // moves all valid (non-chargebacked) debtors back to 'uploaded' so they are eligible again.
-        // Invalid and BIC-blacklisted debtors (validation_status != valid) are untouched.
-        // Chargebacked debtors are excluded and never re-billed.
+        // Delegate all resync logic to the dedicated service.
         if ($upload->is_30d_cool === false) {
-            // Use a per-upload (not per-debtor-type) lock so that concurrent sync requests
-            // with different debtor_type values cannot both enter this section simultaneously
-            // and produce a double-archive or a partial debtor reset.
-            $resyncLockKey = "billing_resync_{$upload->id}";
-            if (Cache::has($resyncLockKey)) {
-                return response()->json([
-                    'message' => 'A resync is already in progress for this upload.',
-                    'data'    => ['upload_id' => $upload->id, 'queued' => false],
-                ], 409);
-            }
-            Cache::put($resyncLockKey, true, 300);
+            $eligibility = $this->resyncService->canResync($upload, $debtorType);
 
-            // Guard: enforce the per-upload resync cap defined on the model.
-            $resyncCount = count($upload->billing_runs ?? []);
-            if ($resyncCount >= Upload::MAX_RESYNC_ATTEMPTS) {
-                Cache::forget($resyncLockKey);
+            if ($eligibility->denied()) {
                 return response()->json([
-                    'message' => 'Resync limit reached. This upload has already been resynced ' .
-                                 Upload::MAX_RESYNC_ATTEMPTS . ' time(s), which is the maximum allowed.',
+                    'message' => $eligibility->reason,
                     'data' => [
                         'upload_id'    => $upload->id,
-                        'resync_count' => $resyncCount,
-                        'max_resync'   => Upload::MAX_RESYNC_ATTEMPTS,
                         'queued'       => false,
+                        'resync_count' => count($upload->billing_runs ?? []),
+                        'max_resync'   => Upload::MAX_RESYNC_ATTEMPTS,
                     ],
-                ], 422);
+                ], $this->resyncHttpStatus($eligibility->reason));
             }
 
-            // Wrap archive + debtor reset in a transaction so both succeed or both
-            // roll back — prevents partial state where billing_runs is updated but
-            // debtors are not reset (or vice versa) due to a DB error mid-way.
-            try {
-                DB::transaction(function () use ($upload) {
-                    if ($upload->billing_started_at !== null) {
-                        $existingRuns = $upload->billing_runs ?? [];
-                        $existingRuns[] = [
-                            'run'          => count($existingRuns) + 1,
-                            'status'       => $upload->billing_status,
-                            'batch_id'     => $upload->billing_batch_id,
-                            'started_at'   => $upload->billing_started_at?->toISOString(),
-                            'completed_at' => $upload->billing_completed_at?->toISOString(),
-                        ];
-                        $upload->billing_runs         = $existingRuns;
-                        $upload->billing_status       = Upload::JOB_IDLE;
-                        $upload->billing_batch_id     = null;
-                        $upload->billing_started_at   = null;
-                        $upload->billing_completed_at = null;
-                        $upload->save();
-                    }
+            $result = $this->resyncService->executeResync($upload);
 
-                    Debtor::where('upload_id', $upload->id)
-                        ->where('validation_status', Debtor::VALIDATION_VALID)
-                        ->whereNotIn('status', [
-                            Debtor::STATUS_APPROVED,
-                            Debtor::STATUS_CHARGEBACKED,
-                        ])
-                        ->update(['status' => Debtor::STATUS_UPLOADED]);
-
-                    // Abandon any pending billing attempts from the previous run so they
-                    // no longer block the eligibility check for legacy/no-profile debtors.
-                    BillingAttempt::where('upload_id', $upload->id)
-                        ->where('status', BillingAttempt::STATUS_PENDING)
-                        ->update(['status' => BillingAttempt::STATUS_ERROR]);
-                });
-            } catch (\Throwable $e) {
-                Cache::forget($resyncLockKey);
-                throw $e;
-            }
+            return response()->json([
+                'message' => "Resync queued for {$result->eligibleCount} Legacy debtors",
+                'data' => [
+                    'upload_id'      => $upload->id,
+                    'eligible'       => $result->eligibleCount,
+                    'reset_count'    => $result->resetCount,
+                    'archived'       => $result->archived,
+                    'queued'         => $result->dispatched,
+                    'model'          => DebtorProfile::MODEL_LEGACY,
+                ],
+            ], $result->dispatched ? 202 : 200);
         }
 
         // If we are syncing 'flywheel', we MUST NOT process IBANs that are already 'recovery', and vice versa.
@@ -289,12 +247,6 @@ class BillingController extends Controller
 
         // Set lock and dispatch
         Cache::put($lockKey, true, 300);
-        // Store the eligible count in the resync cache so billing-stats can display
-        // a stable total from the moment the resync starts (overwrites the initial 'true' lock signal).
-        if (isset($resyncLockKey)) {
-            Cache::put($resyncLockKey, $eligibleCount, 300);
-        }
-        // Note: Ensure ProcessBillingJob constructor accepts $debtorType
         ProcessBillingJob::dispatch($upload, null, $debtorType);
 
         return response()->json([
@@ -330,10 +282,14 @@ class BillingController extends Controller
         $declined = $stats->get(BillingAttempt::STATUS_DECLINED);
         $error = $stats->get(BillingAttempt::STATUS_ERROR);
 
-        $isResyncProcessing = Cache::has("billing_resync_{$upload->id}")
-            && count($upload->billing_runs ?? []) > 0;
-        $isProcessing       = Cache::has("billing_sync_{$upload->id}_{$debtorType}")
-            && !$isResyncProcessing;
+        $isResyncProcessing = Cache::has("billing_resync_{$upload->id}");
+
+        if ($debtorType === DebtorProfile::ALL) {
+            $isProcessing = collect(['all', 'legacy', 'flywheel', 'recovery'])
+                ->contains(fn($m) => Cache::has("billing_sync_{$upload->id}_{$m}"));
+        } else {
+            $isProcessing = Cache::has("billing_sync_{$upload->id}_{$debtorType}");
+        }
 
         return response()->json([
             'data' => [
@@ -355,6 +311,18 @@ class BillingController extends Controller
                 'error_amount' => (float) ($error?->total_amount ?? 0),
             ],
         ]);
+    }
+
+    /**
+     * Map resync denial reasons to appropriate HTTP status codes.
+     */
+    private function resyncHttpStatus(string $reason): int
+    {
+        if (str_contains($reason, 'already in progress')) {
+            return 409;
+        }
+
+        return 422;
     }
 
     private function checkVopCompleted(Upload $upload): array
