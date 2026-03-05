@@ -69,6 +69,7 @@ class Upload extends Model
         'reconciliation_started_at',
         'reconciliation_completed_at',
         'skip_bic_blacklist',
+        'max_billing_amount',
     ];
 
     protected $casts = [
@@ -94,6 +95,7 @@ class Upload extends Model
         'reconciliation_started_at' => 'datetime',
         'reconciliation_completed_at' => 'datetime',
         'skip_bic_blacklist' => 'boolean',
+        'max_billing_amount' => 'decimal:2',
     ];
 
     public function uploader(): BelongsTo
@@ -130,9 +132,6 @@ class Upload extends Model
         return round(($successful / $this->processed_records) * 100, 1);
     }
 
-    /**
-     * @return EmpAccount|null
-     */
     public function getEffectiveEmpAccount(): ?EmpAccount
     {
         if ($this->emp_account_id) {
@@ -336,9 +335,6 @@ class Upload extends Model
         $this->increment('bav_processed_count', $count);
     }
 
-    /**
-     * @return array{status: string, total: int, processed: int, percentage: float, started_at: string|null, completed_at: string|null}
-     */
     public function getBavProgress(): array
     {
         return [
@@ -353,9 +349,6 @@ class Upload extends Model
         ];
     }
 
-    /**
-     * @return int
-     */
     public function getBavEligibleCount(): int
     {
         $supportedCountries = config('services.iban.bav_supported_countries', []);
@@ -370,10 +363,6 @@ class Upload extends Model
             ->count();
     }
 
-    /**
-     * @param int|null $limit
-     * @return array<int>
-     */
     public function getBavEligibleDebtorIds(?int $limit = null): array
     {
         $supportedCountries = config('services.iban.bav_supported_countries', []);

@@ -442,12 +442,6 @@ class UploadController extends Controller
         ]);
     }
 
-    /**
-     * Reassign upload and its debtors to a different EMP account.
-     * Updates upload, debtors, and unsent pending billing attempts.
-     * Does NOT touch attempts already submitted to EMP (have unique_id)
-     * or approved/chargebacked attempts (immutable).
-     */
     public function reassign(Request $request, Upload $upload): JsonResponse
     {
         $validated = $request->validate([
@@ -560,6 +554,86 @@ class UploadController extends Controller
                 'error' => $e->getMessage(),
             ], 500);
         }
+    }
+
+    public function updateSettings(Request $request, Upload $upload): JsonResponse
+    {
+        $validated = $request->validate([
+            'max_billing_amount' => 'nullable|numeric|min:0|max:999999.99',
+        ]);
+
+        $previousValue = $upload->max_billing_amount;
+        $upload->update($validated);
+
+        Log::info('Upload settings updated', [
+            'upload_id' => $upload->id,
+            'max_billing_amount' => [
+                'from' => $previousValue,
+                'to' => $upload->max_billing_amount,
+            ],
+            'admin_id' => $request->user()?->id,
+        ]);
+
+        return response()->json([
+            'message' => 'Upload settings updated.',
+            'data' => new UploadResource($upload),
+        ]);
+    }
+
+    public function billingCycles(Upload $upload): JsonResponse
+    {
+        $cycles = DB::table('billing_attempts')
+            ->where('upload_id', $upload->id)
+            ->select(
+                'attempt_number',
+                'status',
+                DB::raw('COUNT(*) as count'),
+                DB::raw('COALESCE(SUM(amount), 0) as total_amount')
+            )
+            ->groupBy('attempt_number', 'status')
+            ->orderBy('attempt_number')
+            ->orderBy('status')
+            ->get();
+
+        $grouped = [];
+        foreach ($cycles as $row) {
+            $cycle = $row->attempt_number;
+            if (!isset($grouped[$cycle])) {
+                $grouped[$cycle] = [
+                    'cycle' => $cycle,
+                    'statuses' => [],
+                    'total_count' => 0,
+                    'total_amount' => 0,
+                ];
+            }
+            $grouped[$cycle]['statuses'][$row->status] = [
+                'count' => (int) $row->count,
+                'amount' => round((float) $row->total_amount, 2),
+            ];
+            $grouped[$cycle]['total_count'] += (int) $row->count;
+            $grouped[$cycle]['total_amount'] += (float) $row->total_amount;
+        }
+
+        foreach ($grouped as &$cycle) {
+            $cycle['total_amount'] = round($cycle['total_amount'], 2);
+        }
+
+        $totalApprovedAmount = DB::table('billing_attempts')
+            ->where('upload_id', $upload->id)
+            ->whereIn('status', [BillingAttempt::STATUS_APPROVED, BillingAttempt::STATUS_PENDING])
+            ->sum('amount');
+
+        return response()->json([
+            'data' => [
+                'cycles' => array_values($grouped),
+                'total_cycles' => count($grouped),
+                'total_billed_amount' => round((float) $totalApprovedAmount, 2),
+                'max_billing_amount' => $upload->max_billing_amount ? (float) $upload->max_billing_amount : null,
+                'cap_remaining' => $upload->max_billing_amount
+                    ? max(0, round((float) $upload->max_billing_amount - (float) $totalApprovedAmount, 2))
+                    : null,
+            ],
+        ]);
     }
 
     public function destroy(Upload $upload): JsonResponse
