@@ -176,6 +176,40 @@ class BillingResyncService
     }
 
     /**
+     * Check whether a resync is currently in progress for the given upload.
+     */
+    public function isResyncInProgress(Upload $upload): bool
+    {
+        return Cache::has("billing_resync_{$upload->id}");
+    }
+
+    /**
+     * Cancel an active resync by setting the kill switch and clearing resync-specific locks.
+     *
+     * The kill switch (billing_sync_stop_{id}) is shared with normal sync — ProcessBillingChunkJob
+     * checks it to terminate the batch. This method additionally clears the resync cache lock
+     * so the stats endpoint no longer reports resync as in-progress.
+     */
+    public function cancelResync(Upload $upload): void
+    {
+        // Set the shared kill switch (60 min TTL safety net).
+        Cache::put("billing_sync_stop_{$upload->id}", true, 3600);
+
+        // Clear resync-specific locks so stats endpoint reflects the cancellation.
+        Cache::forget("billing_resync_{$upload->id}");
+        Cache::forget("billing_sync_{$upload->id}_" . DebtorProfile::MODEL_LEGACY);
+
+        $upload->update([
+            'billing_status' => Upload::STATUS_CANCELLING,
+            'status' => Upload::STATUS_CANCELLING,
+        ]);
+
+        Log::info('BillingResyncService: resync cancelled by user', [
+            'upload_id' => $upload->id,
+        ]);
+    }
+
+    /**
      * Execute the full resync workflow:
      *  1. Acquire cache lock
      *  2. Archive the previous billing run

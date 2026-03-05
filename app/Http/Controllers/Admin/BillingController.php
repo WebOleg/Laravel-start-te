@@ -66,29 +66,34 @@ class BillingController extends Controller
     }
 
     /**
-     * Cancel an active billing sync.
+     * Cancel an active billing sync or resync.
      * Sets a signal flag that running jobs check to terminate execution.
      */
     public function cancel(Upload $upload): JsonResponse
     {
-        $lockKey = "billing_sync_stop_{$upload->id}";
+        $isResync = $this->resyncService->isResyncInProgress($upload);
 
-        // Set the Kill Switch (Valid for 60 minutes)
-        Cache::put($lockKey, true, 3600);
+        if ($isResync) {
+            $this->resyncService->cancelResync($upload);
+        } else {
+            Cache::put("billing_sync_stop_{$upload->id}", true, 3600);
 
-        // Mark upload status immediately for UI feedback
-        $upload->update([
-            'billing_status' => Upload::STATUS_CANCELLING,
-            'status' => Upload::STATUS_CANCELLING
-        ]);
+            $upload->update([
+                'billing_status' => Upload::STATUS_CANCELLING,
+                'status' => Upload::STATUS_CANCELLING,
+            ]);
+        }
 
         return response()->json([
-            'message' => 'Termination signal sent. The sync will stop shortly.',
+            'message' => $isResync
+                ? 'Resync termination signal sent. The resync will stop shortly.'
+                : 'Termination signal sent. The sync will stop shortly.',
             'data' => [
                 'upload_id' => $upload->id,
-                'billing_status' => $upload->id,
+                'billing_status' => Upload::STATUS_CANCELLING,
+                'is_resync' => $isResync,
                 'signal_sent_at' => now()->toIso8601String(),
-            ]
+            ],
         ]);
     }
 
