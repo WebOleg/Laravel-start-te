@@ -153,23 +153,14 @@ class BillingResyncService
                 $q->whereDoesntHave('debtorProfile')
                   ->orWhereHas('debtorProfile', fn (Builder $p) => $p->where('billing_model', DebtorProfile::MODEL_LEGACY));
             })
-            // Status check: exclude debtors whose latest billing attempt is
-            // approved or chargebacked — those are terminal and must not be retried.
-            ->where(function (Builder $q) {
-                $q->whereDoesntHave('billingAttempts')
-                  ->orWhere(function (Builder $q2) {
-                      // Subquery: the debtor's latest billing attempt (by id) must NOT be
-                      // in a terminal status (approved / chargebacked).
-                      $q2->whereDoesntHave('billingAttempts', function (Builder $ba) {
-                          $ba->whereIn('status', [
-                              BillingAttempt::STATUS_APPROVED,
-                              BillingAttempt::STATUS_CHARGEBACKED,
-                          ])
-                          ->whereColumn('billing_attempts.id', '=', DB::raw(
-                              '(SELECT MAX(ba2.id) FROM billing_attempts ba2 WHERE ba2.debtor_id = debtors.id)'
-                          ));
-                      });
-                  });
+            // Status check: exclude debtors that have ANY billing attempt in a
+            // non-retriable state (pending, approved, chargebacked).
+            ->whereDoesntHave('billingAttempts', function (Builder $ba) {
+                $ba->whereIn('status', [
+                    BillingAttempt::STATUS_PENDING,
+                    BillingAttempt::STATUS_APPROVED,
+                    BillingAttempt::STATUS_CHARGEBACKED,
+                ]);
             })
             // VOP filter: only debtors with no VOP check or passed verification.
             ->where(function (Builder $q) {
@@ -188,8 +179,7 @@ class BillingResyncService
      *  1. Acquire cache lock
      *  2. Archive the previous billing run
      *  3. Reset eligible debtors to 'uploaded'
-     *  4. Mark stale pending attempts as 'error'
-     *  5. Dispatch ProcessBillingJob for Legacy model
+     *  4. Dispatch ProcessBillingJob for Legacy model
      */
     public function executeResync(Upload $upload): ResyncResult
     {
@@ -240,17 +230,6 @@ class BillingResyncService
                     $resetCount = Debtor::whereIn('id', $resyncDebtorIds)
                         ->update(['status' => Debtor::STATUS_UPLOADED]);
                 }
-
-                // Mark stale pending billing attempts as 'error'. Only target attempts
-                // older than the reconciliation minimum age (2 hours) to avoid cancelling
-                // in-flight gateway transactions.
-                $staleThreshold = now()->subHours(BillingAttempt::RECONCILIATION_MIN_AGE_HOURS);
-
-                BillingAttempt::where('upload_id', $upload->id)
-                    ->where('status', BillingAttempt::STATUS_PENDING)
-                    ->where('billing_model', DebtorProfile::MODEL_LEGACY)
-                    ->where('created_at', '<', $staleThreshold)
-                    ->update(['status' => BillingAttempt::STATUS_ERROR]);
             });
 
             // Dispatch the billing job targeting Legacy debtors only.
