@@ -184,6 +184,27 @@ class BillingResyncService
     }
 
     /**
+     * Get billing attempts eligible for voiding.
+     * For resync uploads, scopes to only the most recent run.
+     * For initial sync uploads, returns all eligible attempts.
+     */
+    public function getVoidableAttempts(Upload $upload): Builder
+    {
+        $query = BillingAttempt::where('upload_id', $upload->id)
+            ->whereIn('status', [
+                BillingAttempt::STATUS_APPROVED,
+                BillingAttempt::STATUS_PENDING,
+            ])
+            ->whereNotNull('unique_id');
+
+        if (!empty($upload->billing_runs) && $upload->billing_started_at) {
+            $query->where('created_at', '>=', $upload->billing_started_at);
+        }
+
+        return $query;
+    }
+
+    /**
      * Cancel an active resync by setting the kill switch and clearing resync-specific locks.
      *
      * The kill switch (billing_sync_stop_{id}) is shared with normal sync — ProcessBillingChunkJob

@@ -33,14 +33,8 @@ class BillingController extends Controller
             ], 422);
         }
 
-        // Is anything actually billable?
-        $count = BillingAttempt::where('upload_id', $upload->id)
-            ->whereIn('status', [
-                BillingAttempt::STATUS_APPROVED,
-                BillingAttempt::STATUS_PENDING
-            ])
-            ->whereNotNull('unique_id')
-            ->count();
+        // Get eligible attempts (scoped to latest run for resyncs)
+        $count = $this->resyncService->getVoidableAttempts($upload)->count();
 
         if ($count === 0) {
             return response()->json([
@@ -60,7 +54,8 @@ class BillingController extends Controller
         return response()->json([
             'message' => "Void process queued for {$count} transactions.",
             'data' => [
-                'queued_count' => $count
+                'queued_count' => $count,
+                'is_resync' => !empty($upload->billing_runs),
             ]
         ], 202);
     }
