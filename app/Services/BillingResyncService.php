@@ -43,7 +43,8 @@ class BillingResyncService
      *  3. Cache lock: no concurrent resync in progress.
      *  4. Billing not currently processing.
      *  5. Resync cap not exceeded.
-     *  6. At least one eligible debtor exists.
+     *  6. Cooldown period between runs (120 hours).
+     *  7. At least one eligible debtor exists.
      */
     public function canResync(Upload $upload, ?string $billingModel = null): ResyncEligibility
     {
@@ -112,7 +113,26 @@ class BillingResyncService
             );
         }
 
-        // 6. Count eligible debtors.
+        // 6. Cooldown period between runs.
+        if ($upload->billing_completed_at) {
+            $minutesSinceLastRun = $upload->billing_completed_at->diffInMinutes(now());
+            $cooldownMinutes = Upload::RESYNC_COOLDOWN_HOURS * 60;
+
+            if ($minutesSinceLastRun < $cooldownMinutes) {
+                $minutesRemaining = $cooldownMinutes - $minutesSinceLastRun;
+
+                $hours = intdiv($minutesRemaining, 60);
+                $minutes = $minutesRemaining % 60;
+
+                return new ResyncEligibility(
+                    allowed: false,
+                    reason: "Cooldown period active. {$hours} hour(s) and {$minutes} minute(s) remaining before the next resync is allowed.",
+                    billingModel: $effectiveModel,
+                );
+            }
+        }
+
+        // 7. Count eligible debtors.
         $eligibleCount = $this->getResyncableDebtors($upload)->count();
         if ($eligibleCount === 0) {
             return new ResyncEligibility(

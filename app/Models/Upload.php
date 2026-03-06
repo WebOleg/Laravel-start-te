@@ -29,6 +29,7 @@ class Upload extends Model
     public const JOB_CANCELLED = 'cancelled';
 
     public const MAX_RESYNC_ATTEMPTS = 3;
+    public const RESYNC_COOLDOWN_HOURS = 120;
 
     protected $fillable = [
         'filename',
