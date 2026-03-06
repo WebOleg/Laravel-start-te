@@ -26,6 +26,7 @@ class Upload extends Model
     public const JOB_PROCESSING = 'processing';
     public const JOB_COMPLETED = 'completed';
     public const JOB_FAILED = 'failed';
+    public const JOB_CANCELLED = 'cancelled';
 
     public const MAX_RESYNC_ATTEMPTS = 3;
 
@@ -237,6 +238,15 @@ class Upload extends Model
     {
         $this->update([
             'billing_status' => self::JOB_COMPLETED,
+            'billing_completed_at' => now(),
+        ]);
+        $this->clearBillingCacheLocks();
+    }
+
+    public function markBillingCancelled(): void
+    {
+        $this->update([
+            'billing_status' => self::JOB_CANCELLED,
             'billing_completed_at' => now(),
         ]);
         $this->clearBillingCacheLocks();

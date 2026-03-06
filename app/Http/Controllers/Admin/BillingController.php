@@ -76,12 +76,12 @@ class BillingController extends Controller
         if ($isResync) {
             $this->resyncService->cancelResync($upload);
         } else {
-            Cache::put("billing_sync_stop_{$upload->id}", true, 3600);
-
             $upload->update([
                 'billing_status' => Upload::STATUS_CANCELLING,
                 'status' => Upload::STATUS_CANCELLING,
             ]);
+
+            Cache::put("billing_sync_stop_{$upload->id}", true, 3600);
         }
 
         return response()->json([
