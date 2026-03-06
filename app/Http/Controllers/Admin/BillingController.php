@@ -108,6 +108,19 @@ class BillingController extends Controller
 
         $lockKey = "billing_sync_{$upload->id}_{$debtorType}";
 
+        // Block sync/resync if upload is voiding or already cancelled
+        if (in_array($upload->billing_status, [Upload::STATUS_VOIDING, Upload::STATUS_CANCELLED]) ||
+            in_array($upload->status, [Upload::STATUS_VOIDING, Upload::STATUS_CANCELLED])) {
+            return response()->json([
+                'message' => 'Cannot start billing while upload is voiding or has been cancelled.',
+                'data' => [
+                    'upload_id' => $upload->id,
+                    'status' => $upload->status,
+                    'billing_status' => $upload->billing_status,
+                ],
+            ], 422);
+        }
+
         // Validate: Allow 'all' OR specific models
         $validTypes = array_merge([DebtorProfile::ALL], DebtorProfile::BILLING_MODELS);
 
