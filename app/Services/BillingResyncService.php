@@ -17,40 +17,23 @@ use Illuminate\Support\Facades\Log;
 
 class BillingResyncService
 {
-    /**
-     * Models that support resync. Only Legacy is eligible — Flywheel and Recovery
-     * manage their own billing cycles via DebtorProfile.next_bill_at and are retried
-     * automatically by the scheduler.
-     */
+    // Only Legacy supports resync; Flywheel and Recovery manage their own cycles
     private const RESYNCABLE_MODELS = [
         DebtorProfile::MODEL_LEGACY,
     ];
 
-    /**
-     * Check whether resync is allowed for a specific billing model.
-     */
+    // Check if resync is allowed for the given billing model
     public function isResyncAllowedForModel(string $billingModel): bool
     {
         return in_array($billingModel, self::RESYNCABLE_MODELS, true);
     }
 
-    /**
-     * Evaluate whether resync can proceed for the given upload.
-     *
-     * Checks (in order):
-     *  1. Explicit billing model must be Legacy (or 'all' to auto-filter).
-     *  2. Upload-level guard: reject if upload is non-Legacy with zero Legacy debtors.
-     *  3. Cache lock: no concurrent resync in progress.
-     *  4. Billing not currently processing.
-     *  5. Resync cap not exceeded.
-     *  6. Cooldown period between runs (120 hours).
-     *  7. At least one eligible debtor exists.
-     */
+    // Evaluate if resync can proceed (model validation, locks, cap, cooldown, eligible debtors)
     public function canResync(Upload $upload, ?string $billingModel = null): ResyncEligibility
     {
         $effectiveModel = $billingModel ?: DebtorProfile::ALL;
 
-        // 1. Reject non-Legacy explicit model requests.
+        // Reject non-Legacy explicit model requests
         if ($effectiveModel !== DebtorProfile::ALL && !$this->isResyncAllowedForModel($effectiveModel)) {
             return new ResyncEligibility(
                 allowed: false,
@@ -60,8 +43,7 @@ class BillingResyncService
             );
         }
 
-        // 2. Upload-level guard: if the upload's own billing_model is non-Legacy,
-        //    check whether it has any Legacy debtors at all. If not, there is nothing to resync.
+        // Guard: if non-Legacy upload, check for Legacy debtors
         if (
             $upload->billing_model !== DebtorProfile::MODEL_LEGACY
             && $effectiveModel === DebtorProfile::ALL
@@ -84,7 +66,7 @@ class BillingResyncService
             }
         }
 
-        // 3. Concurrent resync lock.
+        // Check concurrent resync lock
         if (Cache::has("billing_resync_{$upload->id}")) {
             return new ResyncEligibility(
                 allowed: false,
@@ -93,7 +75,7 @@ class BillingResyncService
             );
         }
 
-        // 4. Billing currently processing.
+        // Check if billing is processing
         if ($upload->billing_status === Upload::JOB_PROCESSING) {
             return new ResyncEligibility(
                 allowed: false,
@@ -102,7 +84,7 @@ class BillingResyncService
             );
         }
 
-        // 5. Resync cap.
+        // Check resync cap
         $resyncCount = count($upload->billing_runs ?? []);
         if ($resyncCount >= Upload::MAX_RESYNC_ATTEMPTS) {
             return new ResyncEligibility(
@@ -113,7 +95,7 @@ class BillingResyncService
             );
         }
 
-        // 6. Cooldown period between runs.
+        // Enforce cooldown period
         if ($upload->billing_completed_at) {
             $minutesSinceLastRun = $upload->billing_completed_at->diffInMinutes(now());
             $cooldownMinutes = Upload::RESYNC_COOLDOWN_HOURS * 60;
@@ -132,7 +114,7 @@ class BillingResyncService
             }
         }
 
-        // 7. Count eligible debtors.
+        // Count eligible debtors
         $eligibleCount = $this->getResyncableDebtors($upload)->count();
         if ($eligibleCount === 0) {
             return new ResyncEligibility(
@@ -152,38 +134,26 @@ class BillingResyncService
         );
     }
 
-    /**
-     * Build an Eloquent query for debtors eligible for resync.
-     *
-     * A debtor is resyncable when ALL of the following are true:
-     *  - validation_status = 'valid'
-     *  - debtor.billing_model = 'legacy' (debtor-level snapshot)
-     *  - debtor has no profile OR profile.billing_model = 'legacy' (source of truth)
-     *  - No billing attempt is in a terminal non-retriable state (approved or chargebacked);
-     *    pending attempts are treated as stuck/unresolved and are retriable
-     *  - VOP verification passed or was never required
-     */
+    // Query debtors eligible for resync (valid, legacy, no terminal attempts, VOP passed)
     public function getResyncableDebtors(Upload $upload): Builder
     {
         return Debtor::where('upload_id', $upload->id)
             ->where('validation_status', Debtor::VALIDATION_VALID)
-            // Debtor-level model check: only Legacy debtors.
+            // Only Legacy debtors
             ->where('billing_model', DebtorProfile::MODEL_LEGACY)
-            // Profile-level model check: no profile OR profile is Legacy.
+            // No profile OR profile is Legacy
             ->where(function (Builder $q) {
                 $q->whereDoesntHave('debtorProfile')
                   ->orWhereHas('debtorProfile', fn (Builder $p) => $p->where('billing_model', DebtorProfile::MODEL_LEGACY));
             })
-            // Status check: exclude debtors that have ANY billing attempt in a
-            // terminal non-retriable state (approved, chargebacked).
-            // Pending attempts are treated as stuck/unresolved and are retriable.
+            // Exclude debtors with terminal attempts (approved/chargebacked)
             ->whereDoesntHave('billingAttempts', function (Builder $ba) {
                 $ba->whereIn('status', [
                     BillingAttempt::STATUS_APPROVED,
                     BillingAttempt::STATUS_CHARGEBACKED,
                 ]);
             })
-            // VOP filter: only debtors with no VOP check or passed verification.
+            // No VOP check or passed verification
             ->where(function (Builder $q) {
                 $q->whereDoesntHave('vopLogs')
                   ->orWhereHas('vopLogs', function (Builder $vop) {
@@ -195,19 +165,13 @@ class BillingResyncService
             });
     }
 
-    /**
-     * Check whether a resync is currently in progress for the given upload.
-     */
+    // Check if resync is currently in progress
     public function isResyncInProgress(Upload $upload): bool
     {
         return Cache::has("billing_resync_{$upload->id}");
     }
 
-    /**
-     * Get billing attempts eligible for voiding.
-     * For resync uploads, scopes to only the most recent run.
-     * For initial sync uploads, returns all eligible attempts.
-     */
+    // Get voidable attempts (approved/pending with unique_id, scoped to recent run if applicable)
     public function getVoidableAttempts(Upload $upload): Builder
     {
         $query = BillingAttempt::where('upload_id', $upload->id)
@@ -224,19 +188,13 @@ class BillingResyncService
         return $query;
     }
 
-    /**
-     * Cancel an active resync by setting the kill switch and clearing resync-specific locks.
-     *
-     * The kill switch (billing_sync_stop_{id}) is shared with normal sync — ProcessBillingChunkJob
-     * checks it to terminate the batch. This method additionally clears the resync cache lock
-     * so the stats endpoint no longer reports resync as in-progress.
-     */
+    // Cancel resync: set kill switch, clear locks, update status to 'cancelling'
     public function cancelResync(Upload $upload): void
     {
-        // Set the shared kill switch (60 min TTL safety net).
+        // Set kill switch (60 min TTL)
         Cache::put("billing_sync_stop_{$upload->id}", true, 3600);
 
-        // Clear resync-specific locks so stats endpoint reflects the cancellation.
+        // Clear resync locks
         Cache::forget("billing_resync_{$upload->id}");
         Cache::forget("billing_sync_{$upload->id}_" . DebtorProfile::MODEL_LEGACY);
 
@@ -250,22 +208,12 @@ class BillingResyncService
         ]);
     }
 
-    /**
-     * Execute the full resync workflow:
-     *  1. Acquire cache lock
-     *  2. Archive the previous billing run
-     *  3. Reset eligible debtors to 'uploaded'
-     *  4. Dispatch ProcessBillingJob for Legacy model
-     */
+    // Execute resync: acquire lock, archive run, void attempts, reset debtors, dispatch job
     public function executeResync(Upload $upload): ResyncResult
     {
         $resyncLockKey = "billing_resync_{$upload->id}";
 
-        // Only treat this as a true resync (and set the resync lock) when there is
-        // an existing billing run to archive. On the very first sync for an upload
-        // with is_30d_cool = false, there is no prior run — setting the resync lock
-        // would cause is_resync_processing to appear true on the stats endpoint even
-        // though it is just an initial sync.
+        // Set resync flag only if prior run exists (avoid initial sync false positive)
         $isResync = $upload->billing_started_at !== null || !empty($upload->billing_runs ?? []);
 
         if ($isResync) {
@@ -279,7 +227,7 @@ class BillingResyncService
             $resetCount = 0;
 
             DB::transaction(function () use ($upload, $resyncDebtorIds, &$archived, &$resetCount) {
-                // Archive the previous billing run if one exists.
+                // Archive previous billing run if exists
                 if ($upload->billing_started_at !== null) {
                     $existingRuns = $upload->billing_runs ?? [];
                     $existingRuns[] = [
@@ -301,10 +249,8 @@ class BillingResyncService
                     $archived = true;
                 }
 
-                // Reset eligible debtors back to 'uploaded' so ProcessBillingJob picks them up.
+                // Reset eligible debtors to 'uploaded', void pending attempts
                 if ($resyncDebtorIds->isNotEmpty()) {
-                    // Void any stuck pending billing attempts so ProcessBillingJob
-                    // does not re-exclude these debtors via its active-attempt guard.
                     BillingAttempt::whereIn('debtor_id', $resyncDebtorIds)
                         ->where('status', BillingAttempt::STATUS_PENDING)
                         ->update(['status' => BillingAttempt::STATUS_VOIDED]);
@@ -314,7 +260,7 @@ class BillingResyncService
                 }
             });
 
-            // Dispatch the billing job targeting Legacy debtors only.
+            // Count eligible debtors and dispatch job
             $eligibleCount = $this->getResyncableDebtors($upload)->count();
 
             if ($eligibleCount > 0) {
@@ -342,8 +288,7 @@ class BillingResyncService
                 );
             }
 
-            // Edge case: all debtors became ineligible between canResync and execute
-            // (e.g. concurrent reconciliation approved them). Clean up locks.
+            // Edge case: no eligible debtors remain, clean up locks
             if ($isResync) {
                 Cache::forget($resyncLockKey);
             }
