@@ -225,13 +225,13 @@ class BillingAttemptControllerTest extends TestCase
 
     public function test_index_search_finds_by_debtor_name(): void
     {
-        $debtor = Debtor::factory()->create(['first_name' => 'Waldo', 'last_name' => 'Smith']);
-        BillingAttempt::factory()->create(['debtor_id' => $debtor->id]);
+        $attempt = BillingAttempt::factory()->create(); // debtor created randomly by factory
+        $debtor = $attempt->debtor;
 
         BillingAttempt::factory()->create(); // Random other
 
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
-            ->getJson('/api/admin/billing-attempts?search=Waldo');
+            ->getJson('/api/admin/billing-attempts?search=' . $debtor->first_name);
 
         $response->assertStatus(200);
         $this->assertCount(1, $response->json('data'));

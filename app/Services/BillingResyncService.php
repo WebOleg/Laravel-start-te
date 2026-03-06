@@ -221,12 +221,14 @@ class BillingResyncService
         }
 
         try {
-            $resyncDebtorIds = $this->getResyncableDebtors($upload)->pluck('id');
+            $resyncDebtorIds = collect();
 
             $archived = false;
             $resetCount = 0;
 
-            DB::transaction(function () use ($upload, $resyncDebtorIds, &$archived, &$resetCount) {
+            DB::transaction(function () use ($upload, &$resyncDebtorIds, &$archived, &$resetCount) {
+                $resyncDebtorIds = $this->getResyncableDebtors($upload)->pluck('id');
+
                 // Archive previous billing run if exists
                 if ($upload->billing_started_at !== null) {
                     $existingRuns = $upload->billing_runs ?? [];

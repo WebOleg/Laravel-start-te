@@ -36,7 +36,7 @@ class UploadFactory extends Factory
             'processed_records' => $processedRecords,
             'failed_records' => $failedRecords,
             'uploaded_by' => null,
-            'is_30d_cool' => fake()->boolean(30), // 30% chance of true
+            'is_30d_cool' => null,
         ];
     }
 
