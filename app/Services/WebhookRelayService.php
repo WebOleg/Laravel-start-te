@@ -59,7 +59,6 @@ class WebhookRelayService
 
         foreach ($activeProxies as $key => $proxy) {
             $domain = $proxy['domain'];
-
             $email =  'admin@' . $domain;
 
             // Check if the certificate file already exists
@@ -68,28 +67,25 @@ class WebhookRelayService
             if ($certCheck === 'missing') {
                 Log::info("Generating new SSL certificate for domain: {$domain}");
 
-                // Create a temporary HTTP-only config so Certbot can verify the domain
+                // Use Heredoc to safely write the temporary config
                 $tempNginx = "server { listen 80; server_name {$domain}; }";
                 $tempConfPath = "/etc/nginx/sites-enabled/temp-{$domain}.conf";
-                $ssh->exec('echo ' . escapeshellarg($tempNginx) . " > {$tempConfPath}");
+                $ssh->exec("cat << 'EOF_NGINX' > {$tempConfPath}\n{$tempNginx}\nEOF_NGINX");
 
                 // Reload Nginx to serve the temporary block
                 $ssh->exec('systemctl reload nginx');
 
                 // Run Certbot via the Nginx plugin
-                // 'certonly' gets the cert without editing our Nginx configs permanently
                 $certbotCmd = "certbot certonly --nginx -d {$domain} --non-interactive --agree-tos -m {$email}";
                 $ssh->exec($certbotCmd);
 
                 // Remove the temporary config
                 $ssh->exec("rm -f {$tempConfPath}");
 
-                // Verify success: If Certbot failed (e.g. bad DNS records), we MUST skip
-                // generating the final config for this domain, or Nginx will crash completely.
                 $verifyCert = trim($ssh->exec("test -f /etc/letsencrypt/live/{$domain}/fullchain.pem && echo 'exists' || echo 'missing'"));
                 if ($verifyCert === 'missing') {
                     Log::error("Certbot failed for {$domain}. Skipping this relay to prevent Nginx crash.");
-                    unset($activeProxies[$key]); // Remove from the array so NginxConfigService ignores it
+                    unset($activeProxies[$key]);
                 }
             }
         }
@@ -97,7 +93,6 @@ class WebhookRelayService
         // Re-index the array in case any failed domains were unset
         $activeProxies = array_values($activeProxies);
 
-        // If all proxies failed cert generation, abort early
         if (empty($activeProxies)) {
             Log::error('All relays failed SSL generation. Aborting Nginx deployment.');
             return;
@@ -105,16 +100,21 @@ class WebhookRelayService
 
         // Generate the final Nginx config string with SSL included
         $nginxConfigString = $this->nginxService->generate($activeProxies);
-
         $tempPath = '/tmp/webhook-relays.conf';
-        $ssh->exec('echo ' . escapeshellarg($nginxConfigString) . ' > ' . $tempPath);
+
+        // Use a Bash Heredoc with single quotes around the delimiter to safely
+        // write multiline text containing '$' variables exactly as they are.
+        $ssh->exec("cat << 'EOF_NGINX' > {$tempPath}\n{$nginxConfigString}\nEOF_NGINX");
+
         $ssh->exec("mv {$tempPath} {$finalPath}");
         $ssh->exec("ln -sf {$finalPath} {$enabledPath}");
 
-        // Test Nginx configuration
-        $testOutput = $ssh->exec('nginx -t 2>&1');
+        // Fix 2 & 3: Inject /usr/sbin into the PATH, and use '&& echo "NGINX_OK"'
+        // to deterministically check the exit status rather than parsing log strings.
+        $testCmd = 'export PATH=$PATH:/usr/sbin:/sbin; nginx -t 2>&1 && echo "NGINX_OK"';
+        $testOutput = $ssh->exec($testCmd);
 
-        if (str_contains($testOutput, 'syntax is ok')) {
+        if (str_contains($testOutput, 'NGINX_OK')) {
             $ssh->exec('systemctl reload nginx');
             Log::info('Nginx configuration successfully deployed and reloaded.');
         } else {
