@@ -47,79 +47,75 @@ class WebhookRelayService
             return;
         }
 
-        // Create a sudo prefix that pipes the password in so it doesn't freeze asking for one
-        // The '-p ""' prevents sudo from printing the password prompt text to our output logs
-        $sudo = "echo " . escapeshellarg($sshPass) . " | sudo -S -p '' ";
-
         $finalPath = '/etc/nginx/sites-available/webhook-relays.conf';
         $enabledPath = '/etc/nginx/sites-enabled/webhook-relays.conf';
 
         if (empty($activeProxies)) {
-            // Use $sudo here
-            $ssh->exec("{$sudo}rm -f {$finalPath} {$enabledPath}");
-            $ssh->exec("{$sudo}/usr/bin/systemctl reload nginx");
+            $ssh->exec("rm -f {$finalPath} {$enabledPath}");
+            $ssh->exec('systemctl reload nginx');
             Log::info('No active webhook relays found. Nginx configuration removed.');
             return;
         }
 
         foreach ($activeProxies as $key => $proxy) {
             $domain = $proxy['domain'];
+
             $email =  'admin@' . $domain;
 
-            // Use $sudo because /etc/letsencrypt requires root to read
-            $certCheck = trim($ssh->exec("{$sudo}test -f /etc/letsencrypt/live/{$domain}/fullchain.pem && echo 'exists' || echo 'missing'"));
+            // Check if the certificate file already exists
+            $certCheck = trim($ssh->exec("test -f /etc/letsencrypt/live/{$domain}/fullchain.pem && echo 'exists' || echo 'missing'"));
 
             if ($certCheck === 'missing') {
                 Log::info("Generating new SSL certificate for domain: {$domain}");
 
+                // Create a temporary HTTP-only config so Certbot can verify the domain
                 $tempNginx = "server { listen 80; server_name {$domain}; }";
                 $tempConfPath = "/etc/nginx/sites-enabled/temp-{$domain}.conf";
+                $ssh->exec('echo ' . escapeshellarg($tempNginx) . " > {$tempConfPath}");
 
-                // Write temp config to /tmp first (standard users can write here), then sudo move it
-                $ssh->exec("cat << 'EOF_NGINX' > /tmp/temp-{$domain}.conf\n{$tempNginx}\nEOF_NGINX");
-                $ssh->exec("{$sudo}mv /tmp/temp-{$domain}.conf {$tempConfPath}");
+                // Reload Nginx to serve the temporary block
+                $ssh->exec('systemctl reload nginx');
 
-                // Reload Nginx
-                $ssh->exec("{$sudo}/usr/bin/systemctl reload nginx");
-
-                // Run Certbot with sudo
+                // Run Certbot via the Nginx plugin
+                // 'certonly' gets the cert without editing our Nginx configs permanently
                 $certbotCmd = "certbot certonly --nginx -d {$domain} --non-interactive --agree-tos -m {$email}";
-                $ssh->exec("{$sudo}{$certbotCmd}");
+                $ssh->exec($certbotCmd);
 
-                // Clean up temp config
-                $ssh->exec("{$sudo}rm -f {$tempConfPath}");
+                // Remove the temporary config
+                $ssh->exec("rm -f {$tempConfPath}");
 
-                $verifyCert = trim($ssh->exec("{$sudo}test -f /etc/letsencrypt/live/{$domain}/fullchain.pem && echo 'exists' || echo 'missing'"));
+                // Verify success: If Certbot failed (e.g. bad DNS records), we MUST skip
+                // generating the final config for this domain, or Nginx will crash completely.
+                $verifyCert = trim($ssh->exec("test -f /etc/letsencrypt/live/{$domain}/fullchain.pem && echo 'exists' || echo 'missing'"));
                 if ($verifyCert === 'missing') {
                     Log::error("Certbot failed for {$domain}. Skipping this relay to prevent Nginx crash.");
-                    unset($activeProxies[$key]);
+                    unset($activeProxies[$key]); // Remove from the array so NginxConfigService ignores it
                 }
             }
         }
 
+        // Re-index the array in case any failed domains were unset
         $activeProxies = array_values($activeProxies);
 
+        // If all proxies failed cert generation, abort early
         if (empty($activeProxies)) {
             Log::error('All relays failed SSL generation. Aborting Nginx deployment.');
             return;
         }
 
+        // Generate the final Nginx config string with SSL included
         $nginxConfigString = $this->nginxService->generate($activeProxies);
+
         $tempPath = '/tmp/webhook-relays.conf';
+        $ssh->exec('echo ' . escapeshellarg($nginxConfigString) . ' > ' . $tempPath);
+        $ssh->exec("mv {$tempPath} {$finalPath}");
+        $ssh->exec("ln -sf {$finalPath} {$enabledPath}");
 
-        // Write the final config to /tmp (no sudo needed for /tmp)
-        $ssh->exec("cat << 'EOF_NGINX' > {$tempPath}\n{$nginxConfigString}\nEOF_NGINX");
+        // Test Nginx configuration
+        $testOutput = $ssh->exec('nginx -t 2>&1');
 
-        // Move and symlink with sudo
-        $ssh->exec("{$sudo}mv {$tempPath} {$finalPath}");
-        $ssh->exec("{$sudo}ln -sf {$finalPath} {$enabledPath}");
-
-        // Test Nginx configuration using the absolute path to avoid sudo PATH stripping
-        $testCmd = "{$sudo}/usr/sbin/nginx -t 2>&1 && echo 'NGINX_OK'";
-        $testOutput = $ssh->exec($testCmd);
-
-        if (str_contains($testOutput, 'NGINX_OK')) {
-            $ssh->exec("{$sudo}/usr/bin/systemctl reload nginx");
+        if (str_contains($testOutput, 'syntax is ok')) {
+            $ssh->exec('systemctl reload nginx');
             Log::info('Nginx configuration successfully deployed and reloaded.');
         } else {
             Log::error('Remote Nginx config syntax error: ' . $testOutput);
