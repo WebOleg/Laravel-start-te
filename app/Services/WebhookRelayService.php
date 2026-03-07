@@ -52,7 +52,7 @@ class WebhookRelayService
 
         if (empty($activeProxies)) {
             $ssh->exec("rm -f {$finalPath} {$enabledPath}");
-            $ssh->exec('systemctl reload nginx');
+            $ssh->exec('sudo systemctl reload nginx');
             Log::info('No active webhook relays found. Nginx configuration removed.');
             return;
         }
@@ -74,7 +74,7 @@ class WebhookRelayService
                 $ssh->exec('echo ' . escapeshellarg($tempNginx) . " > {$tempConfPath}");
 
                 // Reload Nginx to serve the temporary block
-                $ssh->exec('systemctl reload nginx');
+                $ssh->exec('sudo systemctl reload nginx');
 
                 // Run Certbot via the Nginx plugin
                 // 'certonly' gets the cert without editing our Nginx configs permanently
@@ -115,7 +115,7 @@ class WebhookRelayService
         $testOutput = $ssh->exec('nginx -t 2>&1');
 
         if (str_contains($testOutput, 'syntax is ok')) {
-            $ssh->exec('systemctl reload nginx');
+            $ssh->exec('sudo systemctl reload nginx');
             Log::info('Nginx configuration successfully deployed and reloaded.');
         } else {
             Log::error('Remote Nginx config syntax error: ' . $testOutput);
