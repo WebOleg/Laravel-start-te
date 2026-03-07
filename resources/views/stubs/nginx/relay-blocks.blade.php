@@ -5,8 +5,8 @@
         listen [::]:80;
         server_name {{ $proxy['domain'] }};
 
-        # Redirect to HTTPS
-        return 301 https://$host$request_uri;
+        # Redirect to HTTPS using 308 to preserve POST method and payload
+        return 308 https://$host$request_uri;
     }
 
     # HTTPS Server Block: Handle SSL and Reverse Proxy
@@ -23,6 +23,9 @@
 
         location / {
             proxy_pass {{ rtrim($proxy['target'], '/') }};
+
+            # Required for HTTPS proxying to servers using SNI
+            proxy_ssl_server_name on;
 
             proxy_set_header Host {{ parse_url($proxy['target'], PHP_URL_HOST) ?? $proxy['target'] }};
             proxy_set_header X-Real-IP $remote_addr;
