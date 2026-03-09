@@ -585,14 +585,14 @@ class UploadController extends Controller
         if ($upload->is_30d_cool === false) {
             $resyncEligible = $this->resyncService->getResyncableDebtors($upload);
 
-            $upload->ready_for_sync_count  = $resyncEligible->count();
-            $upload->ready_for_sync_amount = round((float) (clone $resyncEligible)->sum('amount'), 2);
+            $upload->setAttribute('ready_for_sync_count', $resyncEligible->count());
+            $upload->setAttribute('ready_for_sync_amount', round((float) (clone $resyncEligible)->sum('amount'), 2));
         } else {
-            $upload->ready_for_sync_count  = $upload->debtors()->readyForSync()->count();
-            $upload->ready_for_sync_amount = round(
+            $upload->setAttribute('ready_for_sync_count', $upload->debtors()->readyForSync()->count());
+            $upload->setAttribute('ready_for_sync_amount', round(
                 (float) $upload->debtors()->readyForSync()->sum('amount'),
                 2
-            );
+            ));
         }
 
         // Enrich each archived billing run with recovered_count / recovered_amount
@@ -631,7 +631,7 @@ class UploadController extends Controller
             }, $billingRuns);
         }
 
-        $upload->enriched_billing_runs = $billingRuns;
+        $upload->setAttribute('enriched_billing_runs', $billingRuns);
     }
 
     private function calculateProgress(Upload $upload): float

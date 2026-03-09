@@ -29,6 +29,8 @@ class Upload extends Model
     public const JOB_CANCELLED = 'cancelled';
 
     public const MAX_RESYNC_ATTEMPTS = 3;
+
+    // Cooldown between resyncs, in hours (120 h = 5 days).
     public const RESYNC_COOLDOWN_HOURS = 120;
 
     protected $fillable = [

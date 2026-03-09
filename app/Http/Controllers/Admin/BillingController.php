@@ -11,6 +11,7 @@ use App\Models\DebtorProfile;
 use App\Models\Upload;
 use App\Models\VopLog;
 use App\Services\BillingResyncService;
+use App\Services\Dto\ResyncEligibility;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Http\Request;
@@ -66,6 +67,13 @@ class BillingController extends Controller
      */
     public function cancel(Upload $upload): JsonResponse
     {
+        // Guard: only allow cancel when billing is actually running
+        if (!in_array($upload->billing_status, [Upload::JOB_PROCESSING, Upload::STATUS_CANCELLING])) {
+            return response()->json([
+                'message' => 'No active billing to cancel.',
+            ], 422);
+        }
+
         $isResync = $this->resyncService->isResyncInProgress($upload);
 
         if ($isResync) {
@@ -77,6 +85,11 @@ class BillingController extends Controller
             ]);
 
             Cache::put("billing_sync_stop_{$upload->id}", true, 3600);
+
+            // Clear sync lock keys so duplicate-dispatch check doesn't block future syncs
+            foreach (['all', 'legacy', 'flywheel', 'recovery'] as $model) {
+                Cache::forget("billing_sync_{$upload->id}_{$model}");
+            }
         }
 
         return response()->json([
@@ -164,7 +177,7 @@ class BillingController extends Controller
                         'resync_count' => count($upload->billing_runs ?? []),
                         'max_resync'   => Upload::MAX_RESYNC_ATTEMPTS,
                     ],
-                ], $this->resyncHttpStatus($eligibility->reason));
+                ], $this->resyncHttpStatus($eligibility));
             }
 
             $result = $this->resyncService->executeResync($upload);
@@ -329,13 +342,13 @@ class BillingController extends Controller
     /**
      * Map resync denial reasons to appropriate HTTP status codes.
      */
-    private function resyncHttpStatus(string $reason): int
+    private function resyncHttpStatus(ResyncEligibility $eligibility): int
     {
-        if (str_contains($reason, 'already in progress')) {
-            return 409;
-        }
-
-        return 422;
+        return match ($eligibility->code) {
+            ResyncEligibility::CODE_LOCK,
+            ResyncEligibility::CODE_PROCESSING => 409,
+            default => 422,
+        };
     }
 
     private function checkVopCompleted(Upload $upload): array

@@ -40,6 +40,7 @@ class BillingResyncService
                 reason: "Resync is not supported for the '{$effectiveModel}' billing model. "
                     . "Only Legacy supports resync — Flywheel and Recovery manage their own billing cycles automatically.",
                 billingModel: $effectiveModel,
+                code: ResyncEligibility::CODE_MODEL_NOT_SUPPORTED,
             );
         }
 
@@ -62,6 +63,7 @@ class BillingResyncService
                     reason: "This upload uses the '{$upload->billing_model}' billing model and contains no Legacy debtors. "
                         . 'Resync is only available for Legacy debtors.',
                     billingModel: $effectiveModel,
+                    code: ResyncEligibility::CODE_NO_LEGACY_DEBTORS,
                 );
             }
         }
@@ -72,6 +74,7 @@ class BillingResyncService
                 allowed: false,
                 reason: 'A resync is already in progress for this upload.',
                 billingModel: $effectiveModel,
+                code: ResyncEligibility::CODE_LOCK,
             );
         }
 
@@ -81,6 +84,7 @@ class BillingResyncService
                 allowed: false,
                 reason: 'Billing is currently processing. Wait for it to complete before resyncing.',
                 billingModel: $effectiveModel,
+                code: ResyncEligibility::CODE_PROCESSING,
             );
         }
 
@@ -92,6 +96,7 @@ class BillingResyncService
                 reason: 'Resync limit reached. This upload has already been resynced '
                     . Upload::MAX_RESYNC_ATTEMPTS . ' time(s), which is the maximum allowed.',
                 billingModel: $effectiveModel,
+                code: ResyncEligibility::CODE_CAP,
             );
         }
 
@@ -110,6 +115,7 @@ class BillingResyncService
                     allowed: false,
                     reason: "Cooldown period active. {$hours} hour(s) and {$minutes} minute(s) remaining before the next resync is allowed.",
                     billingModel: $effectiveModel,
+                    code: ResyncEligibility::CODE_COOLDOWN,
                 );
             }
         }
@@ -123,6 +129,7 @@ class BillingResyncService
                     . 'All debtors are either approved, chargebacked, or belong to non-Legacy billing models. '
                     . 'Note: debtors with pending billing attempts are also eligible for resync.',
                 billingModel: $effectiveModel,
+                code: ResyncEligibility::CODE_NO_ELIGIBLE,
             );
         }
 
@@ -171,7 +178,12 @@ class BillingResyncService
         return Cache::has("billing_resync_{$upload->id}");
     }
 
-    // Get voidable attempts (approved/pending with unique_id, scoped to recent run if applicable)
+    // Get voidable attempts (approved/pending with unique_id, scoped to recent run if applicable).
+    //
+    // IMPORTANT: When billing_runs is non-empty (resync history exists), this
+    // query is scoped to the latest run only (created_at >= billing_started_at).
+    // Earlier runs' approved attempts are NOT included. If you need to void ALL
+    // historical attempts, query BillingAttempt directly without the time filter.
     public function getVoidableAttempts(Upload $upload): Builder
     {
         $query = BillingAttempt::where('upload_id', $upload->id)
@@ -262,8 +274,8 @@ class BillingResyncService
                 }
             });
 
-            // Count eligible debtors and dispatch job
-            $eligibleCount = $this->getResyncableDebtors($upload)->count();
+            // Use the count from the transaction to avoid race conditions
+            $eligibleCount = $resyncDebtorIds->count();
 
             if ($eligibleCount > 0) {
                 $syncLockKey = "billing_sync_{$upload->id}_" . DebtorProfile::MODEL_LEGACY;

@@ -211,6 +211,10 @@ class EmpBillingService
                 $startTime = microtime(true);
             }
 
+            if (!$debtor->relationLoaded('upload')) {
+                $debtor->load('upload');
+            }
+
             if (!$this->canBill($debtor)) {
                 $results['skipped']++;
                 continue;

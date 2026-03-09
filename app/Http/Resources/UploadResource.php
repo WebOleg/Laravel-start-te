@@ -106,7 +106,11 @@ class UploadResource extends JsonResource
 
             // Billing run history (archived snapshots of previous syncs),
             // enriched with per-run recovered_count and recovered_amount when available.
-            'billing_runs' => $this->enriched_billing_runs ?? $this->billing_runs ?? [],
+            'billing_runs' => $this->when(
+                array_key_exists('enriched_billing_runs', $this->resource->getAttributes()),
+                fn() => $this->enriched_billing_runs,
+                $this->billing_runs ?? []
+            ),
 
             // True when cooldown is explicitly OFF, billing is not currently running,
             // and the per-upload resync cap has not yet been reached.
