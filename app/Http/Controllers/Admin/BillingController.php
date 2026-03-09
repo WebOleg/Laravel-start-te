@@ -183,7 +183,7 @@ class BillingController extends Controller
             $result = $this->resyncService->executeResync($upload);
 
             return response()->json([
-                'message' => "Resync queued for {$result->eligibleCount} Legacy debtors",
+                'message' => "Resync queued for {$result->eligibleCount} debtors",
                 'data' => [
                     'upload_id'      => $upload->id,
                     'eligible'       => $result->eligibleCount,
