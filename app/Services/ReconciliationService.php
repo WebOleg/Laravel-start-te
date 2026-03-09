@@ -3,10 +3,13 @@
 /**
  * Service for reconciling billing attempts with EMP gateway.
  * Handles status synchronization and chargeback auto-blacklisting.
+ * Dispatches FetchChargebackReasonJob when new chargebacks are detected,
+ * because EMP Reconcile API does not return reason_code (only status).
  */
 
 namespace App\Services;
 
+use App\Jobs\FetchChargebackReasonJob;
 use App\Models\BillingAttempt;
 use App\Models\Debtor;
 use App\Models\Upload;
@@ -20,6 +23,7 @@ class ReconciliationService
 {
     public const CHUNK_SIZE = 50;
     public const RATE_LIMIT_PER_SECOND = 20;
+    public const CHARGEBACK_REASON_FETCH_DELAY_SECONDS = 14400;
 
     public function __construct(
         private EmpBillingService $billingService,
@@ -114,6 +118,7 @@ class ReconciliationService
             'processed' => 0,
             'changed' => 0,
             'failed' => 0,
+            'new_chargebacks' => 0,
             'details' => [],
         ];
 
@@ -123,6 +128,10 @@ class ReconciliationService
 
             if ($result['success'] && $result['changed']) {
                 $results['changed']++;
+
+                if (($result['new_status'] ?? '') === BillingAttempt::STATUS_CHARGEBACKED) {
+                    $results['new_chargebacks']++;
+                }
             } elseif (!$result['success']) {
                 $results['failed']++;
             }
@@ -134,6 +143,11 @@ class ReconciliationService
 
             // Rate limiting
             usleep((int) (1000000 / self::RATE_LIMIT_PER_SECOND));
+        }
+
+        // Dispatch delayed job to fetch reason codes for new chargebacks
+        if ($results['new_chargebacks'] > 0) {
+            $this->dispatchChargebackReasonFetch($results['new_chargebacks']);
         }
 
         return $results;
@@ -227,6 +241,25 @@ class ReconciliationService
                 'error_code' => $errorCode,
             ]);
         }
+    }
+
+    /**
+     * Dispatch a delayed job to fetch chargeback reason codes from EMP Chargeback API.
+     * EMP Reconcile API returns status=chargebacked without reason_code.
+     * The Chargeback API has a delay of several hours, so we schedule the fetch accordingly.
+     */
+    private function dispatchChargebackReasonFetch(int $count): void
+    {
+        $today = now()->format('Y-m-d');
+
+        FetchChargebackReasonJob::dispatch($today)
+            ->delay(now()->addSeconds(self::CHARGEBACK_REASON_FETCH_DELAY_SECONDS));
+
+        Log::info('Dispatched FetchChargebackReasonJob', [
+            'chargeback_date' => $today,
+            'new_chargebacks' => $count,
+            'delay_seconds' => self::CHARGEBACK_REASON_FETCH_DELAY_SECONDS,
+        ]);
     }
 
     /**
