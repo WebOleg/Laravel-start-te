@@ -12,6 +12,7 @@ use App\Http\Requests\StoreUploadRequest;
 use App\Http\Resources\UploadResource;
 use App\Http\Resources\DebtorResource;
 use App\Models\DebtorProfile;
+use App\Models\EmpAccount;
 use App\Models\Upload;
 use App\Models\Debtor;
 use App\Models\BillingAttempt;
@@ -25,6 +26,7 @@ use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 
 class UploadController extends Controller
@@ -452,6 +454,200 @@ class UploadController extends Controller
                 'price_breakdown' => $priceBreakdown,
                 'valid_total_amount' => round((float) $validTotalAmount, 2),
                 'cb_breakdown' => $cbBreakdown,
+            ],
+        ]);
+    }
+
+    public function reassign(Request $request, Upload $upload): JsonResponse
+    {
+        $validated = $request->validate([
+            'emp_account_id' => 'required|integer|exists:emp_accounts,id',
+        ]);
+
+        $targetAccountId = $validated['emp_account_id'];
+        $targetAccount = EmpAccount::findOrFail($targetAccountId);
+
+        if (!$targetAccount->is_active) {
+            return response()->json([
+                'message' => 'Target EMP account is not active.',
+            ], 422);
+        }
+
+        if ($upload->emp_account_id === $targetAccountId) {
+            return response()->json([
+                'message' => 'Upload is already assigned to this account.',
+            ], 422);
+        }
+
+        $previousAccountId = $upload->emp_account_id;
+
+        Log::info('Upload reassign started', [
+            'upload_id' => $upload->id,
+            'from_account_id' => $previousAccountId,
+            'to_account_id' => $targetAccountId,
+            'to_account_name' => $targetAccount->name,
+            'admin_id' => $request->user()?->id,
+        ]);
+
+        try {
+            $result = DB::transaction(function () use ($upload, $targetAccountId) {
+                $upload->update(['emp_account_id' => $targetAccountId]);
+
+                $debtorsUpdated = Debtor::where('upload_id', $upload->id)
+                    ->where(function ($q) use ($targetAccountId) {
+                        $q->where('emp_account_id', '!=', $targetAccountId)
+                            ->orWhereNull('emp_account_id');
+                    })
+                    ->update(['emp_account_id' => $targetAccountId]);
+
+                $debtorIds = Debtor::where('upload_id', $upload->id)->pluck('id');
+
+                $pendingBillingUpdated = 0;
+                $skippedSubmitted = 0;
+
+                if ($debtorIds->isNotEmpty()) {
+                    $pendingBillingUpdated = DB::table('billing_attempts')
+                        ->whereIn('debtor_id', $debtorIds)
+                        ->where('status', 'pending')
+                        ->whereNull('unique_id')
+                        ->where(function ($q) use ($targetAccountId) {
+                            $q->where('emp_account_id', '!=', $targetAccountId)
+                                ->orWhereNull('emp_account_id');
+                        })
+                        ->update(['emp_account_id' => $targetAccountId]);
+
+                    $skippedSubmitted = DB::table('billing_attempts')
+                        ->whereIn('debtor_id', $debtorIds)
+                        ->where('status', 'pending')
+                        ->whereNotNull('unique_id')
+                        ->count();
+                }
+
+                return [
+                    'debtors_updated' => $debtorsUpdated,
+                    'pending_billing_updated' => $pendingBillingUpdated,
+                    'skipped_submitted' => $skippedSubmitted,
+                ];
+            });
+
+            Log::info('Upload reassign completed', [
+                'upload_id' => $upload->id,
+                'from_account_id' => $previousAccountId,
+                'to_account_id' => $targetAccountId,
+                'debtors_updated' => $result['debtors_updated'],
+                'pending_billing_updated' => $result['pending_billing_updated'],
+                'skipped_submitted' => $result['skipped_submitted'],
+                'admin_id' => $request->user()?->id,
+            ]);
+
+            $upload->load('empAccount');
+
+            $message = "Upload reassigned to {$targetAccount->name}.";
+            if ($result['skipped_submitted'] > 0) {
+                $message .= " {$result['skipped_submitted']} pending attempts already submitted to EMP were left unchanged.";
+            }
+
+            return response()->json([
+                'message' => $message,
+                'data' => [
+                    'upload' => new UploadResource($upload),
+                    'debtors_updated' => $result['debtors_updated'],
+                    'pending_billing_updated' => $result['pending_billing_updated'],
+                    'skipped_submitted' => $result['skipped_submitted'],
+                ],
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Upload reassign failed', [
+                'upload_id' => $upload->id,
+                'target_account_id' => $targetAccountId,
+                'error' => $e->getMessage(),
+                'admin_id' => $request->user()?->id,
+            ]);
+
+            return response()->json([
+                'message' => 'Reassign failed. No changes were made.',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    public function updateSettings(Request $request, Upload $upload): JsonResponse
+    {
+        $validated = $request->validate([
+            'max_billing_amount' => 'nullable|numeric|min:0|max:999999.99',
+        ]);
+
+        $previousValue = $upload->max_billing_amount;
+        $upload->update($validated);
+
+        Log::info('Upload settings updated', [
+            'upload_id' => $upload->id,
+            'max_billing_amount' => [
+                'from' => $previousValue,
+                'to' => $upload->max_billing_amount,
+            ],
+            'admin_id' => $request->user()?->id,
+        ]);
+
+        return response()->json([
+            'message' => 'Upload settings updated.',
+            'data' => new UploadResource($upload),
+        ]);
+    }
+
+    public function billingCycles(Upload $upload): JsonResponse
+    {
+        $cycles = DB::table('billing_attempts')
+            ->where('upload_id', $upload->id)
+            ->select(
+                'attempt_number',
+                'status',
+                DB::raw('COUNT(*) as count'),
+                DB::raw('COALESCE(SUM(amount), 0) as total_amount')
+            )
+            ->groupBy('attempt_number', 'status')
+            ->orderBy('attempt_number')
+            ->orderBy('status')
+            ->get();
+
+        $grouped = [];
+        foreach ($cycles as $row) {
+            $cycle = $row->attempt_number;
+            if (!isset($grouped[$cycle])) {
+                $grouped[$cycle] = [
+                    'cycle' => $cycle,
+                    'statuses' => [],
+                    'total_count' => 0,
+                    'total_amount' => 0,
+                ];
+            }
+            $grouped[$cycle]['statuses'][$row->status] = [
+                'count' => (int) $row->count,
+                'amount' => round((float) $row->total_amount, 2),
+            ];
+            $grouped[$cycle]['total_count'] += (int) $row->count;
+            $grouped[$cycle]['total_amount'] += (float) $row->total_amount;
+        }
+
+        foreach ($grouped as &$cycle) {
+            $cycle['total_amount'] = round($cycle['total_amount'], 2);
+        }
+
+        $totalApprovedAmount = DB::table('billing_attempts')
+            ->where('upload_id', $upload->id)
+            ->whereIn('status', [BillingAttempt::STATUS_APPROVED, BillingAttempt::STATUS_PENDING])
+            ->sum('amount');
+
+        return response()->json([
+            'data' => [
+                'cycles' => array_values($grouped),
+                'total_cycles' => count($grouped),
+                'total_billed_amount' => round((float) $totalApprovedAmount, 2),
+                'max_billing_amount' => $upload->max_billing_amount ? (float) $upload->max_billing_amount : null,
+                'cap_remaining' => $upload->max_billing_amount
+                    ? max(0, round((float) $upload->max_billing_amount - (float) $totalApprovedAmount, 2))
+                    : null,
             ],
         ]);
     }
