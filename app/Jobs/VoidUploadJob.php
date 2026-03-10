@@ -2,8 +2,8 @@
 
 namespace App\Jobs;
 
-use App\Models\BillingAttempt;
 use App\Models\Upload;
+use App\Services\BillingResyncService;
 use App\Traits\WithLogContext;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
@@ -34,7 +34,7 @@ class VoidUploadJob implements ShouldQueue, ShouldBeUnique
         return 'void_upload_' . $this->upload->id;
     }
 
-    public function handle(): void
+    public function handle(BillingResyncService $resyncService): void
     {
         // Initialize the context
         $this->initLogContext();
@@ -43,16 +43,10 @@ class VoidUploadJob implements ShouldQueue, ShouldBeUnique
 
         Log::info('VoidUploadJob started', ['upload_id' => $uploadId]);
 
-        // Find eligible attempts:
-        // Must be Approved or Pending (async), and have a unique_id from EMP to void against.
-        $query = BillingAttempt::where('upload_id', $uploadId)
-                               ->whereIn('status', [
-                                   BillingAttempt::STATUS_APPROVED,
-                                   BillingAttempt::STATUS_PENDING,
-                               ])
-                               ->whereNotNull('unique_id');
-
-        $attemptIds = $query->pluck('id')->toArray();
+        // Find eligible attempts (scoped to latest run for resyncs)
+        $attemptIds = $resyncService->getVoidableAttempts($this->upload)
+            ->pluck('id')
+            ->toArray();
 
         if (empty($attemptIds)) {
             Log::info('VoidUploadJob: no eligible transactions to void', ['upload_id' => $uploadId]);

@@ -6,6 +6,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -215,6 +216,22 @@ class Debtor extends Model
         return $query->where('bav_selected', true)
             ->whereNull('vop_match')
             ->where('vop_status', '!=', self::VOP_ERROR);
+    }
+
+    public function scopeWithinBillingCap(Builder $query, float $maxAmount): Builder
+    {
+        return $query->whereRaw(
+            'COALESCE((SELECT SUM(ba.amount) FROM billing_attempts ba WHERE ba.debtor_id = debtors.id AND ba.status IN (?, ?)), 0) < ?',
+            [BillingAttempt::STATUS_APPROVED, BillingAttempt::STATUS_PENDING, $maxAmount]
+        );
+    }
+
+    public function scopeExceedsBillingCap(Builder $query, float $maxAmount): Builder
+    {
+        return $query->whereRaw(
+            'COALESCE((SELECT SUM(ba.amount) FROM billing_attempts ba WHERE ba.debtor_id = debtors.id AND ba.status IN (?, ?)), 0) >= ?',
+            [BillingAttempt::STATUS_APPROVED, BillingAttempt::STATUS_PENDING, $maxAmount]
+        );
     }
 
     public function hasValidationErrors(): bool

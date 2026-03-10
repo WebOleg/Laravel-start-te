@@ -229,4 +229,154 @@ class DebtorImportServiceTest extends TestCase
         ]);
         $this->ibanValidator->shouldReceive('mask')->with($iban)->andReturn('****' . substr($iban, -4));
     }
+
+    public function test_import_with_is_30d_cool_true_excludes_recently_attempted(): void
+    {
+        // Upload with cooldown enabled - should exclude debtors with SKIP_RECENTLY_ATTEMPTED
+        $upload = Upload::factory()->create([
+            'billing_model' => BillingModel::Legacy->value,
+            'is_30d_cool' => true,
+        ]);
+
+        $rows = [
+            ['First' => 'Recent', 'Last' => 'Attempt', 'IBAN' => 'DE_RECENT', 'Amount' => '100.00'],
+        ];
+
+        $columnMapping = [
+            'First' => 'first_name',
+            'Last' => 'last_name',
+            'IBAN' => 'iban',
+            'Amount' => 'amount'
+        ];
+
+        $this->mockIbanValidation('DE_RECENT');
+
+        // Mock deduplication service to return SKIP_RECENTLY_ATTEMPTED
+        $this->deduplicationService->shouldReceive('checkDebtorBatch')
+            ->once()
+            ->andReturn([
+                0 => ['reason' => DeduplicationService::SKIP_RECENTLY_ATTEMPTED, 'days_ago' => 10, 'permanent' => false]
+            ]);
+
+        $result = $this->service->importRows($upload, $rows, $columnMapping);
+
+        // Debtor should be skipped
+        $this->assertEquals(0, $result['created']);
+        $this->assertEquals(1, $result['skipped']['total']);
+        $this->assertDatabaseCount('debtors', 0);
+    }
+
+    public function test_import_with_is_30d_cool_false_includes_recently_attempted(): void
+    {
+        // Upload with cooldown disabled - should include debtors even with SKIP_RECENTLY_ATTEMPTED
+        $upload = Upload::factory()->create([
+            'billing_model' => BillingModel::Legacy->value,
+            'is_30d_cool' => false,
+        ]);
+
+        $rows = [
+            ['First' => 'Recent', 'Last' => 'Attempt', 'IBAN' => 'DE_RECENT', 'Amount' => '100.00'],
+        ];
+
+        $columnMapping = [
+            'First' => 'first_name',
+            'Last' => 'last_name',
+            'IBAN' => 'iban',
+            'Amount' => 'amount'
+        ];
+
+        $this->mockIbanValidation('DE_RECENT');
+
+        // Mock deduplication service to indicate SKIP_RECENTLY_ATTEMPTED, but should be overridden
+        $this->deduplicationService->shouldReceive('checkDebtorBatch')
+            ->once()
+            ->andReturn([
+                0 => ['reason' => DeduplicationService::SKIP_RECENTLY_ATTEMPTED, 'days_ago' => 10, 'permanent' => false]
+            ]);
+
+        $result = $this->service->importRows($upload, $rows, $columnMapping);
+
+        // Debtor should be created (cooldown bypass)
+        $this->assertEquals(1, $result['created']);
+        $this->assertEquals(0, $result['skipped']['total']);
+        $this->assertDatabaseHas('debtors', [
+            'upload_id' => $upload->id,
+            'iban' => 'DE_RECENT',
+            'first_name' => 'Recent',
+            'last_name' => 'Attempt',
+        ]);
+    }
+
+    public function test_import_with_is_30d_cool_true_still_excludes_permanent_skips(): void
+    {
+        // Even with cooldown disabled, permanent skips (blacklist, recovered, etc) should be excluded
+        $upload = Upload::factory()->create([
+            'billing_model' => BillingModel::Legacy->value,
+            'is_30d_cool' => false,
+        ]);
+
+        $rows = [
+            ['First' => 'Blacklist', 'Last' => 'Test', 'IBAN' => 'DE_BLACKLIST', 'Amount' => '100.00'],
+        ];
+
+        $columnMapping = [
+            'First' => 'first_name',
+            'Last' => 'last_name',
+            'IBAN' => 'iban',
+            'Amount' => 'amount'
+        ];
+
+        $this->mockIbanValidation('DE_BLACKLIST');
+
+        // Mock deduplication service to return SKIP_BLACKLISTED (permanent)
+        $this->deduplicationService->shouldReceive('checkDebtorBatch')
+            ->once()
+            ->andReturn([
+                0 => ['reason' => DeduplicationService::SKIP_BLACKLISTED, 'permanent' => true]
+            ]);
+
+        $result = $this->service->importRows($upload, $rows, $columnMapping);
+
+        // Debtor should be skipped (permanent reasons are always skipped)
+        $this->assertEquals(0, $result['created']);
+        $this->assertEquals(1, $result['skipped']['total']);
+        $this->assertEquals(1, $result['skipped'][DeduplicationService::SKIP_BLACKLISTED]);
+        $this->assertDatabaseCount('debtors', 0);
+    }
+
+    public function test_import_with_is_30d_cool_false_excludes_chargebacked(): void
+    {
+        // Chargebacked (permanent) should always be excluded, regardless of cooldown setting
+        $upload = Upload::factory()->create([
+            'billing_model' => BillingModel::Legacy->value,
+            'is_30d_cool' => false,
+        ]);
+
+        $rows = [
+            ['First' => 'Chargebacked', 'Last' => 'Debtor', 'IBAN' => 'DE_CHARGEBACK', 'Amount' => '100.00'],
+        ];
+
+        $columnMapping = [
+            'First' => 'first_name',
+            'Last' => 'last_name',
+            'IBAN' => 'iban',
+            'Amount' => 'amount'
+        ];
+
+        $this->mockIbanValidation('DE_CHARGEBACK');
+
+        // Mock deduplication service to return SKIP_CHARGEBACKED (permanent)
+        $this->deduplicationService->shouldReceive('checkDebtorBatch')
+            ->once()
+            ->andReturn([
+                0 => ['reason' => DeduplicationService::SKIP_CHARGEBACKED, 'permanent' => true]
+            ]);
+
+        $result = $this->service->importRows($upload, $rows, $columnMapping);
+
+        // Debtor should be skipped
+        $this->assertEquals(0, $result['created']);
+        $this->assertEquals(1, $result['skipped']['total']);
+        $this->assertEquals(1, $result['skipped'][DeduplicationService::SKIP_CHARGEBACKED]);
+    }
 }

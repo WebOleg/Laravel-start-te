@@ -186,6 +186,9 @@ class EmpChargebackSyncService
         $reasonCode = $chargeback['reason_code'] ?? null;
         $reasonDescription = $chargeback['reason_description'] ?? null;
 
+        // Backfill reason_code on billing_attempt if missing.
+        // Reconciliation marks status as chargebacked without the reason;
+        // the Chargeback API provides the actual reason code.
         // Backfill reason_code on billing_attempt if missing
         if ($reasonCode && !$billingAttempt->chargeback_reason_code) {
             $billingAttempt->update([
@@ -194,12 +197,12 @@ class EmpChargebackSyncService
             ]);
 
             $stats['reason_backfilled'] = ($stats['reason_backfilled'] ?? 0) + 1;
-
             Log::info('EMP Chargeback Sync: Backfilled reason code', [
                 'billing_attempt_id' => $billingAttempt->id,
                 'reason_code' => $reasonCode,
             ]);
         }
+
 
         // Ensure chargeback record in chargebacks table
         $existing = $billingAttempt->chargeback;

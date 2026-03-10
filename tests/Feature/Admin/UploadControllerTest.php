@@ -9,6 +9,7 @@ namespace Tests\Feature\Admin;
 use App\Models\Upload;
 use App\Models\User;
 use App\Models\EmpAccount;
+use App\Enums\BillingModel;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
@@ -146,5 +147,141 @@ class UploadControllerTest extends TestCase
 
         $upload = Upload::where('original_filename', 'test_default.csv')->first();
         $this->assertFalse($upload->meta['apply_global_lock']);
+    }
+
+    public function test_set_cooldown_on_legacy_upload_with_true(): void
+    {
+        $upload = Upload::factory()->create([
+            'billing_model' => BillingModel::Legacy->value,
+            'is_30d_cool' => false,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->patchJson('/api/admin/uploads/' . $upload->id . '/cooldown', [
+                'is_30d_cool' => true,
+            ]);
+
+        $response->assertStatus(200)
+            ->assertJsonPath('data.is_30d_cool', true);
+
+        $upload->refresh();
+        $this->assertTrue($upload->is_30d_cool);
+    }
+
+    public function test_set_cooldown_on_legacy_upload_with_false(): void
+    {
+        $upload = Upload::factory()->create([
+            'billing_model' => BillingModel::Legacy->value,
+            'is_30d_cool' => true,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->patchJson('/api/admin/uploads/' . $upload->id . '/cooldown', [
+                'is_30d_cool' => false,
+            ]);
+
+        $response->assertStatus(200)
+            ->assertJsonPath('data.is_30d_cool', false);
+
+        $upload->refresh();
+        $this->assertFalse($upload->is_30d_cool);
+    }
+
+    public function test_set_cooldown_rejects_flywheel_upload(): void
+    {
+        $upload = Upload::factory()->create([
+            'billing_model' => BillingModel::Flywheel->value,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->patchJson('/api/admin/uploads/' . $upload->id . '/cooldown', [
+                'is_30d_cool' => true,
+            ]);
+
+        $response->assertStatus(422)
+            ->assertJsonPath('message', fn($msg) => str_contains($msg, 'only applicable to Legacy'));
+    }
+
+    public function test_set_cooldown_rejects_recovery_upload(): void
+    {
+        $upload = Upload::factory()->create([
+            'billing_model' => BillingModel::Recovery->value,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->patchJson('/api/admin/uploads/' . $upload->id . '/cooldown', [
+                'is_30d_cool' => true,
+            ]);
+
+        $response->assertStatus(422)
+            ->assertJsonPath('message', fn($msg) => str_contains($msg, 'only applicable to Legacy'));
+    }
+
+    public function test_set_cooldown_validates_required_field(): void
+    {
+        $upload = Upload::factory()->create([
+            'billing_model' => BillingModel::Legacy->value,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->patchJson('/api/admin/uploads/' . $upload->id . '/cooldown', []);
+
+        $response->assertStatus(422)
+            ->assertJsonPath('errors.is_30d_cool', fn($errors) => in_array('The is 30d cool field is required.', $errors));
+    }
+
+    public function test_set_cooldown_validates_boolean_field(): void
+    {
+        $upload = Upload::factory()->create([
+            'billing_model' => BillingModel::Legacy->value,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->patchJson('/api/admin/uploads/' . $upload->id . '/cooldown', [
+                'is_30d_cool' => 'invalid',
+            ]);
+
+        $response->assertStatus(422)
+            ->assertJsonPath('errors.is_30d_cool.0', 'The is 30d cool field must be true or false.');
+    }
+
+    public function test_set_cooldown_returns_404_for_nonexistent_upload(): void
+    {
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->patchJson('/api/admin/uploads/99999/cooldown', [
+                'is_30d_cool' => true,
+            ]);
+
+        $response->assertStatus(404);
+    }
+
+    public function test_set_cooldown_requires_authentication(): void
+    {
+        $upload = Upload::factory()->create();
+
+        $response = $this->patchJson('/api/admin/uploads/' . $upload->id . '/cooldown', [
+            'is_30d_cool' => true,
+        ]);
+
+        $response->assertStatus(401);
+    }
+
+    public function test_set_cooldown_allows_false_on_any_model(): void
+    {
+        // Setting cooldown to false should work on any billing model
+        foreach ([BillingModel::Legacy, BillingModel::Flywheel, BillingModel::Recovery] as $model) {
+            $upload = Upload::factory()->create([
+                'billing_model' => $model->value,
+                'is_30d_cool' => true,
+            ]);
+
+            $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+                ->patchJson('/api/admin/uploads/' . $upload->id . '/cooldown', [
+                    'is_30d_cool' => false,
+                ]);
+
+            $response->assertStatus(200)
+                ->assertJsonPath('data.is_30d_cool', false);
+        }
     }
 }

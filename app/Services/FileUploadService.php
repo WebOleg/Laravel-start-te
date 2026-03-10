@@ -112,7 +112,8 @@ class FileUploadService
         BillingModel $billingModel = BillingModel::Legacy,
         ?int $empAccountId = null,
         bool $applyGlobalLock = false,
-        ?int $tetherInstanceId = null
+        ?int $tetherInstanceId = null,
+        ?bool $is30dCool = null
     ): array {
         $parsed = $this->parser->parse($file);
         $storedPath = $this->storeFile($file);
@@ -124,7 +125,8 @@ class FileUploadService
             $billingModel,
             $empAccountId,
             $applyGlobalLock,
-            $tetherInstanceId
+            $tetherInstanceId,
+            $is30dCool
         );
 
         $columnMapping = $this->buildColumnMapping($parsed['headers']);
@@ -152,7 +154,8 @@ class FileUploadService
         BillingModel $billingModel = BillingModel::Legacy,
         ?int $empAccountId = null,
         bool $applyGlobalLock = false,
-        ?int $tetherInstanceId = null
+        ?int $tetherInstanceId = null,
+        ?bool $is30dCool = null
     ): array {
         $parsed = $this->parser->parse($file);
         $storedPath = $this->storeFile($file);
@@ -164,7 +167,8 @@ class FileUploadService
             $billingModel,
             $empAccountId,
             $applyGlobalLock,
-            $tetherInstanceId
+            $tetherInstanceId,
+            $is30dCool
         );
 
         $columnMapping = $this->buildColumnMapping($parsed['headers']);
@@ -343,7 +347,8 @@ class FileUploadService
         BillingModel $billingModel,
         ?int $empAccountId = null,
         bool $applyGlobalLock = false,
-        ?int $tetherInstanceId = null
+        ?int $tetherInstanceId = null,
+        ?bool $is30dCool = null
     ): Upload {
         if ($empAccountId === null) {
             $activeAccount = EmpAccount::getActive();
@@ -371,6 +376,7 @@ class FileUploadService
             'processed_records' => 0,
             'failed_records' => 0,
             'uploaded_by' => $userId,
+            'is_30d_cool' => $is30dCool,
             'meta' => [
                 'apply_global_lock' => $applyGlobalLock,
             ],
