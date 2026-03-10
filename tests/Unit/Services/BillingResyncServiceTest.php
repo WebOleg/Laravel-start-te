@@ -205,6 +205,58 @@ class BillingResyncServiceTest extends TestCase
         $this->assertTrue($result->allowed);
     }
 
+    public function test_can_resync_enforces_cooldown_from_archived_run_when_billing_completed_at_is_null(): void
+    {
+        // After archive, billing_completed_at is nulled — cooldown must check billing_runs
+        $upload = Upload::factory()->create([
+            'billing_status' => Upload::JOB_IDLE,
+            'billing_started_at' => null,
+            'billing_completed_at' => null,
+            'billing_runs' => [
+                [
+                    'run' => 1,
+                    'billing_model' => DebtorProfile::MODEL_LEGACY,
+                    'status' => Upload::JOB_COMPLETED,
+                    'started_at' => now()->subHours(2)->toISOString(),
+                    'completed_at' => now()->subHours(1)->toISOString(),
+                ],
+            ],
+        ]);
+
+        $this->createEligibleLegacyDebtor($upload);
+
+        $result = $this->service->canResync($upload);
+
+        $this->assertFalse($result->allowed);
+        $this->assertStringContainsString('Cooldown period active', $result->reason);
+        $this->assertEquals(ResyncEligibility::CODE_COOLDOWN, $result->code);
+    }
+
+    public function test_can_resync_allows_when_archived_run_is_old_enough(): void
+    {
+        // Archived run completed_at is beyond cooldown period
+        $upload = Upload::factory()->create([
+            'billing_status' => Upload::JOB_IDLE,
+            'billing_started_at' => null,
+            'billing_completed_at' => null,
+            'billing_runs' => [
+                [
+                    'run' => 1,
+                    'billing_model' => DebtorProfile::MODEL_LEGACY,
+                    'status' => Upload::JOB_COMPLETED,
+                    'started_at' => now()->subHours(Upload::RESYNC_COOLDOWN_HOURS + 2)->toISOString(),
+                    'completed_at' => now()->subHours(Upload::RESYNC_COOLDOWN_HOURS + 1)->toISOString(),
+                ],
+            ],
+        ]);
+
+        $this->createEligibleLegacyDebtor($upload);
+
+        $result = $this->service->canResync($upload);
+
+        $this->assertTrue($result->allowed);
+    }
+
     public function test_can_resync_rejects_when_all_debtors_have_terminal_attempts(): void
     {
         $upload = Upload::factory()->create([
@@ -244,10 +296,11 @@ class BillingResyncServiceTest extends TestCase
             'billing_model' => DebtorProfile::MODEL_LEGACY,
         ]);
 
-        // Pending attempts are treated as stuck/retriable — should still be eligible
+        // Pending attempts without unique_id are treated as stuck/retriable — should still be eligible
         BillingAttempt::factory()->pending()->create([
             'upload_id' => $upload->id,
             'debtor_id' => $debtor->id,
+            'unique_id' => null,
         ]);
 
         $result = $this->service->canResync($upload);
@@ -394,14 +447,38 @@ class BillingResyncServiceTest extends TestCase
             'billing_model' => DebtorProfile::MODEL_LEGACY,
         ]);
 
+        // Pending attempt without unique_id (not yet submitted to EMP) — eligible
         BillingAttempt::factory()->pending()->create([
             'upload_id' => $upload->id,
             'debtor_id' => $debtor->id,
+            'unique_id' => null,
         ]);
 
         $results = $this->service->getResyncableDebtors($upload)->get();
 
         $this->assertCount(1, $results);
+    }
+
+    public function test_get_resyncable_debtors_excludes_debtors_with_pending_attempts_submitted_to_emp(): void
+    {
+        $upload = Upload::factory()->create();
+
+        $debtor = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'validation_status' => Debtor::VALIDATION_VALID,
+            'billing_model' => DebtorProfile::MODEL_LEGACY,
+        ]);
+
+        // Pending attempt with unique_id (already submitted to EMP) — excluded from resync
+        BillingAttempt::factory()->pending()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'unique_id' => 'EMG-ABC123',
+        ]);
+
+        $results = $this->service->getResyncableDebtors($upload)->get();
+
+        $this->assertCount(0, $results);
     }
 
     public function test_get_resyncable_debtors_includes_debtors_with_declined_or_error_attempts(): void
@@ -775,6 +852,31 @@ class BillingResyncServiceTest extends TestCase
         $this->assertFalse(Cache::has("billing_sync_{$upload->id}_" . DebtorProfile::MODEL_LEGACY));
     }
 
+    public function test_cancel_resync_clears_all_sync_lock_variants(): void
+    {
+        $upload = Upload::factory()->create([
+            'billing_status' => Upload::JOB_PROCESSING,
+            'status' => Upload::STATUS_PROCESSING,
+        ]);
+
+        // Pre-populate all possible sync lock variants
+        foreach (['all', 'legacy', 'flywheel', 'recovery'] as $model) {
+            Cache::put("billing_sync_{$upload->id}_{$model}", true, 300);
+        }
+        Cache::put("billing_resync_{$upload->id}", true, 300);
+
+        $this->service->cancelResync($upload);
+
+        // All sync lock variants should be cleared
+        foreach (['all', 'legacy', 'flywheel', 'recovery'] as $model) {
+            $this->assertFalse(
+                Cache::has("billing_sync_{$upload->id}_{$model}"),
+                "Expected billing_sync_{$upload->id}_{$model} to be cleared"
+            );
+        }
+        $this->assertFalse(Cache::has("billing_resync_{$upload->id}"));
+    }
+
     public function test_cancel_resync_updates_upload_status(): void
     {
         $upload = Upload::factory()->create([
@@ -914,15 +1016,55 @@ class BillingResyncServiceTest extends TestCase
             'status' => Debtor::STATUS_PENDING,
         ]);
 
+        // Pending attempt without unique_id (not yet submitted to EMP) — should be voided
         $pendingAttempt = BillingAttempt::factory()->pending()->create([
             'upload_id' => $upload->id,
             'debtor_id' => $debtor->id,
+            'unique_id' => null,
         ]);
 
         $this->service->executeResync($upload);
 
         $pendingAttempt->refresh();
         $this->assertEquals(BillingAttempt::STATUS_VOIDED, $pendingAttempt->status);
+    }
+
+    public function test_execute_resync_does_not_void_pending_attempts_submitted_to_emp(): void
+    {
+        Bus::fake();
+
+        $upload = Upload::factory()->create([
+            'billing_status' => Upload::JOB_COMPLETED,
+            'billing_started_at' => now()->subDays(1),
+            'billing_completed_at' => now()->subHours(12),
+        ]);
+
+        // Debtor with pending attempt already submitted to EMP (unique_id set)
+        $debtorWithLiveAttempt = Debtor::factory()->create([
+            'upload_id' => $upload->id,
+            'validation_status' => Debtor::VALIDATION_VALID,
+            'billing_model' => DebtorProfile::MODEL_LEGACY,
+            'status' => Debtor::STATUS_PENDING,
+        ]);
+
+        $liveAttempt = BillingAttempt::factory()->pending()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtorWithLiveAttempt->id,
+            'unique_id' => 'EMG-LIVE123',
+        ]);
+
+        // Another debtor that IS eligible (no live pending attempt)
+        $this->createEligibleLegacyDebtor($upload);
+
+        $this->service->executeResync($upload);
+
+        // The live attempt should remain pending — not voided
+        $liveAttempt->refresh();
+        $this->assertEquals(BillingAttempt::STATUS_PENDING, $liveAttempt->status);
+
+        // The debtor with a live attempt should NOT be reset to uploaded
+        $debtorWithLiveAttempt->refresh();
+        $this->assertEquals(Debtor::STATUS_PENDING, $debtorWithLiveAttempt->status);
     }
 
     public function test_execute_resync_resets_eligible_debtors_to_uploaded(): void

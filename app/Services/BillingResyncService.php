@@ -11,6 +11,7 @@ use App\Models\VopLog;
 use App\Services\Dto\ResyncEligibility;
 use App\Services\Dto\ResyncResult;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -100,9 +101,17 @@ class BillingResyncService
             );
         }
 
-        // Enforce cooldown period
-        if ($upload->billing_completed_at) {
-            $minutesSinceLastRun = $upload->billing_completed_at->diffInMinutes(now());
+        // Enforce cooldown period — check current run or last archived run
+        $lastCompletedAt = $upload->billing_completed_at;
+        if (!$lastCompletedAt && !empty($upload->billing_runs)) {
+            $lastRun = collect($upload->billing_runs)->last();
+            $lastCompletedAt = isset($lastRun['completed_at'])
+                ? Carbon::parse($lastRun['completed_at'])
+                : null;
+        }
+
+        if ($lastCompletedAt) {
+            $minutesSinceLastRun = $lastCompletedAt->diffInMinutes(now());
             $cooldownMinutes = Upload::RESYNC_COOLDOWN_HOURS * 60;
 
             if ($minutesSinceLastRun < $cooldownMinutes) {
@@ -160,6 +169,12 @@ class BillingResyncService
                     BillingAttempt::STATUS_CHARGEBACKED,
                 ]);
             })
+            // Exclude debtors with pending attempts already submitted to EMP (unique_id set)
+            // These are live in the gateway — reconciliation will resolve their final status
+            ->whereDoesntHave('billingAttempts', function (Builder $ba) {
+                $ba->where('status', BillingAttempt::STATUS_PENDING)
+                   ->whereNotNull('unique_id');
+            })
             // No VOP check or passed verification
             ->where(function (Builder $q) {
                 $q->whereDoesntHave('vopLogs')
@@ -206,9 +221,11 @@ class BillingResyncService
         // Set kill switch (60 min TTL)
         Cache::put("billing_sync_stop_{$upload->id}", true, 3600);
 
-        // Clear resync locks
+        // Clear all resync and sync locks
         Cache::forget("billing_resync_{$upload->id}");
-        Cache::forget("billing_sync_{$upload->id}_" . DebtorProfile::MODEL_LEGACY);
+        foreach (['all', 'legacy', 'flywheel', 'recovery'] as $model) {
+            Cache::forget("billing_sync_{$upload->id}_{$model}");
+        }
 
         $upload->update([
             'billing_status' => Upload::STATUS_CANCELLING,
@@ -265,8 +282,11 @@ class BillingResyncService
 
                 // Reset eligible debtors to 'uploaded', void pending attempts
                 if ($resyncDebtorIds->isNotEmpty()) {
+                    // Only void pending attempts NOT yet submitted to EMP (no unique_id)
+                    // Attempts with unique_id are left as pending — reconciliation resolves them
                     BillingAttempt::whereIn('debtor_id', $resyncDebtorIds)
                         ->where('status', BillingAttempt::STATUS_PENDING)
+                        ->whereNull('unique_id')
                         ->update(['status' => BillingAttempt::STATUS_VOIDED]);
 
                     $resetCount = Debtor::whereIn('id', $resyncDebtorIds)

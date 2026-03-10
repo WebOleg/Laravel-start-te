@@ -14,7 +14,6 @@ use App\Services\BillingResyncService;
 use App\Services\Dto\ResyncEligibility;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Http\Request;
 
 class BillingController extends Controller
@@ -241,12 +240,7 @@ class BillingController extends Controller
 
         if ($upload->max_billing_amount !== null && (float) $upload->max_billing_amount > 0) {
             $maxAmount = (float) $upload->max_billing_amount;
-            $query->where(function ($q) use ($maxAmount) {
-                $q->whereRaw(
-                    'COALESCE((SELECT SUM(ba.amount) FROM billing_attempts ba WHERE ba.debtor_id = debtors.id AND ba.status IN (?, ?)), 0) < ?',
-                    [BillingAttempt::STATUS_APPROVED, BillingAttempt::STATUS_PENDING, $maxAmount]
-                );
-            });
+            $query->withinBillingCap($maxAmount);
         }
 
         $eligibleCount = $query->count();
@@ -256,10 +250,7 @@ class BillingController extends Controller
             $cappedCount = Debtor::where('upload_id', $upload->id)
                 ->where('validation_status', Debtor::VALIDATION_VALID)
                 ->where('status', Debtor::STATUS_UPLOADED)
-                ->whereRaw(
-                    'COALESCE((SELECT SUM(ba.amount) FROM billing_attempts ba WHERE ba.debtor_id = debtors.id AND ba.status IN (?, ?)), 0) >= ?',
-                    [BillingAttempt::STATUS_APPROVED, BillingAttempt::STATUS_PENDING, (float) $upload->max_billing_amount]
-                )
+                ->exceedsBillingCap((float) $upload->max_billing_amount)
                 ->count();
         }
 
