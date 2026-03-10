@@ -93,6 +93,15 @@ class BillingAttemptFactory extends Factory
         ]);
     }
 
+    public function error(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'status' => BillingAttempt::STATUS_ERROR,
+            'error_code' => 'AG01',
+            'error_message' => 'Transaction forbidden',
+        ]);
+    }
+
     public function withBic(string $bic): static
     {
         return $this->state(fn (array $attributes) => [

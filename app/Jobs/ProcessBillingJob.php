@@ -132,9 +132,14 @@ class ProcessBillingJob implements ShouldQueue, ShouldBeUnique
             ->name("Billing Upload #{$uploadId} ({$model})")
             ->allowFailures()
             ->onQueue('billing')
-            ->finally(function () use ($upload) {
-                $upload->markBillingCompleted();
-                Log::info('ProcessBillingJob batch completed', ['upload_id' => $upload->id]);
+            ->finally(function (\Illuminate\Bus\Batch $batch) use ($upload) {
+                if ($batch->cancelled()) {
+                    $upload->markBillingCancelled();
+                    Log::info('ProcessBillingJob batch cancelled', ['upload_id' => $upload->id]);
+                } else {
+                    $upload->markBillingCompleted();
+                    Log::info('ProcessBillingJob batch completed', ['upload_id' => $upload->id]);
+                }
             })
             ->dispatch();
 

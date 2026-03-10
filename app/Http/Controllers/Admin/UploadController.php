@@ -19,6 +19,7 @@ use App\Models\BillingAttempt;
 use App\Services\FileUploadService;
 use App\Services\FilePreValidationService;
 use App\Services\DebtorValidationService;
+use App\Services\BillingResyncService;
 use App\Jobs\ProcessValidationJob;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
@@ -35,7 +36,8 @@ class UploadController extends Controller
     public function __construct(
         private FileUploadService $uploadService,
         private FilePreValidationService $preValidationService,
-        private DebtorValidationService $validationService
+        private DebtorValidationService $validationService,
+        private BillingResyncService $resyncService,
     ) {}
 
     public function index(Request $request): AnonymousResourceCollection
@@ -138,6 +140,8 @@ class UploadController extends Controller
             $q->where('status', BillingAttempt::STATUS_CHARGEBACKED);
         }], 'amount');
 
+        $this->enrichShowStats($upload);
+
         return new UploadResource($upload);
     }
 
@@ -153,6 +157,8 @@ class UploadController extends Controller
             $empAccountId = $request->input('emp_account_id');
             $tetherInstanceId = $request->input('tether_instance_id');
             $applyGlobalLock = $request->boolean('apply_global_lock');
+            $is30dCool = $request->has('is_30d_cool') ? $request->boolean('is_30d_cool') : null;
+            $skipChargebackCheck = $request->boolean('skip_chargeback_check');
 
             $preValidation = $this->preValidationService->validate($file);
             if (!$preValidation['valid']) {
@@ -171,7 +177,9 @@ class UploadController extends Controller
                     $billingModel,
                     $empAccountId,
                     $applyGlobalLock,
-                    $tetherInstanceId
+                    $tetherInstanceId,
+                    $is30dCool,
+                    $skipChargebackCheck
                 );
 
                 return response()->json([
@@ -189,7 +197,9 @@ class UploadController extends Controller
                 $billingModel,
                 $empAccountId,
                 $applyGlobalLock,
-                $tetherInstanceId
+                $tetherInstanceId,
+                $is30dCool,
+                $skipChargebackCheck
             );
 
             return response()->json([
@@ -281,6 +291,7 @@ class UploadController extends Controller
     {
         $request->validate([
             'skip_bic_blacklist' => 'nullable|boolean',
+            'skip_chargeback_check' => 'nullable|boolean',
         ]);
 
         if ($upload->status === Upload::STATUS_PROCESSING) {
@@ -296,10 +307,18 @@ class UploadController extends Controller
             ], 200);
         }
 
+        $updateData = [];
+
         if ($request->has('skip_bic_blacklist')) {
-            $upload->update([
-                'skip_bic_blacklist' => $request->boolean('skip_bic_blacklist'),
-            ]);
+            $updateData['skip_bic_blacklist'] = $request->boolean('skip_bic_blacklist');
+        }
+
+        if ($request->has('skip_chargeback_check')) {
+            $updateData['skip_chargeback_check'] = $request->boolean('skip_chargeback_check');
+        }
+
+        if (!empty($updateData)) {
+            $upload->update($updateData);
         }
 
         ProcessValidationJob::dispatch($upload);
@@ -417,6 +436,14 @@ class UploadController extends Controller
                     : 0,
             ]);
 
+        $isResyncProcessing = Cache::has("billing_resync_{$upload->id}")
+            && count($upload->billing_runs ?? []) > 0;
+
+        $currentResyncCount = 0;
+        if ($isResyncProcessing) {
+            $currentResyncCount = $this->resyncService->getResyncableDebtors($upload)->count();
+        }
+
         return response()->json([
             'data' => [
                 'total' => (int) $stats->total,
@@ -426,9 +453,11 @@ class UploadController extends Controller
                 'blacklisted' => $blacklisted,
                 'chargebacked' => $chargebacked,
                 'ready_for_sync' => (clone $query)->readyForSync()->count(),
+                'current_resync_count' => $currentResyncCount,
                 'skipped' => $skipped,
                 'is_processing' => $upload->isValidationProcessing(),
                 'skip_bic_blacklist' => $upload->skip_bic_blacklist ?? false,
+                'skip_chargeback_check' => $upload->skip_chargeback_check ?? false,
                 'model_counts' => [
                     'all' => (int) $modelStats->all_count,
                     'legacy' => (int) $modelStats->legacy,
@@ -730,6 +759,80 @@ class UploadController extends Controller
         fclose($handle);
 
         return $lineCount > self::ASYNC_THRESHOLD;
+    }
+
+    public function setCooldown(Request $request, Upload $upload): JsonResponse
+    {
+        $request->validate([
+            'is_30d_cool' => 'required|boolean',
+        ]);
+
+        if ($request->boolean('is_30d_cool') && $upload->billing_model !== BillingModel::Legacy->value) {
+            return response()->json([
+                'message' => 'The 30-day cooling period is only applicable to Legacy billing model uploads. ' .
+                             'Flywheel and Recovery models manage their own billing cycles independently.',
+            ], 422);
+        }
+
+        $upload->update([
+            'is_30d_cool' => $request->boolean('is_30d_cool'),
+        ]);
+
+        return response()->json([
+            'data' => new UploadResource($upload->fresh()),
+        ]);
+    }
+
+    private function enrichShowStats(Upload $upload): void
+    {
+        if ($upload->is_30d_cool === false) {
+            $resyncEligible = $this->resyncService->getResyncableDebtors($upload);
+
+            $upload->setAttribute('ready_for_sync_count', $resyncEligible->count());
+            $upload->setAttribute('ready_for_sync_amount', round((float) (clone $resyncEligible)->sum('amount'), 2));
+        } else {
+            $upload->setAttribute('ready_for_sync_count', $upload->debtors()->readyForSync()->count());
+            $upload->setAttribute('ready_for_sync_amount', round(
+                (float) $upload->debtors()->readyForSync()->sum('amount'),
+                2
+            ));
+        }
+
+        $billingRuns = $upload->billing_runs ?? [];
+
+        if (!empty($billingRuns)) {
+            $approvedAttempts = $upload->billingAttempts()
+                ->where('status', BillingAttempt::STATUS_APPROVED)
+                ->select(['amount', 'created_at'])
+                ->get();
+
+            $billingRuns = array_map(function (array $run) use ($approvedAttempts) {
+                try {
+                    $startedAt   = isset($run['started_at'])   ? \Carbon\Carbon::parse($run['started_at'])   : null;
+                    $completedAt = isset($run['completed_at']) ? \Carbon\Carbon::parse($run['completed_at']) : null;
+                } catch (\Carbon\Exceptions\InvalidFormatException $e) {
+                    return array_merge($run, [
+                        'recovered_count'  => 0,
+                        'recovered_amount' => 0.0,
+                    ]);
+                }
+
+                $runAttempts = $approvedAttempts->filter(function ($attempt) use ($startedAt, $completedAt) {
+                    if (!$startedAt) {
+                        return false;
+                    }
+                    return $attempt->created_at->gte($startedAt)
+                        && (!$completedAt || $attempt->created_at->lte($completedAt));
+                });
+
+                return array_merge($run, [
+                    'recovered_count'  => $runAttempts->count(),
+                    'recovered_amount' => round((float) $runAttempts->sum('amount'), 2),
+                ]);
+            }, $billingRuns);
+        }
+
+        $upload->setAttribute('enriched_billing_runs', $billingRuns);
     }
 
     private function calculateProgress(Upload $upload): float

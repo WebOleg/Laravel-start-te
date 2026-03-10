@@ -79,6 +79,24 @@ class DebtorImportService
         // 2) Batch dedupe: IBAN + name + email (your existing service)
         $dedupeResults = $this->deduplicationService->checkDebtorBatch($debtorDataList, $upload->id);
 
+        // If the upload bypasses the 30-day cooling period, remove SKIP_RECENTLY_ATTEMPTED results
+        // so those debtors are imported and eligible for billing regardless of recent attempts.
+        if ($upload->is_30d_cool === false) {
+            $dedupeResults = array_filter(
+                $dedupeResults,
+                fn($result) => $result['reason'] !== DeduplicationService::SKIP_RECENTLY_ATTEMPTED
+            );
+        }
+
+        // If the upload bypasses the chargeback check, remove SKIP_CHARGEBACKED results
+        // so previously chargebacked IBANs are imported for re-billing (e.g. test cycles).
+        if ($upload->skip_chargeback_check === true) {
+            $dedupeResults = array_filter(
+                $dedupeResults,
+                fn($result) => $result['reason'] !== DeduplicationService::SKIP_CHARGEBACKED
+            );
+        }
+
         // 3) Prefetch profiles by iban_hash (scoped by tether_instance_id when available)
         $profilesByHash = [];
         $ibanHashes = array_values(array_unique($ibanHashes));

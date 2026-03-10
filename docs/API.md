@@ -636,6 +636,55 @@ Content-Type: application/json
 
 Billing sends SEPA Direct Debit transactions to emerchantpay Genesis gateway.
 
+### Set 30-Day Cooldown (Toggle Resync)
+```
+PATCH /api/admin/uploads/{id}/cooldown
+Authorization: Bearer {token}
+Content-Type: application/json
+
+{
+    "is_30d_cool": false
+}
+```
+
+Only applicable to **Legacy** billing model uploads. Flywheel and Recovery manage their own billing cycles independently.
+
+| `is_30d_cool` value | Effect |
+|---|---|
+| `null` (default) | Standard import-time deduplication runs normally |
+| `true` | Cooldown enforced at billing time — debtors attempted within the last 30 days are skipped even if imported |
+| `false` | **Cooldown OFF / Resync mode** — see below |
+
+**Toggling to `false` (Resync):**
+
+Switching cooldown **OFF** only sets the `is_30d_cool` flag and returns `can_resync: true` in the response. **No debtors are reset and no billing fields are touched at this point.** The actual resync work happens when the user explicitly presses "Sync to Gateway" (see below).
+
+**`can_resync` field:**
+- `true` — cooldown is `false` and billing is not currently processing; the "Sync to Gateway" button should be active
+- `false` — cooldown is `null`/`true`, or billing is currently running
+
+**Response (200 OK):**
+```json
+{
+    "data": {
+        "id": 31,
+        "is_30d_cool": false,
+        "billing_status": "completed",
+        "billing_runs": [],
+        "can_resync": true
+    }
+}
+```
+
+**Response (422 — non-Legacy upload):**
+```json
+{
+    "message": "The 30-day cooling period is only applicable to Legacy billing model uploads. Flywheel and Recovery models manage their own billing cycles independently."
+}
+```
+
+---
+
 ### Start Billing (Sync to Gateway)
 ```
 POST /api/admin/uploads/{id}/sync
@@ -643,6 +692,36 @@ Authorization: Bearer {token}
 ```
 
 Dispatches async billing job for all eligible debtors.
+
+**Resync behaviour (when `is_30d_cool = false`):**
+
+When the upload has cooldown explicitly switched OFF, calling this endpoint triggers the following **before** the normal eligibility check:
+
+1. **Billing run archived** — if a previous billing run exists (`billing_started_at` is set), a snapshot is appended to `billing_runs`.
+2. **Live billing fields reset** — `billing_status`, `billing_batch_id`, `billing_started_at`, `billing_completed_at` are set to `null`.
+3. **Eligible debtors reset** — all debtors with `validation_status = valid` and `status != chargebacked` are reset to `status = uploaded`. Invalid, BIC-blacklisted, and chargebacked debtors are **not** touched.
+
+After this prep, the normal eligibility query runs and the billing job is dispatched. The `billing_runs` array in the upload response tracks the history of all previous runs.
+
+**`billing_runs` history format:**
+```json
+[
+    {
+        "run": 1,
+        "status": "completed",
+        "batch_id": "uuid-...",
+        "started_at": "2026-03-01T10:00:00.000000Z",
+        "completed_at": "2026-03-01T10:05:00.000000Z"
+    },
+    {
+        "run": 2,
+        "status": "completed",
+        "batch_id": "uuid-...",
+        "started_at": "2026-03-03T14:00:00.000000Z",
+        "completed_at": "2026-03-03T14:07:00.000000Z"
+    }
+]
+```
 
 **Eligibility Criteria:**
 - `validation_status = valid`

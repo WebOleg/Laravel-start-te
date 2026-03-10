@@ -10,13 +10,21 @@ use App\Models\Debtor;
 use App\Models\DebtorProfile;
 use App\Models\Upload;
 use App\Models\VopLog;
+use App\Services\BillingResyncService;
+use App\Services\Dto\ResyncEligibility;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Http\Request;
 
 class BillingController extends Controller
 {
+    public function __construct(
+        private readonly BillingResyncService $resyncService,
+    ) {}
+
+    /**
+     * Void all successful transactions for an upload via Queue.
+     */
     public function void(Upload $upload): JsonResponse
     {
         $lastActivity = $upload->billing_completed_at ?? $upload->billing_started_at;
@@ -26,13 +34,8 @@ class BillingController extends Controller
             ], 422);
         }
 
-        $count = BillingAttempt::where('upload_id', $upload->id)
-            ->whereIn('status', [
-                BillingAttempt::STATUS_APPROVED,
-                BillingAttempt::STATUS_PENDING
-            ])
-            ->whereNotNull('unique_id')
-            ->count();
+        // Get eligible attempts (scoped to latest run for resyncs)
+        $count = $this->resyncService->getVoidableAttempts($upload)->count();
 
         if ($count === 0) {
             return response()->json([
@@ -50,29 +53,53 @@ class BillingController extends Controller
         return response()->json([
             'message' => "Void process queued for {$count} transactions.",
             'data' => [
-                'queued_count' => $count
+                'queued_count' => $count,
+                'is_resync' => !empty($upload->billing_runs),
             ]
         ], 202);
     }
 
+    /**
+     * Cancel an active billing sync or resync.
+     * Sets a signal flag that running jobs check to terminate execution.
+     */
     public function cancel(Upload $upload): JsonResponse
     {
-        $lockKey = "billing_sync_stop_{$upload->id}";
+        // Guard: only allow cancel when billing is actually running
+        if (!in_array($upload->billing_status, [Upload::JOB_PROCESSING, Upload::STATUS_CANCELLING])) {
+            return response()->json([
+                'message' => 'No active billing to cancel.',
+            ], 422);
+        }
 
-        Cache::put($lockKey, true, 3600);
+        $isResync = $this->resyncService->isResyncInProgress($upload);
 
-        $upload->update([
-            'billing_status' => Upload::STATUS_CANCELLING,
-            'status' => Upload::STATUS_CANCELLING
-        ]);
+        if ($isResync) {
+            $this->resyncService->cancelResync($upload);
+        } else {
+            $upload->update([
+                'billing_status' => Upload::STATUS_CANCELLING,
+                'status' => Upload::STATUS_CANCELLING,
+            ]);
+
+            Cache::put("billing_sync_stop_{$upload->id}", true, 3600);
+
+            // Clear sync lock keys so duplicate-dispatch check doesn't block future syncs
+            foreach (['all', 'legacy', 'flywheel', 'recovery'] as $model) {
+                Cache::forget("billing_sync_{$upload->id}_{$model}");
+            }
+        }
 
         return response()->json([
-            'message' => 'Termination signal sent. The sync will stop shortly.',
+            'message' => $isResync
+                ? 'Resync termination signal sent. The resync will stop shortly.'
+                : 'Termination signal sent. The sync will stop shortly.',
             'data' => [
                 'upload_id' => $upload->id,
-                'billing_status' => $upload->id,
+                'billing_status' => Upload::STATUS_CANCELLING,
+                'is_resync' => $isResync,
                 'signal_sent_at' => now()->toIso8601String(),
-            ]
+            ],
         ]);
     }
 
@@ -82,6 +109,20 @@ class BillingController extends Controller
 
         $lockKey = "billing_sync_{$upload->id}_{$debtorType}";
 
+        // Block sync/resync if upload is voiding or already cancelled
+        if (in_array($upload->billing_status, [Upload::STATUS_VOIDING, Upload::STATUS_CANCELLED]) ||
+            in_array($upload->status, [Upload::STATUS_VOIDING, Upload::STATUS_CANCELLED])) {
+            return response()->json([
+                'message' => 'Cannot start billing while upload is voiding or has been cancelled.',
+                'data' => [
+                    'upload_id' => $upload->id,
+                    'status' => $upload->status,
+                    'billing_status' => $upload->billing_status,
+                ],
+            ], 422);
+        }
+
+        // Validate: Allow 'all' OR specific models
         $validTypes = array_merge([DebtorProfile::ALL], DebtorProfile::BILLING_MODELS);
 
         if (!in_array($debtorType, $validTypes)) {
@@ -114,6 +155,39 @@ class BillingController extends Controller
             ], 422);
         }
 
+        // Resync mode: cooldown is explicitly OFF for this upload.
+        // Delegate all resync logic to the dedicated service.
+        if ($upload->is_30d_cool === false) {
+            $eligibility = $this->resyncService->canResync($upload, $debtorType);
+
+            if ($eligibility->denied()) {
+                return response()->json([
+                    'message' => $eligibility->reason,
+                    'data' => [
+                        'upload_id'    => $upload->id,
+                        'queued'       => false,
+                        'resync_count' => count($upload->billing_runs ?? []),
+                        'max_resync'   => Upload::MAX_RESYNC_ATTEMPTS,
+                    ],
+                ], $this->resyncHttpStatus($eligibility));
+            }
+
+            $result = $this->resyncService->executeResync($upload);
+
+            return response()->json([
+                'message' => "Resync queued for {$result->eligibleCount} debtors",
+                'data' => [
+                    'upload_id'      => $upload->id,
+                    'eligible'       => $result->eligibleCount,
+                    'reset_count'    => $result->resetCount,
+                    'archived'       => $result->archived,
+                    'queued'         => $result->dispatched,
+                    'model'          => DebtorProfile::MODEL_LEGACY,
+                ],
+            ], $result->dispatched ? 202 : 200);
+        }
+
+        // If we are syncing 'flywheel', we MUST NOT process IBANs that are already 'recovery', and vice versa.
         $conflictingModel = match($debtorType) {
             DebtorProfile::MODEL_FLYWHEEL => DebtorProfile::MODEL_RECOVERY,
             DebtorProfile::MODEL_RECOVERY => DebtorProfile::MODEL_FLYWHEEL,
@@ -166,12 +240,7 @@ class BillingController extends Controller
 
         if ($upload->max_billing_amount !== null && (float) $upload->max_billing_amount > 0) {
             $maxAmount = (float) $upload->max_billing_amount;
-            $query->where(function ($q) use ($maxAmount) {
-                $q->whereRaw(
-                    'COALESCE((SELECT SUM(ba.amount) FROM billing_attempts ba WHERE ba.debtor_id = debtors.id AND ba.status IN (?, ?)), 0) < ?',
-                    [BillingAttempt::STATUS_APPROVED, BillingAttempt::STATUS_PENDING, $maxAmount]
-                );
-            });
+            $query->withinBillingCap($maxAmount);
         }
 
         $eligibleCount = $query->count();
@@ -181,10 +250,7 @@ class BillingController extends Controller
             $cappedCount = Debtor::where('upload_id', $upload->id)
                 ->where('validation_status', Debtor::VALIDATION_VALID)
                 ->where('status', Debtor::STATUS_UPLOADED)
-                ->whereRaw(
-                    'COALESCE((SELECT SUM(ba.amount) FROM billing_attempts ba WHERE ba.debtor_id = debtors.id AND ba.status IN (?, ?)), 0) >= ?',
-                    [BillingAttempt::STATUS_APPROVED, BillingAttempt::STATUS_PENDING, (float) $upload->max_billing_amount]
-                )
+                ->exceedsBillingCap((float) $upload->max_billing_amount)
                 ->count();
         }
 
@@ -249,13 +315,21 @@ class BillingController extends Controller
         $declined = $stats->get(BillingAttempt::STATUS_DECLINED);
         $error = $stats->get(BillingAttempt::STATUS_ERROR);
 
-        $isProcessing = Cache::has("billing_sync_{$upload->id}_{$debtorType}");
+        $isResyncProcessing = Cache::has("billing_resync_{$upload->id}");
+
+        if ($debtorType === DebtorProfile::ALL) {
+            $isProcessing = collect(['all', 'legacy', 'flywheel', 'recovery'])
+                ->contains(fn($m) => Cache::has("billing_sync_{$upload->id}_{$m}"));
+        } else {
+            $isProcessing = Cache::has("billing_sync_{$upload->id}_{$debtorType}");
+        }
 
         return response()->json([
             'data' => [
                 'upload_id' => $upload->id,
                 'filter_type' => $debtorType ?? DebtorProfile::ALL,
                 'is_processing' => $isProcessing,
+                'is_resync_processing' => $isResyncProcessing,
                 'billing_status' => $upload->billing_status,
                 'billing_started_at' => $upload->billing_started_at?->toIso8601String(),
                 'billing_completed_at' => $upload->billing_completed_at?->toIso8601String(),
@@ -270,6 +344,18 @@ class BillingController extends Controller
                 'error_amount' => (float) ($error?->total_amount ?? 0),
             ],
         ]);
+    }
+
+    /**
+     * Map resync denial reasons to appropriate HTTP status codes.
+     */
+    private function resyncHttpStatus(ResyncEligibility $eligibility): int
+    {
+        return match ($eligibility->code) {
+            ResyncEligibility::CODE_LOCK,
+            ResyncEligibility::CODE_PROCESSING => 409,
+            default => 422,
+        };
     }
 
     private function checkVopCompleted(Upload $upload): array

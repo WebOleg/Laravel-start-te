@@ -26,6 +26,12 @@ class Upload extends Model
     public const JOB_PROCESSING = 'processing';
     public const JOB_COMPLETED = 'completed';
     public const JOB_FAILED = 'failed';
+    public const JOB_CANCELLED = 'cancelled';
+
+    public const MAX_RESYNC_ATTEMPTS = 3;
+
+    // Cooldown between resyncs, in hours (120 h = 5 days).
+    public const RESYNC_COOLDOWN_HOURS = 120;
 
     protected $fillable = [
         'filename',
@@ -69,6 +75,9 @@ class Upload extends Model
         'reconciliation_started_at',
         'reconciliation_completed_at',
         'skip_bic_blacklist',
+        'skip_chargeback_check',
+        'is_30d_cool',
+        'billing_runs',
         'max_billing_amount',
     ];
 
@@ -95,6 +104,9 @@ class Upload extends Model
         'reconciliation_started_at' => 'datetime',
         'reconciliation_completed_at' => 'datetime',
         'skip_bic_blacklist' => 'boolean',
+        'skip_chargeback_check' => 'boolean',
+        'is_30d_cool' => 'boolean',
+        'billing_runs' => 'array',
         'max_billing_amount' => 'decimal:2',
     ];
 
@@ -232,6 +244,16 @@ class Upload extends Model
             'billing_status' => self::JOB_COMPLETED,
             'billing_completed_at' => now(),
         ]);
+        $this->clearBillingCacheLocks();
+    }
+
+    public function markBillingCancelled(): void
+    {
+        $this->update([
+            'billing_status' => self::JOB_CANCELLED,
+            'billing_completed_at' => now(),
+        ]);
+        $this->clearBillingCacheLocks();
     }
 
     public function markBillingFailed(): void
@@ -240,6 +262,16 @@ class Upload extends Model
             'billing_status' => self::JOB_FAILED,
             'billing_completed_at' => now(),
         ]);
+        $this->clearBillingCacheLocks();
+    }
+
+    private function clearBillingCacheLocks(): void
+    {
+        Cache::forget("billing_resync_{$this->id}");
+        Cache::forget("billing_sync_stop_{$this->id}");
+        foreach (['all', 'legacy', 'flywheel', 'recovery'] as $model) {
+            Cache::forget("billing_sync_{$this->id}_{$model}");
+        }
     }
 
     public function isVopProcessing(): bool

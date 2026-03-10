@@ -61,6 +61,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('uploads/{upload}/validate', [AdminUploadController::class, 'validate']);
         Route::get('uploads/{upload}/validation-stats', [AdminUploadController::class, 'validationStats']);
         Route::post('uploads/{upload}/filter-chargebacks', [AdminUploadController::class, 'filterChargebacks']);
+        Route::patch('uploads/{upload}/cooldown', [AdminUploadController::class, 'setCooldown']);
         Route::post('uploads/{upload}/reassign', [AdminUploadController::class, 'reassign']);
         Route::patch('uploads/{upload}/settings', [AdminUploadController::class, 'updateSettings']);
         Route::get('uploads/{upload}/billing-cycles', [AdminUploadController::class, 'billingCycles']);

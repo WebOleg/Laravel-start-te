@@ -36,6 +36,7 @@ class UploadFactory extends Factory
             'processed_records' => $processedRecords,
             'failed_records' => $failedRecords,
             'uploaded_by' => null,
+            'is_30d_cool' => null,
         ];
     }
 
@@ -61,6 +62,20 @@ class UploadFactory extends Factory
         return $this->state(fn (array $attributes) => [
             'status' => Upload::STATUS_FAILED,
             'error_message' => 'Processing failed: ' . fake()->sentence(),
+        ]);
+    }
+
+    public function withCooldown(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'is_30d_cool' => true,
+        ]);
+    }
+
+    public function withoutCooldown(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'is_30d_cool' => false,
         ]);
     }
 }
