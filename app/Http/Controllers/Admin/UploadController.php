@@ -158,6 +158,7 @@ class UploadController extends Controller
             $tetherInstanceId = $request->input('tether_instance_id');
             $applyGlobalLock = $request->boolean('apply_global_lock');
             $is30dCool = $request->has('is_30d_cool') ? $request->boolean('is_30d_cool') : null;
+            $skipChargebackCheck = $request->boolean('skip_chargeback_check');
 
             $preValidation = $this->preValidationService->validate($file);
             if (!$preValidation['valid']) {
@@ -177,7 +178,8 @@ class UploadController extends Controller
                     $empAccountId,
                     $applyGlobalLock,
                     $tetherInstanceId,
-                    $is30dCool
+                    $is30dCool,
+                    $skipChargebackCheck
                 );
 
                 return response()->json([
@@ -196,7 +198,8 @@ class UploadController extends Controller
                 $empAccountId,
                 $applyGlobalLock,
                 $tetherInstanceId,
-                $is30dCool
+                $is30dCool,
+                $skipChargebackCheck
             );
 
             return response()->json([
@@ -288,6 +291,7 @@ class UploadController extends Controller
     {
         $request->validate([
             'skip_bic_blacklist' => 'nullable|boolean',
+            'skip_chargeback_check' => 'nullable|boolean',
         ]);
 
         if ($upload->status === Upload::STATUS_PROCESSING) {
@@ -303,10 +307,18 @@ class UploadController extends Controller
             ], 200);
         }
 
+        $updateData = [];
+
         if ($request->has('skip_bic_blacklist')) {
-            $upload->update([
-                'skip_bic_blacklist' => $request->boolean('skip_bic_blacklist'),
-            ]);
+            $updateData['skip_bic_blacklist'] = $request->boolean('skip_bic_blacklist');
+        }
+
+        if ($request->has('skip_chargeback_check')) {
+            $updateData['skip_chargeback_check'] = $request->boolean('skip_chargeback_check');
+        }
+
+        if (!empty($updateData)) {
+            $upload->update($updateData);
         }
 
         ProcessValidationJob::dispatch($upload);
@@ -445,6 +457,7 @@ class UploadController extends Controller
                 'skipped' => $skipped,
                 'is_processing' => $upload->isValidationProcessing(),
                 'skip_bic_blacklist' => $upload->skip_bic_blacklist ?? false,
+                'skip_chargeback_check' => $upload->skip_chargeback_check ?? false,
                 'model_counts' => [
                     'all' => (int) $modelStats->all_count,
                     'legacy' => (int) $modelStats->legacy,
@@ -754,9 +767,6 @@ class UploadController extends Controller
             'is_30d_cool' => 'required|boolean',
         ]);
 
-        // The 30-day cooling period is only meaningful for Legacy uploads.
-        // Flywheel uses DebtorProfile->due() for cycle control; Recovery is designed
-        // to retry failed payments — both are broken by a 30-day freeze.
         if ($request->boolean('is_30d_cool') && $upload->billing_model !== BillingModel::Legacy->value) {
             return response()->json([
                 'message' => 'The 30-day cooling period is only applicable to Legacy billing model uploads. ' .
@@ -775,9 +785,6 @@ class UploadController extends Controller
 
     private function enrichShowStats(Upload $upload): void
     {
-        // Debtors eligible for the next billing sync and their total amount.
-        // When the upload is in resync mode (is_30d_cool === false), use the
-        // resync service for consistent Legacy-only debtor counting.
         if ($upload->is_30d_cool === false) {
             $resyncEligible = $this->resyncService->getResyncableDebtors($upload);
 
@@ -791,8 +798,6 @@ class UploadController extends Controller
             ));
         }
 
-        // Enrich each archived billing run with recovered_count / recovered_amount
-        // using a single query and a time-window filter per run.
         $billingRuns = $upload->billing_runs ?? [];
 
         if (!empty($billingRuns)) {

@@ -113,7 +113,8 @@ class FileUploadService
         ?int $empAccountId = null,
         bool $applyGlobalLock = false,
         ?int $tetherInstanceId = null,
-        ?bool $is30dCool = null
+        ?bool $is30dCool = null,
+        bool $skipChargebackCheck = false
     ): array {
         $parsed = $this->parser->parse($file);
         $storedPath = $this->storeFile($file);
@@ -126,7 +127,8 @@ class FileUploadService
             $empAccountId,
             $applyGlobalLock,
             $tetherInstanceId,
-            $is30dCool
+            $is30dCool,
+            $skipChargebackCheck
         );
 
         $columnMapping = $this->buildColumnMapping($parsed['headers']);
@@ -155,7 +157,8 @@ class FileUploadService
         ?int $empAccountId = null,
         bool $applyGlobalLock = false,
         ?int $tetherInstanceId = null,
-        ?bool $is30dCool = null
+        ?bool $is30dCool = null,
+        bool $skipChargebackCheck = false
     ): array {
         $parsed = $this->parser->parse($file);
         $storedPath = $this->storeFile($file);
@@ -168,7 +171,8 @@ class FileUploadService
             $empAccountId,
             $applyGlobalLock,
             $tetherInstanceId,
-            $is30dCool
+            $is30dCool,
+            $skipChargebackCheck
         );
 
         $columnMapping = $this->buildColumnMapping($parsed['headers']);
@@ -348,7 +352,8 @@ class FileUploadService
         ?int $empAccountId = null,
         bool $applyGlobalLock = false,
         ?int $tetherInstanceId = null,
-        ?bool $is30dCool = null
+        ?bool $is30dCool = null,
+        bool $skipChargebackCheck = false
     ): Upload {
         if ($empAccountId === null) {
             $activeAccount = EmpAccount::getActive();
@@ -377,6 +382,7 @@ class FileUploadService
             'failed_records' => 0,
             'uploaded_by' => $userId,
             'is_30d_cool' => $is30dCool,
+            'skip_chargeback_check' => $skipChargebackCheck,
             'meta' => [
                 'apply_global_lock' => $applyGlobalLock,
             ],
