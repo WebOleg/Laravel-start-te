@@ -5,10 +5,12 @@
 namespace App\Jobs;
 
 use App\Models\BavCredit;
+use App\Models\BavVerifiedIban;
 use App\Models\Debtor;
 use App\Models\Upload;
 use App\Models\VopLog;
 use App\Services\IbanBavService;
+use App\Services\IbanValidator;
 use App\Traits\WithLogContext;
 use Illuminate\Bus\Batchable;
 use Illuminate\Bus\Queueable;
@@ -40,7 +42,7 @@ class ProcessBavJob implements ShouldQueue
         $this->onQueue('bav');
     }
 
-    public function handle(IbanBavService $bavService): void
+    public function handle(IbanBavService $bavService, IbanValidator $ibanValidator): void
     {
         // Initialize the context
         $this->initLogContext();
@@ -83,7 +85,7 @@ class ProcessBavJob implements ShouldQueue
                 break;
             }
 
-            $this->verifyDebtor($debtor, $bavService);
+            $this->verifyDebtor($debtor, $bavService, $ibanValidator);
             $processed++;
 
             $this->updateProgress($upload);
@@ -95,7 +97,7 @@ class ProcessBavJob implements ShouldQueue
         ]);
     }
 
-    private function verifyDebtor(Debtor $debtor, IbanBavService $bavService): void
+    private function verifyDebtor(Debtor $debtor, IbanBavService $bavService, IbanValidator $ibanValidator): void
     {
         $name = trim($debtor->first_name . ' ' . $debtor->last_name);
         $iban = $debtor->iban;
@@ -127,6 +129,22 @@ class ProcessBavJob implements ShouldQueue
                 'bav_score' => $bavScore,
                 'new_vop_score' => $newVopScore,
             ]);
+        }
+
+        // Record in global BAV cache for deduplication across all BAV sources
+        if ($result['success']) {
+            $normalizedIban = $ibanValidator->normalize($iban);
+            BavVerifiedIban::recordVerification(
+                ibanHash: $ibanValidator->hash($normalizedIban),
+                ibanMasked: $ibanValidator->mask($iban),
+                fullName: $name,
+                nameMatch: $result['name_match'],
+                bic: $result['bic'],
+                bavScore: $result['vop_score'],
+                bavResult: $result['vop_result'],
+                source: BavVerifiedIban::SOURCE_UPLOAD_BAV,
+                sourceId: $this->uploadId
+            );
         }
     }
 
