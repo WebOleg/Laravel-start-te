@@ -3,18 +3,20 @@
 /**
  * Service for standalone BAV batch verification.
  * Handles CSV parsing with auto-detect column format, batch creation, and processing.
+ * Uses bav_verified_ibans table for deduplication across all BAV sources.
  */
 
 namespace App\Services;
 
 use App\Models\BavBatch;
+use App\Models\BavVerifiedIban;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 
 class BavBatchService
 {
-    private const MAX_BATCH_SIZE = 500;
+    private const MAX_BATCH_SIZE = 200000;
 
     private const IBAN_PATTERNS = ['iban', 'IBAN', 'Iban', 'iban_number'];
     private const FIRST_NAME_PATTERNS = ['first_name', 'firstname', 'FirstName', 'first', 'prenom', 'Prenom'];
@@ -22,10 +24,12 @@ class BavBatchService
     private const BIC_PATTERNS = ['bic', 'BIC', 'Bic', 'swift', 'SWIFT'];
 
     private IbanBavService $bavService;
+    private IbanValidator $ibanValidator;
 
-    public function __construct(IbanBavService $bavService)
+    public function __construct(IbanBavService $bavService, IbanValidator $ibanValidator)
     {
         $this->bavService = $bavService;
+        $this->ibanValidator = $ibanValidator;
     }
 
     /**
@@ -42,7 +46,7 @@ class BavBatchService
         }
 
         if (count($rows) > self::MAX_BATCH_SIZE) {
-            return ['success' => false, 'batch' => null, 'error' => 'CSV exceeds maximum of ' . self::MAX_BATCH_SIZE . ' records', 'preview' => null];
+            return ['success' => false, 'batch' => null, 'error' => 'CSV exceeds maximum of ' . number_format(self::MAX_BATCH_SIZE) . ' records', 'preview' => null];
         }
 
         $mapping = $this->detectColumns($rows);
@@ -57,13 +61,22 @@ class BavBatchService
 
         $path = $file->store('bav-batches', 's3');
 
+        $totalDataRows = count($rows) - ($mapping['has_header'] ? 1 : 0);
+
+        // Pre-calculate already verified count for metadata
+        $alreadyVerified = $this->countAlreadyVerified($rows, $mapping);
+
         $batch = BavBatch::create([
             'user_id' => $userId,
             'original_filename' => $file->getClientOriginalName(),
             'file_path' => $path,
             'status' => BavBatch::STATUS_PENDING,
-            'total_records' => count($rows) - ($mapping['has_header'] ? 1 : 0),
+            'total_records' => $totalDataRows,
             'column_mapping' => $mapping,
+            'meta' => [
+                'already_verified' => $alreadyVerified,
+                'eligible' => $totalDataRows - $alreadyVerified,
+            ],
         ]);
 
         $preview = $this->buildPreview($rows, $mapping, 5);
@@ -72,7 +85,33 @@ class BavBatchService
     }
 
     /**
-     * Process records in a BavBatch, respecting optional record_limit.
+     * Count how many IBANs in the file are already verified in bav_verified_ibans.
+     */
+    private function countAlreadyVerified(array $rows, array $mapping): int
+    {
+        $startRow = $mapping['has_header'] ? 1 : 0;
+        $ibanHashes = [];
+
+        for ($i = $startRow; $i < count($rows); $i++) {
+            $iban = $this->cleanIban($rows[$i][$mapping['iban']] ?? '');
+            if (!empty($iban)) {
+                $normalized = $this->ibanValidator->normalize($iban);
+                $ibanHashes[] = $this->ibanValidator->hash($normalized);
+            }
+        }
+
+        if (empty($ibanHashes)) {
+            return 0;
+        }
+
+        $uniqueHashes = array_unique($ibanHashes);
+        $verified = BavVerifiedIban::findVerified($uniqueHashes);
+
+        return count($verified);
+    }
+
+    /**
+     * Process records in a BavBatch with random selection and deduplication.
      */
     public function processBatch(BavBatch $batch, int $delayMs = 500): void
     {
@@ -87,21 +126,79 @@ class BavBatchService
         $startRow = $mapping['has_header'] ? 1 : 0;
         $recordLimit = $batch->record_limit ?? $batch->total_records;
 
+        // Collect all data rows with their IBAN hashes
+        $dataRows = [];
+        for ($i = $startRow; $i < count($rows); $i++) {
+            $row = $rows[$i];
+            $iban = $this->cleanIban($row[$mapping['iban']] ?? '');
+            $hash = null;
+
+            if (!empty($iban)) {
+                $normalized = $this->ibanValidator->normalize($iban);
+                $hash = $this->ibanValidator->hash($normalized);
+            }
+
+            $dataRows[] = ['row' => $row, 'iban' => $iban, 'hash' => $hash];
+        }
+
+        // Dedupe: find already verified IBANs
+        $allHashes = array_filter(array_column($dataRows, 'hash'));
+        $alreadyVerified = BavVerifiedIban::findVerified(array_unique($allHashes));
+
+        // Split into eligible (not yet verified) and skipped (already verified)
+        $eligible = [];
+        $skippedRows = [];
+
+        foreach ($dataRows as $entry) {
+            if ($entry['hash'] && isset($alreadyVerified[$entry['hash']])) {
+                $cached = $alreadyVerified[$entry['hash']];
+                $skippedRows[] = array_merge($entry['row'], [
+                    $cached->name_match === 'yes' || $cached->name_match === 'partial' ? 'true' : 'false',
+                    $cached->name_match ?? '',
+                    $cached->bic ?? '',
+                    (string) ($cached->bav_score ?? 0),
+                    $cached->bav_result ?? '',
+                    'already_verified',
+                ]);
+            } else {
+                $eligible[] = $entry;
+            }
+        }
+
+        // Shuffle eligible for random selection
+        shuffle($eligible);
+
+        // Prepare output
         $outputRows = [];
         $headerRow = $mapping['has_header'] ? $rows[0] : [];
         $outputHeader = array_merge($headerRow, ['bav_valid', 'bav_name_match', 'bav_bic', 'bav_score', 'bav_result', 'bav_error']);
         $outputRows[] = $outputHeader;
 
+        // Add skipped rows first (with cached results)
+        foreach ($skippedRows as $skippedRow) {
+            $outputRows[] = $skippedRow;
+        }
+
+        // Process eligible rows up to record_limit
         $processed = 0;
 
-        for ($i = $startRow; $i < count($rows); $i++) {
+        Log::channel('bav')->info('BavBatchService: Processing batch', [
+            'batch_id' => $batch->id,
+            'total_rows' => count($dataRows),
+            'already_verified' => count($skippedRows),
+            'eligible' => count($eligible),
+            'record_limit' => $recordLimit,
+        ]);
+
+        foreach ($eligible as $entry) {
             if ($processed >= $recordLimit) {
                 break;
             }
 
-            $row = $rows[$i];
+            $row = $entry['row'];
+            $iban = $entry['iban'];
+            $hash = $entry['hash'];
 
-            $iban = $this->cleanIban($row[$mapping['iban']] ?? '');
             $firstName = $mapping['first_name'] !== null ? trim($row[$mapping['first_name']] ?? '') : '';
             $lastName = $mapping['last_name'] !== null ? trim($row[$mapping['last_name']] ?? '') : '';
             $fullName = trim("{$firstName} {$lastName}");
@@ -126,6 +223,21 @@ class BavBatchService
                 ]);
 
                 $batch->incrementProcessed($result['success']);
+
+                // Record in global BAV cache
+                if ($result['success'] && $hash) {
+                    BavVerifiedIban::recordVerification(
+                        ibanHash: $hash,
+                        ibanMasked: $this->ibanValidator->mask($iban),
+                        fullName: $fullName,
+                        nameMatch: $result['name_match'],
+                        bic: $result['bic'],
+                        bavScore: $result['vop_score'],
+                        bavResult: $result['vop_result'],
+                        source: BavVerifiedIban::SOURCE_STANDALONE_BATCH,
+                        sourceId: $batch->id
+                    );
+                }
             } catch (\Exception $e) {
                 $outputRows[] = array_merge($row, ['false', '', '', '0', '', $e->getMessage()]);
                 $batch->incrementProcessed(false);
@@ -143,6 +255,15 @@ class BavBatchService
                 usleep($delayMs * 1000);
             }
         }
+
+        // Update batch meta with final stats
+        $batch->update([
+            'meta' => array_merge($batch->meta ?? [], [
+                'already_verified' => count($skippedRows),
+                'eligible' => count($eligible),
+                'processed_new' => $processed,
+            ]),
+        ]);
 
         $resultsPath = 'bav-batches/results_' . $batch->id . '_' . now()->format('Ymd_His') . '.csv';
         $csvContent = $this->buildCSVContent($outputRows, $mapping['delimiter']);
@@ -192,7 +313,6 @@ class BavBatchService
 
     /**
      * Detect columns by analyzing actual cell content.
-     * Priority: IBAN first (most unique pattern), then BIC, then names.
      */
     private function detectByContent(array $rows, array $mapping): array
     {
@@ -286,10 +406,6 @@ class BavBatchService
         return (bool) preg_match('/^[A-Z]{2}\d{2}[A-Z0-9]{10,30}$/i', $clean);
     }
 
-    /**
-     * BIC/SWIFT: exactly 8 or 11 chars, 4 letters + 2 letters + 2 alphanum (+ optional 3 alphanum).
-     * Must contain at least one digit OR end with XXX to distinguish from names.
-     */
     private function looksLikeBic(string $val): bool
     {
         $val = trim($val);
