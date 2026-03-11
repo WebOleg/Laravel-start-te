@@ -321,6 +321,23 @@ class UploadController extends Controller
             $upload->update($updateData);
         }
 
+        // Reset validation state for debtors that have not been billed.
+        // Approved and pending billing attempts are protected — those debtors are skipped.
+        // Chargebacked debtors are also skipped to preserve financial history.
+        $upload->debtors()
+            ->where('validation_status', '!=', 'chargebacked')
+            ->whereDoesntHave('billingAttempts', function ($q) {
+                $q->whereIn('status', [
+                    BillingAttempt::STATUS_APPROVED,
+                    BillingAttempt::STATUS_PENDING,
+                ]);
+            })
+            ->update([
+                'validated_at'       => null,
+                'validation_status'  => Debtor::VALIDATION_PENDING,
+                'validation_errors'  => null,
+            ]);
+
         ProcessValidationJob::dispatch($upload);
 
         return response()->json([
