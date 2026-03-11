@@ -100,6 +100,8 @@ class UploadController extends Controller
 
     public function show(Upload $upload): UploadResource
     {
+        $excludedCbCodes = config('tether.chargeback.excluded_cb_reason_codes', []);
+
         $upload->load(['uploader', 'empAccount', 'tetherInstance']);
         $upload->loadCount([
             'debtors',
@@ -127,8 +129,14 @@ class UploadController extends Controller
             'billingAttempts as billed_with_emp_count' => function ($q) {
                 $q->where('status', BillingAttempt::STATUS_APPROVED);
             },
-            'billingAttempts as chargeback_count' => function ($q) {
+            'billingAttempts as chargeback_count' => function ($q) use ($excludedCbCodes) {
                 $q->where('status', BillingAttempt::STATUS_CHARGEBACKED);
+                if (!empty($excludedCbCodes)) {
+                    $q->where(function ($inner) use ($excludedCbCodes) {
+                        $inner->whereNotIn('chargeback_reason_code', $excludedCbCodes)
+                            ->orWhereNull('chargeback_reason_code');
+                    });
+                }
             },
         ]);
 
@@ -136,8 +144,14 @@ class UploadController extends Controller
             $q->where('status', BillingAttempt::STATUS_APPROVED);
         }], 'amount');
 
-        $upload->loadSum(['billingAttempts as chargeback_amount' => function ($q) {
+        $upload->loadSum(['billingAttempts as chargeback_amount' => function ($q) use ($excludedCbCodes) {
             $q->where('status', BillingAttempt::STATUS_CHARGEBACKED);
+            if (!empty($excludedCbCodes)) {
+                $q->where(function ($inner) use ($excludedCbCodes) {
+                    $inner->whereNotIn('chargeback_reason_code', $excludedCbCodes)
+                        ->orWhereNull('chargeback_reason_code');
+                });
+            }
         }], 'amount');
 
         $this->enrichShowStats($upload);
@@ -348,6 +362,8 @@ class UploadController extends Controller
 
     public function validationStats(Upload $upload, Request $request): JsonResponse
     {
+        $excludedCbCodes = config('tether.chargeback.excluded_cb_reason_codes', []);
+
         $modelStats = $upload->debtors()
             ->leftJoin('debtor_profiles', 'debtors.debtor_profile_id', '=', 'debtor_profiles.id')
             ->selectRaw("
@@ -402,8 +418,14 @@ class UploadController extends Controller
         }
 
         $chargebacked = $upload->debtors()
-            ->whereHas('billingAttempts', function ($query) {
+            ->whereHas('billingAttempts', function ($query) use ($excludedCbCodes) {
                 $query->where('status', BillingAttempt::STATUS_CHARGEBACKED);
+                if (!empty($excludedCbCodes)) {
+                    $query->where(function ($inner) use ($excludedCbCodes) {
+                        $inner->whereNotIn('chargeback_reason_code', $excludedCbCodes)
+                            ->orWhereNull('chargeback_reason_code');
+                    });
+                }
             })
             ->count();
 
@@ -428,8 +450,16 @@ class UploadController extends Controller
 
         $cbBreakdown = DB::table('billing_attempts')
             ->join('debtors', 'billing_attempts.debtor_id', '=', 'debtors.id')
-            ->where('debtors.upload_id', $upload->id)
-            ->selectRaw("
+            ->where('debtors.upload_id', $upload->id);
+
+        if (!empty($excludedCbCodes)) {
+            $cbBreakdown = $cbBreakdown->where(function ($q) use ($excludedCbCodes) {
+                $q->whereNotIn('billing_attempts.chargeback_reason_code', $excludedCbCodes)
+                    ->orWhereNull('billing_attempts.chargeback_reason_code');
+            });
+        }
+
+        $cbBreakdown = $cbBreakdown->selectRaw("
                 debtors.amount,
                 SUM(CASE WHEN billing_attempts.status = 'approved' THEN 1 ELSE 0 END) as approved,
                 SUM(CASE WHEN billing_attempts.status = 'chargebacked' THEN 1 ELSE 0 END) as chargebacks,
