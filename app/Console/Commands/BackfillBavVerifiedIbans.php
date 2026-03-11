@@ -27,7 +27,7 @@ class BackfillBavVerifiedIbans extends Command
 
         $records = DB::table('vop_logs')
             ->join('debtors', 'vop_logs.debtor_id', '=', 'debtors.id')
-            ->whe('vop_logs.bav_verified', true)
+            ->where('vop_logs.bav_verified', true)
             ->whereNotNull('debtors.iban')
             ->select([
                 'debtors.iban',
