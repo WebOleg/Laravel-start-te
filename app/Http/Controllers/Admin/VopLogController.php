@@ -21,6 +21,15 @@ class VopLogController extends Controller
     {
         $query = VopLog::with(['debtor', 'upload']);
 
+        if ($request->filled('search')) {
+            $search = $request->input('search');
+            $query->where(function ($q) use ($search) {
+                $q->where('bic', 'ilike', "%{$search}%")
+                  ->orWhere('iban_masked', 'ilike', "%{$search}%")
+                  ->orWhereHas('debtor', fn($dq) => $dq->where('iban', 'ilike', "%{$search}%"));
+            });
+        }
+
         if ($request->filled('bav_verified')) {
             $query->where('bav_verified', filter_var($request->bav_verified, FILTER_VALIDATE_BOOLEAN));
         }
