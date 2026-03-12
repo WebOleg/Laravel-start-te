@@ -19,6 +19,7 @@ class VopLogResource extends JsonResource
             'debtor_id' => $this->debtor_id,
             'upload_id' => $this->upload_id,
 
+            'iban' => $this->whenLoaded('debtor', fn() => $this->debtor?->iban),
             'iban_masked' => $this->iban_masked,
             'iban_valid' => $this->iban_valid,
 
