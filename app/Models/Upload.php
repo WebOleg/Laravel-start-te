@@ -28,10 +28,11 @@ class Upload extends Model
     public const JOB_FAILED = 'failed';
     public const JOB_CANCELLED = 'cancelled';
 
-    public const MAX_RESYNC_ATTEMPTS = 3;
+    // Effectively unlimited — resync stops automatically when all debtors reach the billing cap.
+    public const MAX_RESYNC_ATTEMPTS = 100;
 
-    // Cooldown between resyncs, in hours (120 h = 5 days).
-    public const RESYNC_COOLDOWN_HOURS = 120;
+    // Cooldown between resyncs, in hours (72 h = 3 days).
+    public const RESYNC_COOLDOWN_HOURS = 72;
 
     protected $fillable = [
         'filename',

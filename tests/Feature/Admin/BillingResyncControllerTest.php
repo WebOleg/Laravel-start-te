@@ -58,7 +58,6 @@ class BillingResyncControllerTest extends TestCase
             'status' => Upload::STATUS_PROCESSING,
         ]);
 
-        // Simulate active resync lock
         Cache::put("billing_resync_{$upload->id}", true, 300);
         Cache::put("billing_sync_{$upload->id}_" . DebtorProfile::MODEL_LEGACY, true, 300);
 
@@ -69,14 +68,10 @@ class BillingResyncControllerTest extends TestCase
             ->assertJsonPath('data.is_resync', true)
             ->assertJsonPath('data.billing_status', Upload::STATUS_CANCELLING);
 
-        // Verify resync locks were cleared
         $this->assertFalse(Cache::has("billing_resync_{$upload->id}"));
         $this->assertFalse(Cache::has("billing_sync_{$upload->id}_" . DebtorProfile::MODEL_LEGACY));
-
-        // Verify kill switch is set
         $this->assertTrue(Cache::has("billing_sync_stop_{$upload->id}"));
 
-        // Verify upload status updated
         $upload->refresh();
         $this->assertEquals(Upload::STATUS_CANCELLING, $upload->billing_status);
         $this->assertEquals(Upload::STATUS_CANCELLING, $upload->status);
@@ -96,10 +91,8 @@ class BillingResyncControllerTest extends TestCase
             ->assertJsonPath('data.is_resync', false)
             ->assertJsonPath('data.billing_status', Upload::STATUS_CANCELLING);
 
-        // Verify kill switch is set
         $this->assertTrue(Cache::has("billing_sync_stop_{$upload->id}"));
 
-        // Verify upload status updated
         $upload->refresh();
         $this->assertEquals(Upload::STATUS_CANCELLING, $upload->billing_status);
         $this->assertEquals(Upload::STATUS_CANCELLING, $upload->status);
@@ -162,7 +155,6 @@ class BillingResyncControllerTest extends TestCase
             'billing_completed_at' => now()->subMinutes(30),
         ]);
 
-        // No billing attempts at all
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
             ->postJson("/api/admin/billing/{$upload->id}/void");
 
@@ -233,7 +225,6 @@ class BillingResyncControllerTest extends TestCase
     {
         Bus::fake();
 
-        // Upload with prior billing runs (resync scenario)
         $upload = Upload::factory()->create([
             'billing_started_at' => now()->subHours(1),
             'billing_completed_at' => now()->subMinutes(30),
@@ -289,7 +280,6 @@ class BillingResyncControllerTest extends TestCase
 
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
 
-        // Only non-voidable attempts
         BillingAttempt::factory()->declined()->create([
             'upload_id' => $upload->id,
             'debtor_id' => $debtor->id,
@@ -311,7 +301,6 @@ class BillingResyncControllerTest extends TestCase
 
     // ──────────────────────────────────────────────
     // Resync via sync endpoint: POST /api/admin/uploads/{upload}/sync
-    // (is_30d_cool = false triggers resync path)
     // ──────────────────────────────────────────────
 
     public function test_sync_resync_path_triggers_when_cooldown_off(): void
@@ -354,7 +343,7 @@ class BillingResyncControllerTest extends TestCase
             'is_30d_cool' => false,
             'billing_status' => Upload::JOB_COMPLETED,
             'billing_started_at' => now()->subHours(2),
-            'billing_completed_at' => now()->subHours(1), // Cooldown not elapsed
+            'billing_completed_at' => now()->subHours(1),
         ]);
 
         $debtor = Debtor::factory()->create([
@@ -386,7 +375,6 @@ class BillingResyncControllerTest extends TestCase
             'billing_completed_at' => now()->subDays(6),
         ]);
 
-        // Set the resync lock
         Cache::put("billing_resync_{$upload->id}", true, 300);
 
         $debtor = Debtor::factory()->create([
@@ -494,7 +482,6 @@ class BillingResyncControllerTest extends TestCase
             'is_30d_cool' => false,
         ]);
 
-        // VOP completed (no eligible debtors with iban_valid)
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
             ->postJson("/api/admin/uploads/{$upload->id}/sync", [
                 'debtor_type' => DebtorProfile::MODEL_FLYWHEEL,
@@ -512,7 +499,6 @@ class BillingResyncControllerTest extends TestCase
     {
         Bus::fake();
 
-        // Step 1: Create an upload that completed its first billing run
         $upload = Upload::factory()->create([
             'is_30d_cool' => false,
             'billing_status' => Upload::JOB_COMPLETED,
@@ -534,19 +520,16 @@ class BillingResyncControllerTest extends TestCase
             'debtor_id' => $debtor->id,
         ]);
 
-        // Create a declined attempt from the first run
         BillingAttempt::factory()->declined()->create([
             'upload_id' => $upload->id,
             'debtor_id' => $debtor->id,
         ]);
 
-        // Step 2: Trigger resync
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
             ->postJson("/api/admin/uploads/{$upload->id}/sync");
 
         $response->assertStatus(202);
 
-        // Step 3: Verify run was archived
         $upload->refresh();
         $runs = $upload->billing_runs;
 
@@ -554,16 +537,16 @@ class BillingResyncControllerTest extends TestCase
         $this->assertEquals(1, $runs[0]['run']);
         $this->assertEquals('batch_run1', $runs[0]['batch_id']);
 
-        // Step 4: Verify debtor was reset to uploaded
         $debtor->refresh();
         $this->assertEquals(Debtor::STATUS_UPLOADED, $debtor->status);
 
-        // Step 5: Verify job was dispatched
         Bus::assertDispatched(ProcessBillingJob::class);
     }
 
-    public function test_resync_cap_enforcement_fourth_resync_denied(): void
+    public function test_resync_allowed_after_multiple_runs_if_eligible_debtors_exist(): void
     {
+        Bus::fake();
+
         $upload = Upload::factory()->create([
             'is_30d_cool' => false,
             'billing_status' => Upload::JOB_COMPLETED,
@@ -592,9 +575,8 @@ class BillingResyncControllerTest extends TestCase
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
             ->postJson("/api/admin/uploads/{$upload->id}/sync");
 
-        $response->assertStatus(422)
-            ->assertJsonPath('data.resync_count', 3)
-            ->assertJsonPath('data.max_resync', Upload::MAX_RESYNC_ATTEMPTS);
+        // Resync is now unlimited — stops only when all debtors reach the billing cap
+        $response->assertStatus(202);
     }
 
     public function test_cancel_during_resync_then_retry(): void
@@ -609,21 +591,17 @@ class BillingResyncControllerTest extends TestCase
             'billing_completed_at' => now()->subDays(6),
         ]);
 
-        // Set active resync lock
         Cache::put("billing_resync_{$upload->id}", true, 300);
 
-        // Cancel the resync
         $cancelResponse = $this->withHeader('Authorization', 'Bearer ' . $this->token)
             ->postJson("/api/admin/billing/{$upload->id}/cancel");
 
         $cancelResponse->assertStatus(200)
             ->assertJsonPath('data.is_resync', true);
 
-        // Verify locks are cleared
         $this->assertFalse(Cache::has("billing_resync_{$upload->id}"));
         $this->assertTrue(Cache::has("billing_sync_stop_{$upload->id}"));
 
-        // Verify upload shows cancelling
         $upload->refresh();
         $this->assertEquals(Upload::STATUS_CANCELLING, $upload->billing_status);
     }
@@ -642,7 +620,6 @@ class BillingResyncControllerTest extends TestCase
 
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
 
-        // Old attempt from run 1 — should NOT be voidable
         BillingAttempt::factory()->approved()->create([
             'upload_id' => $upload->id,
             'debtor_id' => $debtor->id,
@@ -650,7 +627,6 @@ class BillingResyncControllerTest extends TestCase
             'created_at' => $billingStartedAt->copy()->subDays(3),
         ]);
 
-        // New attempt from latest run — should be voidable
         BillingAttempt::factory()->approved()->create([
             'upload_id' => $upload->id,
             'debtor_id' => $debtor->id,

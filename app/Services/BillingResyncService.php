@@ -29,7 +29,7 @@ class BillingResyncService
         return in_array($billingModel, self::RESYNCABLE_MODELS, true);
     }
 
-    // Evaluate if resync can proceed (model validation, locks, cap, cooldown, eligible debtors)
+    // Evaluate if resync can proceed (model validation, locks, cooldown, eligible debtors)
     public function canResync(Upload $upload, ?string $billingModel = null): ResyncEligibility
     {
         $effectiveModel = $billingModel ?: DebtorProfile::ALL;
@@ -89,18 +89,6 @@ class BillingResyncService
             );
         }
 
-        // Check resync cap
-        $resyncCount = count($upload->billing_runs ?? []);
-        if ($resyncCount >= Upload::MAX_RESYNC_ATTEMPTS) {
-            return new ResyncEligibility(
-                allowed: false,
-                reason: 'Resync limit reached. This upload has already been resynced '
-                    . Upload::MAX_RESYNC_ATTEMPTS . ' time(s), which is the maximum allowed.',
-                billingModel: $effectiveModel,
-                code: ResyncEligibility::CODE_CAP,
-            );
-        }
-
         // Enforce cooldown period — check current run or last archived run
         $lastCompletedAt = $upload->billing_completed_at;
         if (!$lastCompletedAt && !empty($upload->billing_runs)) {
@@ -129,14 +117,14 @@ class BillingResyncService
             }
         }
 
-        // Count eligible debtors
+        // Count eligible debtors — resync stops automatically when all debtors reach the billing cap
         $eligibleCount = $this->getResyncableDebtors($upload)->count();
         if ($eligibleCount === 0) {
             return new ResyncEligibility(
                 allowed: false,
                 reason: 'No eligible Legacy debtors found for resync. '
-                    . 'All debtors are either approved, chargebacked, or belong to non-Legacy billing models. '
-                    . 'Note: debtors with pending billing attempts are also eligible for resync.',
+                    . 'All debtors have either reached the billing cap, been chargebacked, '
+                    . 'or belong to non-Legacy billing models.',
                 billingModel: $effectiveModel,
                 code: ResyncEligibility::CODE_NO_ELIGIBLE,
             );
@@ -150,10 +138,10 @@ class BillingResyncService
         );
     }
 
-    // Query debtors eligible for resync (valid, legacy, no terminal attempts, VOP passed)
+    // Query debtors eligible for resync (valid, legacy, not chargebacked, not pending in EMP, cap not reached)
     public function getResyncableDebtors(Upload $upload): Builder
     {
-        return Debtor::where('upload_id', $upload->id)
+        $query = Debtor::where('upload_id', $upload->id)
             ->where('validation_status', Debtor::VALIDATION_VALID)
             // Only Legacy debtors
             ->where('billing_model', DebtorProfile::MODEL_LEGACY)
@@ -162,12 +150,9 @@ class BillingResyncService
                 $q->whereDoesntHave('debtorProfile')
                   ->orWhereHas('debtorProfile', fn (Builder $p) => $p->where('billing_model', DebtorProfile::MODEL_LEGACY));
             })
-            // Exclude debtors with terminal attempts (approved/chargebacked)
+            // Exclude chargebacked debtors — these are permanently excluded
             ->whereDoesntHave('billingAttempts', function (Builder $ba) {
-                $ba->whereIn('status', [
-                    BillingAttempt::STATUS_APPROVED,
-                    BillingAttempt::STATUS_CHARGEBACKED,
-                ]);
+                $ba->where('status', BillingAttempt::STATUS_CHARGEBACKED);
             })
             // Exclude debtors with pending attempts already submitted to EMP (unique_id set)
             // These are live in the gateway — reconciliation will resolve their final status
@@ -185,6 +170,13 @@ class BillingResyncService
                       ]);
                   });
             });
+
+        // If billing cap is set, only include debtors that have not yet reached it
+        if ($upload->max_billing_amount !== null && (float) $upload->max_billing_amount > 0) {
+            $query->withinBillingCap((float) $upload->max_billing_amount);
+        }
+
+        return $query;
     }
 
     // Check if resync is currently in progress
@@ -237,7 +229,7 @@ class BillingResyncService
         ]);
     }
 
-    // Execute resync: acquire lock, archive run, void attempts, reset debtors, dispatch job
+    // Execute resync: acquire lock, archive run, reset debtors (approved included), dispatch job
     public function executeResync(Upload $upload): ResyncResult
     {
         $resyncLockKey = "billing_resync_{$upload->id}";
@@ -280,9 +272,11 @@ class BillingResyncService
                     $archived = true;
                 }
 
-                // Reset eligible debtors to 'uploaded', void pending attempts
+                // Reset eligible debtors to 'uploaded' so they can be billed again.
+                // Approved debtors are included — their billing history is preserved in billing_attempts.
+                // Only chargebacked debtors are permanently excluded (filtered in getResyncableDebtors).
                 if ($resyncDebtorIds->isNotEmpty()) {
-                    // Only void pending attempts NOT yet submitted to EMP (no unique_id)
+                    // Void pending attempts NOT yet submitted to EMP (no unique_id)
                     // Attempts with unique_id are left as pending — reconciliation resolves them
                     BillingAttempt::whereIn('debtor_id', $resyncDebtorIds)
                         ->where('status', BillingAttempt::STATUS_PENDING)

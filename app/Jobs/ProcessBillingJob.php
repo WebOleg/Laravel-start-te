@@ -67,16 +67,25 @@ class ProcessBillingJob implements ShouldQueue, ShouldBeUnique
 
         // 2. Conditional Billing Attempt Check
         // Rule: "If not legacy, billing attempts don't matter."
-        // Logic: (Is Non-Legacy Profile) OR (Has No Active Attempts)
+        // Logic: (Is Non-Legacy Profile) OR (Has No Chargebacked or Pending-submitted Attempts)
+        // Approved debtors are included — resync resets their status to 'uploaded' before dispatch.
+        // Chargebacked debtors are permanently excluded.
         $query->where(function ($q) {
             // Condition A: The profile is explicitly NOT legacy (e.g. Flywheel/Recovery)
             // We include these regardless of billing attempts.
             $q->whereHas('debtorProfile', function ($p) {
                 $p->where('billing_model', '!=', DebtorProfile::MODEL_LEGACY);
             })
-                // Condition B: Otherwise (Legacy or No Profile), we MUST ensure no active attempts exist.
-                ->orWhereDoesntHave('billingAttempts', function ($ba) {
-                    $ba->whereIn('status', ['pending', 'approved']);
+                // Condition B: Otherwise (Legacy or No Profile), exclude chargebacked
+                // and pending attempts already submitted to EMP.
+                ->orWhere(function ($sub) {
+                    $sub->whereDoesntHave('billingAttempts', function ($ba) {
+                            $ba->where('status', 'chargebacked');
+                        })
+                        ->whereDoesntHave('billingAttempts', function ($ba) {
+                            $ba->where('status', 'pending')
+                               ->whereNotNull('unique_id');
+                        });
                 });
         });
 
