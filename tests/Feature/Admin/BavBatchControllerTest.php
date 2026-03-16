@@ -37,7 +37,21 @@ class BavBatchControllerTest extends TestCase
             ->getJson('/api/admin/bav/batches');
 
         $response->assertStatus(200)
-            ->assertJsonPath('data', []);
+            ->assertJsonPath('data', [])
+            ->assertJsonStructure(['data', 'links', 'meta']);
+    }
+
+    public function test_bav_batch_index_supports_per_page_param(): void
+    {
+        BavBatch::factory()->count(30)->create(['user_id' => $this->user->id]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/bav/batches?per_page=10');
+
+        $response->assertStatus(200)
+            ->assertJsonPath('meta.total', 30)
+            ->assertJsonPath('meta.per_page', 10)
+            ->assertJsonCount(10, 'data');
     }
 
     public function test_bav_batch_upload_validates_file_required(): void

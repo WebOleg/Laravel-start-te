@@ -8,6 +8,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Resources\BavBatchResource;
 use App\Jobs\ProcessBavBatchJob;
 use App\Models\BavBatch;
 use App\Services\BavBatchService;
@@ -26,26 +27,18 @@ class BavBatchController extends Controller
     /**
      * List all BAV batches for the current user.
      */
-    public function index(Request $request): JsonResponse
+    public function index(Request $request)
     {
-        $batches = BavBatch::orderByDesc('created_at')
-            ->limit(50)
-            ->get()
-            ->map(fn (BavBatch $b) => [
-                'id' => $b->id,
-                'filename' => $b->original_filename,
-                'status' => $b->status,
-                'total_records' => $b->total_records,
-                'record_limit' => $b->record_limit,
-                'processed_records' => $b->processed_records,
-                'success_count' => $b->success_count,
-                'failed_count' => $b->failed_count,
-                'credits_used' => $b->credits_used,
-                'progress' => $b->getProgress(),
-                'created_at' => $b->created_at->toIso8601String(),
-            ]);
+        $request->validate([
+            'per_page' => 'nullable|integer|min:1|max:100',
+        ]);
 
-        return response()->json(['data' => $batches]);
+        $perPage = min((int) $request->input('per_page', 50), 100);
+
+        $batches = BavBatch::orderByDesc('created_at')
+            ->paginate($perPage);
+
+        return BavBatchResource::collection($batches);
     }
 
     /**
