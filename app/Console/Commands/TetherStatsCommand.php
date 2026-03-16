@@ -107,7 +107,7 @@ class TetherStatsCommand extends Command
 
             $rows[] = [
                 $account->name,
-                number_format($s, 2) . ' EUR',
+                number_format($gross, 2) . ' EUR',
                 $cbTxns > 0 ? '-' . number_format($cbAmount, 2) . ' EUR' : '—',
                 number_format($net, 2) . ' EUR',
                 $txns,
@@ -137,7 +137,7 @@ class TetherStatsCommand extends Command
             ['Gross', 'Chargebacks', 'Net', 'Txns', 'CB Txns', 'CB Rate'],
             [[
                 number_format($totalGross, 2) . ' EUR',
-                $totalCb > 0 ? '-' . number_format($tCb, 2) . ' EUR' : '—',
+                $totalCb > 0 ? '-' . number_format($totalCb, 2) . ' EUR' : '—',
                 number_format($totalNet, 2) . ' EUR',
                 $totalTxns,
                 $totalCbTxns ?: '—',
