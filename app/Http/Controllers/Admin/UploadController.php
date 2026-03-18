@@ -28,6 +28,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
+use OpenApi\Annotations as OA;
 
 class UploadController extends Controller
 {
@@ -40,6 +41,32 @@ class UploadController extends Controller
         private BillingResyncService $resyncService,
     ) {}
 
+    /**
+     * List uploads.
+     *
+     * @OA\Get(
+     *     path="/api/admin/uploads",
+     *     summary="List uploads",
+     *     description="Returns a paginated list of uploads with debtor counts, validation stats, billing stats (approved/chargeback counts and amounts). Supports filtering by status and account.",
+     *     tags={"Uploads"},
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="status", in="query", required=false, @OA\Schema(type="string", enum={"pending", "processing", "completed", "failed"})),
+     *     @OA\Parameter(name="emp_account_id", in="query", required=false, @OA\Schema(type="integer")),
+     *     @OA\Parameter(name="tether_instance_id", in="query", required=false, @OA\Schema(type="integer")),
+     *     @OA\Parameter(name="per_page", in="query", required=false, @OA\Schema(type="integer", default=20, maximum=100)),
+     *     @OA\Response(
+     *         response=200,
+     *         description="Paginated uploads",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="data", type="array", @OA\Items(ref="#/components/schemas/Upload")),
+     *             @OA\Property(property="links", type="object"),
+     *             @OA\Property(property="meta", type="object")
+     *         )
+     *     ),
+     *     @OA\Response(response=401, description="Unauthenticated"),
+     *     @OA\Response(response=422, description="Validation error")
+     * )
+     */
     public function index(Request $request): AnonymousResourceCollection
     {
         $request->validate([
@@ -98,6 +125,25 @@ class UploadController extends Controller
         return UploadResource::collection($uploads);
     }
 
+    /**
+     * Show upload details.
+     *
+     * @OA\Get(
+     *     path="/api/admin/uploads/{upload}",
+     *     summary="Get upload details",
+     *     description="Returns detailed upload information including uploader, EMP account, Tether instance, debtor counts (valid, invalid, BAV stats), billing amounts, ready-for-sync counts, and enriched billing run history with per-run recovery stats.",
+     *     tags={"Uploads"},
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="upload", in="path", required=true, @OA\Schema(type="integer")),
+     *     @OA\Response(
+     *         response=200,
+     *         description="Upload details",
+     *         @OA\JsonContent(@OA\Property(property="data", ref="#/components/schemas/Upload"))
+     *     ),
+     *     @OA\Response(response=401, description="Unauthenticated"),
+     *     @OA\Response(response=404, description="Upload not found")
+     * )
+     */
     public function show(Upload $upload): UploadResource
     {
         $excludedCbCodes = config('tether.chargeback.excluded_cb_reason_codes', []);
@@ -159,6 +205,61 @@ class UploadController extends Controller
         return new UploadResource($upload);
     }
 
+    /**
+     * Upload a file and create debtors.
+     *
+     * @OA\Post(
+     *     path="/api/admin/uploads",
+     *     summary="Upload a file",
+     *     description="Uploads a CSV/XLSX file, pre-validates headers (IBAN, amount, name required), auto-maps columns, and creates debtor records. Small files (<100 rows) are processed synchronously; larger files are queued. Supports billing model selection, EMP account/Tether instance assignment, global IBAN lock, cooldown, and chargeback check skip.",
+     *     tags={"Uploads"},
+     *     security={{"bearerAuth":{}}},
+     *     @OA\RequestBody(
+     *         required=true,
+     *         @OA\MediaType(
+     *             mediaType="multipart/form-data",
+     *             @OA\Schema(
+     *                 required={"file"},
+     *                 @OA\Property(property="file", type="string", format="binary"),
+     *                 @OA\Property(property="billing_model", type="string", enum={"legacy", "flywheel", "recovery"}, default="legacy"),
+     *                 @OA\Property(property="emp_account_id", type="integer", nullable=true),
+     *                 @OA\Property(property="tether_instance_id", type="integer", nullable=true),
+     *                 @OA\Property(property="apply_global_lock", type="boolean", default=false, description="Prevent cross-instance IBAN billing"),
+     *                 @OA\Property(property="is_30d_cool", type="boolean", nullable=true, description="Enable/disable 30-day cooldown"),
+     *                 @OA\Property(property="skip_chargeback_check", type="boolean", default=false),
+     *                 @OA\Property(property="async", type="boolean", default=false, description="Force async processing")
+     *             )
+     *         )
+     *     ),
+     *     @OA\Response(
+     *         response=201,
+     *         description="File processed synchronously",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="data", ref="#/components/schemas/Upload"),
+     *             @OA\Property(property="meta", type="object",
+     *                 @OA\Property(property="queued", type="boolean", example=false),
+     *                 @OA\Property(property="created", type="integer", example=95),
+     *                 @OA\Property(property="failed", type="integer", example=5),
+     *                 @OA\Property(property="skipped", type="object"),
+     *                 @OA\Property(property="errors", type="array", @OA\Items(type="object"))
+     *             )
+     *         )
+     *     ),
+     *     @OA\Response(
+     *         response=202,
+     *         description="File queued for async processing",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="data", ref="#/components/schemas/Upload"),
+     *             @OA\Property(property="meta", type="object",
+     *                 @OA\Property(property="queued", type="boolean", example=true),
+     *                 @OA\Property(property="message", type="string", example="File queued for processing. Check status for updates.")
+     *             )
+     *         )
+     *     ),
+     *     @OA\Response(response=401, description="Unauthenticated"),
+     *     @OA\Response(response=422, description="File validation failed")
+     * )
+     */
     public function store(StoreUploadRequest $request): JsonResponse
     {
         try {
@@ -234,6 +335,36 @@ class UploadController extends Controller
         }
     }
 
+    /**
+     * Get upload processing status.
+     *
+     * @OA\Get(
+     *     path="/api/admin/uploads/{upload}/status",
+     *     summary="Get upload processing status",
+     *     description="Returns current processing progress for an upload including record counts and completion percentage.",
+     *     tags={"Uploads"},
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="upload", in="path", required=true, @OA\Schema(type="integer")),
+     *     @OA\Response(
+     *         response=200,
+     *         description="Processing status",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="data", type="object",
+     *                 @OA\Property(property="id", type="integer", example=1),
+     *                 @OA\Property(property="status", type="string", example="processing"),
+     *                 @OA\Property(property="total_records", type="integer", example=1000),
+     *                 @OA\Property(property="processed_records", type="integer", example=500),
+     *                 @OA\Property(property="failed_records", type="integer", example=10),
+     *                 @OA\Property(property="debtors_count", type="integer", example=490),
+     *                 @OA\Property(property="progress", type="number", format="float", example=51.0),
+     *                 @OA\Property(property="is_complete", type="boolean", example=false)
+     *             )
+     *         )
+     *     ),
+     *     @OA\Response(response=401, description="Unauthenticated"),
+     *     @OA\Response(response=404, description="Upload not found")
+     * )
+     */
     public function status(Upload $upload): JsonResponse
     {
         $upload->loadCount('debtors');
@@ -255,6 +386,34 @@ class UploadController extends Controller
         ]);
     }
 
+    /**
+     * List debtors for an upload.
+     *
+     * @OA\Get(
+     *     path="/api/admin/uploads/{upload}/debtors",
+     *     summary="List debtors for an upload",
+     *     description="Returns a paginated list of debtors belonging to the upload. Supports filtering by billing model, validation status, chargeback exclusion, and text search.",
+     *     tags={"Uploads"},
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="upload", in="path", required=true, @OA\Schema(type="integer")),
+     *     @OA\Parameter(name="debtor_type", in="query", required=false, @OA\Schema(type="string", enum={"all", "legacy", "flywheel", "recovery"})),
+     *     @OA\Parameter(name="validation_status", in="query", required=false, @OA\Schema(type="string", enum={"pending", "valid", "invalid"})),
+     *     @OA\Parameter(name="exclude_chargebacked", in="query", required=false, @OA\Schema(type="boolean")),
+     *     @OA\Parameter(name="search", in="query", required=false, @OA\Schema(type="string")),
+     *     @OA\Parameter(name="per_page", in="query", required=false, @OA\Schema(type="integer", default=50)),
+     *     @OA\Response(
+     *         response=200,
+     *         description="Paginated debtors",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="data", type="array", @OA\Items(ref="#/components/schemas/Debtor")),
+     *             @OA\Property(property="links", type="object"),
+     *             @OA\Property(property="meta", type="object")
+     *         )
+     *     ),
+     *     @OA\Response(response=401, description="Unauthenticated"),
+     *     @OA\Response(response=404, description="Upload not found")
+     * )
+     */
     public function debtors(Upload $upload, Request $request): AnonymousResourceCollection
     {
         $query = $upload->debtors()->with(['latestBillingAttempt', 'debtorProfile']);
@@ -301,6 +460,30 @@ class UploadController extends Controller
         return DebtorResource::collection($debtors);
     }
 
+    /**
+     * Run validation on upload debtors.
+     *
+     * @OA\Post(
+     *     path="/api/admin/uploads/{upload}/validate",
+     *     summary="Run validation on upload debtors",
+     *     description="Dispatches validation jobs for all debtors in the upload. Resets validation state for unbilled debtors. Optionally updates skip_bic_blacklist and skip_chargeback_check flags before validating.",
+     *     tags={"Uploads"},
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="upload", in="path", required=true, @OA\Schema(type="integer")),
+     *     @OA\RequestBody(
+     *         required=false,
+     *         @OA\JsonContent(
+     *             @OA\Property(property="skip_bic_blacklist", type="boolean", nullable=true),
+     *             @OA\Property(property="skip_chargeback_check", type="boolean", nullable=true)
+     *         )
+     *     ),
+     *     @OA\Response(response=202, description="Validation started", @OA\JsonContent(@OA\Property(property="message", type="string", example="Validation started"), @OA\Property(property="status", type="string", example="processing"))),
+     *     @OA\Response(response=200, description="Validation already in progress", @OA\JsonContent(@OA\Property(property="message", type="string", example="Validation already in progress."), @OA\Property(property="status", type="string", example="processing"))),
+     *     @OA\Response(response=422, description="Upload still processing"),
+     *     @OA\Response(response=401, description="Unauthenticated"),
+     *     @OA\Response(response=404, description="Upload not found")
+     * )
+     */
     public function validate(Request $request, Upload $upload): JsonResponse
     {
         $request->validate([
@@ -360,6 +543,62 @@ class UploadController extends Controller
         ], 202);
     }
 
+    /**
+     * Get detailed validation stats for an upload.
+     *
+     * @OA\Get(
+     *     path="/api/admin/uploads/{upload}/validation-stats",
+     *     summary="Get validation stats for an upload",
+     *     description="Returns detailed validation statistics including counts by status, billing model breakdown, blacklisted/chargebacked counts, price point breakdown with CB rates, and resync state.",
+     *     tags={"Uploads"},
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="upload", in="path", required=true, @OA\Schema(type="integer")),
+     *     @OA\Parameter(name="debtor_type", in="query", required=false, @OA\Schema(type="string", enum={"all", "legacy", "flywheel", "recovery"})),
+     *     @OA\Response(
+     *         response=200,
+     *         description="Validation statistics",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="data", type="object",
+     *                 @OA\Property(property="total", type="integer", example=1000),
+     *                 @OA\Property(property="valid", type="integer", example=900),
+     *                 @OA\Property(property="invalid", type="integer", example=70),
+     *                 @OA\Property(property="pending", type="integer", example=10),
+     *                 @OA\Property(property="blacklisted", type="integer", example=20),
+     *                 @OA\Property(property="chargebacked", type="integer", example=30),
+     *                 @OA\Property(property="ready_for_sync", type="integer", example=850),
+     *                 @OA\Property(property="current_resync_count", type="integer", example=0),
+     *                 @OA\Property(property="skipped", type="object", nullable=true),
+     *                 @OA\Property(property="is_processing", type="boolean", example=false),
+     *                 @OA\Property(property="skip_bic_blacklist", type="boolean", example=false),
+     *                 @OA\Property(property="skip_chargeback_check", type="boolean", example=false),
+     *                 @OA\Property(property="model_counts", type="object",
+     *                     @OA\Property(property="all", type="integer", example=1000),
+     *                     @OA\Property(property="legacy", type="integer", example=800),
+     *                     @OA\Property(property="flywheel", type="integer", example=150),
+     *                     @OA\Property(property="recovery", type="integer", example=50)
+     *                 ),
+     *                 @OA\Property(property="price_breakdown", type="array", @OA\Items(
+     *                     @OA\Property(property="amount", type="number", format="float", example=49.99),
+     *                     @OA\Property(property="count", type="integer", example=500),
+     *                     @OA\Property(property="total", type="number", format="float", example=24995.00)
+     *                 )),
+     *                 @OA\Property(property="valid_total_amount", type="number", format="float", example=44991.00),
+     *                 @OA\Property(property="cb_breakdown", type="array", @OA\Items(
+     *                     @OA\Property(property="amount", type="number", format="float", example=49.99),
+     *                     @OA\Property(property="approved", type="integer", example=400),
+     *                     @OA\Property(property="chargebacks", type="integer", example=20),
+     *                     @OA\Property(property="approved_volume", type="number", format="float", example=19996.00),
+     *                     @OA\Property(property="cb_volume", type="number", format="float", example=999.80),
+     *                     @OA\Property(property="cb_rate", type="number", format="float", example=5.0),
+     *                     @OA\Property(property="cb_rate_amount", type="number", format="float", example=5.0)
+     *                 ))
+     *             )
+     *         )
+     *     ),
+     *     @OA\Response(response=401, description="Unauthenticated"),
+     *     @OA\Response(response=404, description="Upload not found")
+     * )
+     */
     public function validationStats(Upload $upload, Request $request): JsonResponse
     {
         $excludedCbCodes = config('tether.chargeback.excluded_cb_reason_codes', []);
@@ -518,6 +757,36 @@ class UploadController extends Controller
         ]);
     }
 
+    /**
+     * Reassign upload to a different EMP account.
+     *
+     * @OA\Post(
+     *     path="/api/admin/uploads/{upload}/reassign",
+     *     summary="Reassign upload to a different EMP account",
+     *     description="Reassigns the upload, all its debtors, and unsent pending billing attempts to a new EMP account. Submitted attempts (with unique_id) are left unchanged. Runs in a transaction.",
+     *     tags={"Uploads"},
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="upload", in="path", required=true, @OA\Schema(type="integer")),
+     *     @OA\RequestBody(required=true, @OA\JsonContent(required={"emp_account_id"}, @OA\Property(property="emp_account_id", type="integer", example=2))),
+     *     @OA\Response(
+     *         response=200,
+     *         description="Upload reassigned",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="message", type="string", example="Upload reassigned to Primary Account."),
+     *             @OA\Property(property="data", type="object",
+     *                 @OA\Property(property="upload", ref="#/components/schemas/Upload"),
+     *                 @OA\Property(property="debtors_updated", type="integer", example=500),
+     *                 @OA\Property(property="pending_billing_updated", type="integer", example=10),
+     *                 @OA\Property(property="skipped_submitted", type="integer", example=2)
+     *             )
+     *         )
+     *     ),
+     *     @OA\Response(response=422, description="Target account inactive or already assigned"),
+     *     @OA\Response(response=401, description="Unauthenticated"),
+     *     @OA\Response(response=404, description="Upload not found"),
+     *     @OA\Response(response=500, description="Transaction failed")
+     * )
+     */
     public function reassign(Request $request, Upload $upload): JsonResponse
     {
         $validated = $request->validate([
@@ -632,6 +901,23 @@ class UploadController extends Controller
         }
     }
 
+    /**
+     * Update upload settings.
+     *
+     * @OA\Patch(
+     *     path="/api/admin/uploads/{upload}/settings",
+     *     summary="Update upload settings",
+     *     description="Updates configurable upload settings such as max_billing_amount (billing cap per debtor).",
+     *     tags={"Uploads"},
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="upload", in="path", required=true, @OA\Schema(type="integer")),
+     *     @OA\RequestBody(required=true, @OA\JsonContent(@OA\Property(property="max_billing_amount", type="number", format="float", nullable=true, minimum=0, maximum=999999.99, example=500.00))),
+     *     @OA\Response(response=200, description="Settings updated", @OA\JsonContent(@OA\Property(property="message", type="string", example="Upload settings updated."), @OA\Property(property="data", ref="#/components/schemas/Upload"))),
+     *     @OA\Response(response=401, description="Unauthenticated"),
+     *     @OA\Response(response=404, description="Upload not found"),
+     *     @OA\Response(response=422, description="Validation error")
+     * )
+     */
     public function updateSettings(Request $request, Upload $upload): JsonResponse
     {
         $validated = $request->validate([
@@ -656,6 +942,38 @@ class UploadController extends Controller
         ]);
     }
 
+    /**
+     * Get billing cycles for an upload.
+     *
+     * @OA\Get(
+     *     path="/api/admin/uploads/{upload}/billing-cycles",
+     *     summary="Get billing cycles for an upload",
+     *     description="Returns billing attempt statistics grouped by attempt_number (cycle) and status, with total billed amount and billing cap remaining.",
+     *     tags={"Uploads"},
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="upload", in="path", required=true, @OA\Schema(type="integer")),
+     *     @OA\Response(
+     *         response=200,
+     *         description="Billing cycles",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="data", type="object",
+     *                 @OA\Property(property="cycles", type="array", @OA\Items(
+     *                     @OA\Property(property="cycle", type="integer", example=1),
+     *                     @OA\Property(property="statuses", type="object", example={"approved": {"count": 400, "amount": 19960.00}, "declined": {"count": 50, "amount": 2499.50}}),
+     *                     @OA\Property(property="total_count", type="integer", example=500),
+     *                     @OA\Property(property="total_amount", type="number", format="float", example=24995.00)
+     *                 )),
+     *                 @OA\Property(property="total_cycles", type="integer", example=2),
+     *                 @OA\Property(property="total_billed_amount", type="number", format="float", example=39960.00),
+     *                 @OA\Property(property="max_billing_amount", type="number", format="float", nullable=true, example=50000.00),
+     *                 @OA\Property(property="cap_remaining", type="number", format="float", nullable=true, example=10040.00)
+     *             )
+     *         )
+     *     ),
+     *     @OA\Response(response=401, description="Unauthenticated"),
+     *     @OA\Response(response=404, description="Upload not found")
+     * )
+     */
     public function billingCycles(Upload $upload): JsonResponse
     {
         $cycles = DB::table('billing_attempts')
@@ -712,6 +1030,22 @@ class UploadController extends Controller
         ]);
     }
 
+    /**
+     * Delete an upload.
+     *
+     * @OA\Delete(
+     *     path="/api/admin/uploads/{upload}",
+     *     summary="Delete an upload",
+     *     description="Hard-deletes upload and S3 file if no debtors exist. Soft-deletes upload and debtors if no billing attempts exist. Returns 403 if billing attempts exist.",
+     *     tags={"Uploads"},
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="upload", in="path", required=true, @OA\Schema(type="integer")),
+     *     @OA\Response(response=200, description="Upload deleted", @OA\JsonContent(@OA\Property(property="success", type="boolean", example=true), @OA\Property(property="message", type="string", example="Uploaded File deleted successfully."))),
+     *     @OA\Response(response=403, description="Cannot delete (has billing attempts)", @OA\JsonContent(@OA\Property(property="success", type="boolean", example=false), @OA\Property(property="message", type="string"))),
+     *     @OA\Response(response=401, description="Unauthenticated"),
+     *     @OA\Response(response=404, description="Upload not found")
+     * )
+     */
     public function destroy(Upload $upload): JsonResponse
     {
         if ($upload->canBeHardDeleted()) {
@@ -738,6 +1072,28 @@ class UploadController extends Controller
         ], 403);
     }
 
+    /**
+     * Filter and remove chargebacked debtors.
+     *
+     * @OA\Post(
+     *     path="/api/admin/uploads/{upload}/filter-chargebacks",
+     *     summary="Remove chargebacked debtors from upload",
+     *     description="Soft-deletes all debtors in the upload that have at least one chargebacked billing attempt.",
+     *     tags={"Uploads"},
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="upload", in="path", required=true, @OA\Schema(type="integer")),
+     *     @OA\Response(
+     *         response=200,
+     *         description="Chargebacked debtors removed",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="message", type="string", example="Removed 15 chargebacked records"),
+     *             @OA\Property(property="data", type="object", @OA\Property(property="removed", type="integer", example=15))
+     *         )
+     *     ),
+     *     @OA\Response(response=401, description="Unauthenticated"),
+     *     @OA\Response(response=404, description="Upload not found")
+     * )
+     */
     public function filterChargebacks(Upload $upload): JsonResponse
     {
         $chargebackedDebtors = $upload->debtors()
@@ -765,6 +1121,25 @@ class UploadController extends Controller
         ]);
     }
 
+    /**
+     * Search uploads.
+     *
+     * @OA\Get(
+     *     path="/api/admin/uploads/search",
+     *     summary="Search uploads by filename",
+     *     description="Returns up to 5 uploads matching the filename query. Results are cached for 5 minutes.",
+     *     tags={"Uploads"},
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="query", in="query", required=false, @OA\Schema(type="string", minLength=1, maxLength=60)),
+     *     @OA\Response(
+     *         response=200,
+     *         description="Search results",
+     *         @OA\JsonContent(@OA\Property(property="data", type="array", @OA\Items(ref="#/components/schemas/Upload")))
+     *     ),
+     *     @OA\Response(response=401, description="Unauthenticated"),
+     *     @OA\Response(response=422, description="Validation error")
+     * )
+     */
     public function search(Request $request): JsonResponse
     {
         $request->validate([
@@ -808,6 +1183,23 @@ class UploadController extends Controller
         return $lineCount > self::ASYNC_THRESHOLD;
     }
 
+    /**
+     * Set cooldown for an upload.
+     *
+     * @OA\Patch(
+     *     path="/api/admin/uploads/{upload}/cooldown",
+     *     summary="Set 30-day cooldown for an upload",
+     *     description="Enables or disables the 30-day cooling period. Only applicable to Legacy billing model uploads. Disabling cooldown enables resync functionality.",
+     *     tags={"Uploads"},
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="upload", in="path", required=true, @OA\Schema(type="integer")),
+     *     @OA\RequestBody(required=true, @OA\JsonContent(required={"is_30d_cool"}, @OA\Property(property="is_30d_cool", type="boolean"))),
+     *     @OA\Response(response=200, description="Cooldown updated", @OA\JsonContent(@OA\Property(property="data", ref="#/components/schemas/Upload"))),
+     *     @OA\Response(response=422, description="Not applicable to non-Legacy uploads"),
+     *     @OA\Response(response=401, description="Unauthenticated"),
+     *     @OA\Response(response=404, description="Upload not found")
+     * )
+     */
     public function setCooldown(Request $request, Upload $upload): JsonResponse
     {
         $request->validate([

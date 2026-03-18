@@ -18,9 +18,128 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
+use OpenApi\Annotations as OA;
 
 class DashboardController extends Controller
 {
+    /**
+     * Get admin dashboard overview.
+     *
+     * @OA\Get(
+     *     path="/api/admin/dashboard",
+     *     summary="Get admin dashboard overview",
+     *     description="Returns a comprehensive dashboard with upload stats, debtor stats (by status, country, IBAN validity), VOP verification stats, billing stats (by status, approval/chargeback rates, amounts), recent activity (uploads and billing), and 7-day trends. All sections support filtering by tether_instance_id or emp_account_id, and billing/debtor sections support month/year filtering.",
+     *     tags={"Dashboard"},
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="month", in="query", required=false, description="Filter billing/debtor stats by month (1-12)", @OA\Schema(type="integer", minimum=1, maximum=12, example=3)),
+     *     @OA\Parameter(name="year", in="query", required=false, description="Filter billing/debtor stats by year", @OA\Schema(type="integer", minimum=2020, maximum=2100, example=2025)),
+     *     @OA\Parameter(name="emp_account_id", in="query", required=false, description="Filter by EMP account", @OA\Schema(type="integer")),
+     *     @OA\Parameter(name="tether_instance_id", in="query", required=false, description="Filter by Tether instance (takes priority over emp_account_id)", @OA\Schema(type="integer")),
+     *     @OA\Response(
+     *         response=200,
+     *         description="Dashboard data",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="data", type="object",
+     *                 @OA\Property(property="uploads", type="object",
+     *                     @OA\Property(property="total", type="integer", example=120),
+     *                     @OA\Property(property="pending", type="integer", example=5),
+     *                     @OA\Property(property="processing", type="integer", example=2),
+     *                     @OA\Property(property="completed", type="integer", example=100),
+     *                     @OA\Property(property="failed", type="integer", example=13),
+     *                     @OA\Property(property="today", type="integer", example=3),
+     *                     @OA\Property(property="this_week", type="integer", example=15)
+     *                 ),
+     *                 @OA\Property(property="debtors", type="object",
+     *                     @OA\Property(property="total", type="integer", example=50000),
+     *                     @OA\Property(property="by_status", type="object",
+     *                         @OA\Property(property="pending", type="integer", example=5000),
+     *                         @OA\Property(property="processing", type="integer", example=1000),
+     *                         @OA\Property(property="approved", type="integer", example=35000),
+     *                         @OA\Property(property="chargebacked", type="integer", example=2000),
+     *                         @OA\Property(property="recovered", type="integer", example=500),
+     *                         @OA\Property(property="failed", type="integer", example=6500)
+     *                     ),
+     *                     @OA\Property(property="total_amount", type="number", format="float", example=2500000.00),
+     *                     @OA\Property(property="recovered_amount", type="number", format="float", example=1650000.00),
+     *                     @OA\Property(property="recovery_rate", type="number", format="float", example=66.0),
+     *                     @OA\Property(property="by_country", type="object", example={"DE": 20000, "FR": 10000, "NL": 8000}),
+     *                     @OA\Property(property="valid_iban_rate", type="number", format="float", example=95.5)
+     *                 ),
+     *                 @OA\Property(property="vop", type="object",
+     *                     @OA\Property(property="total", type="integer", example=45000),
+     *                     @OA\Property(property="by_result", type="object",
+     *                         @OA\Property(property="verified", type="integer", example=30000),
+     *                         @OA\Property(property="likely_verified", type="integer", example=5000),
+     *                         @OA\Property(property="inconclusive", type="integer", example=3000),
+     *                         @OA\Property(property="mismatch", type="integer", example=5000),
+     *                         @OA\Property(property="rejected", type="integer", example=2000)
+     *                     ),
+     *                     @OA\Property(property="verification_rate", type="number", format="float", example=77.78),
+     *                     @OA\Property(property="average_score", type="number", format="float", example=72.5),
+     *                     @OA\Property(property="today", type="integer", example=500)
+     *                 ),
+     *                 @OA\Property(property="billing", type="object",
+     *                     @OA\Property(property="total_attempts", type="integer", example=40000),
+     *                     @OA\Property(property="by_status", type="object",
+     *                         @OA\Property(property="pending", type="integer", example=500),
+     *                         @OA\Property(property="approved", type="integer", example=30000),
+     *                         @OA\Property(property="declined", type="integer", example=5000),
+     *                         @OA\Property(property="error", type="integer", example=2000),
+     *                         @OA\Property(property="voided", type="integer", example=500),
+     *                         @OA\Property(property="chargebacked", type="integer", example=2000)
+     *                     ),
+     *                     @OA\Property(property="approval_rate", type="number", format="float", example=75.0),
+     *                     @OA\Property(property="chargeback_rate", type="number", format="float", example=6.67),
+     *                     @OA\Property(property="total_approved_amount", type="number", format="float", example=1500000.00),
+     *                     @OA\Property(property="total_pending_amount", type="number", format="float", example=25000.00),
+     *                     @OA\Property(property="total_chargeback_amount", type="number", format="float", example=100000.00),
+     *                     @OA\Property(property="today", type="integer", example=200),
+     *                     @OA\Property(property="average_attempts_per_debtor", type="number", format="float", example=0.8)
+     *                 ),
+     *                 @OA\Property(property="recent_activity", type="object",
+     *                     @OA\Property(property="recent_uploads", type="array",
+     *                         @OA\Items(
+     *                             @OA\Property(property="id", type="integer", example=120),
+     *                             @OA\Property(property="original_filename", type="string", example="debtors_march.csv"),
+     *                             @OA\Property(property="status", type="string", example="completed"),
+     *                             @OA\Property(property="total_records", type="integer", example=500),
+     *                             @OA\Property(property="created_at", type="string", format="date-time")
+     *                         )
+     *                     ),
+     *                     @OA\Property(property="recent_billing", type="array",
+     *                         @OA\Items(
+     *                             @OA\Property(property="id", type="integer", example=40000),
+     *                             @OA\Property(property="debtor_id", type="integer", example=42),
+     *                             @OA\Property(property="status", type="string", example="approved"),
+     *                             @OA\Property(property="amount", type="number", format="float", example=49.99),
+     *                             @OA\Property(property="emp_created_at", type="string", format="date-time", nullable=true),
+     *                             @OA\Property(property="created_at", type="string", format="date-time")
+     *                         )
+     *                     )
+     *                 ),
+     *                 @OA\Property(property="trends", type="array",
+     *                     @OA\Items(
+     *                         @OA\Property(property="date", type="string", format="date", example="2025-03-15"),
+     *                         @OA\Property(property="uploads", type="integer", example=3),
+     *                         @OA\Property(property="debtors", type="integer", example=500),
+     *                         @OA\Property(property="billing_attempts", type="integer", example=400),
+     *                         @OA\Property(property="successful_payments", type="integer", example=300),
+     *                         @OA\Property(property="chargebacks", type="integer", example=15)
+     *                     )
+     *                 ),
+     *                 @OA\Property(property="filters", type="object",
+     *                     @OA\Property(property="month", type="integer", nullable=true, example=3),
+     *                     @OA\Property(property="year", type="integer", nullable=true, example=2025),
+     *                     @OA\Property(property="emp_account_id", type="integer", nullable=true, example=null),
+     *                     @OA\Property(property="tether_instance_id", type="integer", nullable=true, example=null)
+     *                 )
+     *             )
+     *         )
+     *     ),
+     *     @OA\Response(response=401, description="Unauthenticated"),
+     *     @OA\Response(response=422, description="Validation error")
+     * )
+     */
     public function index(Request $request): JsonResponse
     {
         $request->validate([

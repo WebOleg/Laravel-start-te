@@ -37,7 +37,7 @@ class ProcessBavJob implements ShouldQueue
     public function __construct(
         public int $uploadId,
         public array $debtorIds,
-        public string $batchId
+        public $batchId
     ) {
         $this->onQueue('bav');
     }

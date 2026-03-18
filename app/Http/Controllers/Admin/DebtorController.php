@@ -19,6 +19,7 @@ use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use OpenApi\Annotations as OA;
 
 class DebtorController extends Controller
 {
@@ -49,6 +50,40 @@ class DebtorController extends Controller
         private IbanValidator $ibanValidator
     ) {}
 
+    /**
+     * List debtors with filters.
+     *
+     * @OA\Get(
+     *     path="/api/admin/debtors",
+     *     summary="List debtors",
+     *     description="Returns a paginated list of debtors with optional filters by upload, status, validation status, country, risk class, billing model, and free-text search across names, emails, and IBANs.",
+     *     tags={"Debtors"},
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="upload_id", in="query", required=false, description="Filter by upload ID", @OA\Schema(type="integer")),
+     *     @OA\Parameter(name="status", in="query", required=false, description="Filter by debtor status", @OA\Schema(type="string", enum={"uploaded", "pending", "processing", "approved", "chargebacked", "recovered", "failed"})),
+     *     @OA\Parameter(name="validation_status", in="query", required=false, description="Filter by validation status", @OA\Schema(type="string", enum={"pending", "valid", "invalid"})),
+     *     @OA\Parameter(name="country", in="query", required=false, description="Filter by country code", @OA\Schema(type="string", example="DE")),
+     *     @OA\Parameter(name="risk_class", in="query", required=false, description="Filter by risk class", @OA\Schema(type="string", enum={"low", "medium", "high"})),
+     *     @OA\Parameter(name="model", in="query", required=false, description="Filter by billing model ('all' returns unfiltered)", @OA\Schema(type="string", enum={"all", "legacy", "flywheel", "recovery"})),
+     *     @OA\Parameter(name="search", in="query", required=false, description="Search across first_name, last_name, email, IBAN, iban_masked", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="per_page", in="query", required=false, description="Results per page", @OA\Schema(type="integer", default=50)),
+     *     @OA\Response(
+     *         response=200,
+     *         description="Paginated list of debtors",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="data", type="array", @OA\Items(ref="#/components/schemas/Debtor")),
+     *             @OA\Property(property="links", type="object"),
+     *             @OA\Property(property="meta", type="object",
+     *                 @OA\Property(property="current_page", type="integer", example=1),
+     *                 @OA\Property(property="last_page", type="integer", example=10),
+     *                 @OA\Property(property="per_page", type="integer", example=50),
+     *                 @OA\Property(property="total", type="integer", example=500)
+     *             )
+     *         )
+     *     ),
+     *     @OA\Response(response=401, description="Unauthenticated")
+     * )
+     */
     public function index(Request $request): AnonymousResourceCollection
     {
         $query = Debtor::with([
@@ -114,6 +149,27 @@ class DebtorController extends Controller
         return DebtorResource::collection($debtors);
     }
 
+    /**
+     * Get single debtor with all relations.
+     *
+     * @OA\Get(
+     *     path="/api/admin/debtors/{debtor}",
+     *     summary="Get a single debtor",
+     *     description="Returns detailed debtor information including upload, debtor profile, EMP account, VOP logs, billing attempts, and latest VOP/billing data.",
+     *     tags={"Debtors"},
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="debtor", in="path", required=true, description="Debtor ID", @OA\Schema(type="integer")),
+     *     @OA\Response(
+     *         response=200,
+     *         description="Debtor details",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="data", ref="#/components/schemas/Debtor")
+     *         )
+     *     ),
+     *     @OA\Response(response=401, description="Unauthenticated"),
+     *     @OA\Response(response=404, description="Debtor not found")
+     * )
+     */
     public function show(Debtor $debtor): DebtorResource
     {
         $debtor->load([
@@ -129,6 +185,37 @@ class DebtorController extends Controller
         return new DebtorResource($debtor);
     }
 
+    /**
+     * Update a debtor.
+     *
+     * @OA\Put(
+     *     path="/api/admin/debtors/{debtor}",
+     *     summary="Update a debtor",
+     *     description="Updates debtor fields including raw_data (auto-maps to debtor fields via FIELD_MAP), billing model (creates/updates/removes DebtorProfile), email, status, and risk_class. Re-runs validation after update.",
+     *     tags={"Debtors"},
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="debtor", in="path", required=true, description="Debtor ID", @OA\Schema(type="integer")),
+     *     @OA\RequestBody(
+     *         required=false,
+     *         @OA\JsonContent(
+     *             @OA\Property(property="raw_data", type="object", description="Key-value pairs that auto-map to debtor fields (iban, first_name, last_name, email, amount, etc.)", example={"iban": "DE89370400440532013000", "first_name": "Hans", "last_name": "Mueller", "amount": "49.99"}),
+     *             @OA\Property(property="model", type="string", description="Change billing model (creates/updates DebtorProfile or removes it for legacy)", enum={"legacy", "flywheel", "recovery"}),
+     *             @OA\Property(property="email", type="string", format="email", example="hans@example.com"),
+     *             @OA\Property(property="status", type="string", enum={"uploaded", "pending", "processing", "approved", "chargebacked", "recovered", "failed"}),
+     *             @OA\Property(property="risk_class", type="string", enum={"low", "medium", "high"})
+     *         )
+     *     ),
+     *     @OA\Response(
+     *         response=200,
+     *         description="Updated debtor",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="data", ref="#/components/schemas/Debtor")
+     *         )
+     *     ),
+     *     @OA\Response(response=401, description="Unauthenticated"),
+     *     @OA\Response(response=404, description="Debtor not found")
+     * )
+     */
     public function update(Request $request, Debtor $debtor): DebtorResource
     {
         if ($request->has('raw_data')) {
@@ -217,6 +304,33 @@ class DebtorController extends Controller
         return new DebtorResource($debtor);
     }
 
+    /**
+     * Validate a single debtor.
+     *
+     * @OA\Post(
+     *     path="/api/admin/debtors/{debtor}/validate",
+     *     summary="Validate a debtor",
+     *     description="Runs the full validation pipeline on a debtor: required fields, name format, IBAN validity and SEPA check, amount range, email format, country, encoding, BIC resolution, and blacklist check. Updates validation_status and validation_errors.",
+     *     tags={"Debtors"},
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="debtor", in="path", required=true, description="Debtor ID", @OA\Schema(type="integer")),
+     *     @OA\Response(
+     *         response=200,
+     *         description="Validation result",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="message", type="string", example="Validation completed"),
+     *             @OA\Property(property="data", type="object",
+     *                 @OA\Property(property="id", type="integer", example=42),
+     *                 @OA\Property(property="validation_status", type="string", enum={"valid", "invalid"}, example="valid"),
+     *                 @OA\Property(property="validation_errors", type="array", nullable=true, @OA\Items(type="string"), example=null),
+     *                 @OA\Property(property="validated_at", type="string", format="date-time", example="2025-03-15T10:30:00+00:00")
+     *             )
+     *         )
+     *     ),
+     *     @OA\Response(response=401, description="Unauthenticated"),
+     *     @OA\Response(response=404, description="Debtor not found")
+     * )
+     */
     public function validate(Debtor $debtor): JsonResponse
     {
         $this->validationService->validateAndUpdate($debtor);
@@ -232,6 +346,27 @@ class DebtorController extends Controller
         ]);
     }
 
+    /**
+     * Delete a debtor.
+     *
+     * @OA\Delete(
+     *     path="/api/admin/debtors/{debtor}",
+     *     summary="Delete a debtor",
+     *     description="Soft-deletes a debtor record.",
+     *     tags={"Debtors"},
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="debtor", in="path", required=true, description="Debtor ID", @OA\Schema(type="integer")),
+     *     @OA\Response(
+     *         response=200,
+     *         description="Debtor deleted",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="message", type="string", example="Debtor deleted successfully")
+     *         )
+     *     ),
+     *     @OA\Response(response=401, description="Unauthenticated"),
+     *     @OA\Response(response=404, description="Debtor not found")
+     * )
+     */
     public function destroy(Debtor $debtor): JsonResponse
     {
         $debtor->delete();
@@ -243,9 +378,48 @@ class DebtorController extends Controller
 
     /**
      * Bulk reassign debtors to a different EMP account.
-     * Updates debtors and their unsent pending billing attempts.
-     * Does NOT touch attempts already submitted to EMP (have unique_id)
-     * or approved/chargebacked attempts (immutable).
+     *
+     * @OA\Post(
+     *     path="/api/admin/debtors/bulk-reassign",
+     *     summary="Bulk reassign debtors to a different EMP account",
+     *     description="Reassigns debtors and their unsent pending billing attempts (no unique_id) to a target EMP account. Attempts already submitted to EMP (have unique_id) or in final states are left unchanged. Runs in a database transaction.",
+     *     tags={"Debtors"},
+     *     security={{"bearerAuth":{}}},
+     *     @OA\RequestBody(
+     *         required=true,
+     *         @OA\JsonContent(
+     *             required={"debtor_ids", "emp_account_id"},
+     *             @OA\Property(property="debtor_ids", type="array", minItems=1, maxItems=1000, @OA\Items(type="integer"), example={1, 2, 3}),
+     *             @OA\Property(property="emp_account_id", type="integer", description="Target EMP account ID", example=2)
+     *         )
+     *     ),
+     *     @OA\Response(
+     *         response=200,
+     *         description="Reassignment completed",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="message", type="string", example="Reassigned 3 debtors to Primary Account. 1 pending attempts already submitted to EMP were left unchanged."),
+     *             @OA\Property(property="data", type="object",
+     *                 @OA\Property(property="debtors_updated", type="integer", example=3),
+     *                 @OA\Property(property="pending_billing_updated", type="integer", example=2),
+     *                 @OA\Property(property="skipped_submitted", type="integer", example=1),
+     *                 @OA\Property(property="target_account", type="object",
+     *                     @OA\Property(property="id", type="integer", example=2),
+     *                     @OA\Property(property="name", type="string", example="Primary Account"),
+     *                     @OA\Property(property="slug", type="string", example="primary-account")
+     *                 )
+     *             )
+     *         )
+     *     ),
+     *     @OA\Response(
+     *         response=422,
+     *         description="Target account is not active or validation error",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="message", type="string", example="Target EMP account is not active.")
+     *         )
+     *     ),
+     *     @OA\Response(response=401, description="Unauthenticated"),
+     *     @OA\Response(response=500, description="Transaction failed, no changes made")
+     * )
      */
     public function bulkReassign(Request $request): JsonResponse
     {
@@ -362,8 +536,25 @@ class DebtorController extends Controller
     }
 
     /**
-     * Get the count of debtors attached to non-existent (or soft-deleted) uploads.
+     * Get orphaned debtors count.
+     *
+     * @OA\Get(
+     *     path="/api/admin/debtors/orphans/count",
+     *     summary="Get count of orphaned debtors",
+     *     description="Returns the count of debtors attached to non-existent or soft-deleted uploads.",
+     *     tags={"Debtors"},
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Response(
+     *         response=200,
+     *         description="Orphaned debtor count",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="orphaned_count", type="integer", example=15)
+     *         )
+     *     ),
+     *     @OA\Response(response=401, description="Unauthenticated")
+     * )
      */
+
     public function getOrphanedCount(): JsonResponse
     {
         $count = Debtor::whereNotNull('upload_id')
@@ -376,7 +567,24 @@ class DebtorController extends Controller
     }
 
     /**
-     * Remove all debtors that are attached to non-existent (or soft-deleted) uploads.
+     * Remove all orphaned debtors.
+     *
+     * @OA\Delete(
+     *     path="/api/admin/debtors/orphans",
+     *     summary="Delete all orphaned debtors",
+     *     description="Permanently removes all debtors that are attached to non-existent or soft-deleted uploads.",
+     *     tags={"Debtors"},
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Response(
+     *         response=200,
+     *         description="Orphaned debtors removed",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="message", type="string", example="Orphaned debtors cleaned up successfully."),
+     *             @OA\Property(property="deleted_count", type="integer", example=15)
+     *         )
+     *     ),
+     *     @OA\Response(response=401, description="Unauthenticated")
+     * )
      */
     public function pruneOrphans(): JsonResponse
     {

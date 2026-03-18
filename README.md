@@ -283,76 +283,268 @@ docker compose exec app php artisan test --filter=ReconciliationControllerTest
 
 ## API Documentation
 
+### Interactive Swagger UI
+
+The project includes full interactive API documentation powered by Swagger (OpenAPI 3.0). Every endpoint is documented with request/response schemas, parameters, and examples.
+
+**Accessing the docs:**
+
+| Environment | URL |
+|-------------|-----|
+| Local | `http://localhost:8000/api/documentation?password=PASSWORD` |
+| Develop | `http://199.217.98.92/api/documentation?password=PASSWORD` |
+| Staging | `https://137.184.105.172/api/documentation?password=PASSWORD` |
+| Production | `https://testingiscool.online/api/documentation?password=PASSWORD` |
+
+The docs are password-protected. The password is set via the `SWAGGER_PASSWORD` environment variable. After the first visit with the correct password, a cookie persists authentication for 24 hours.
+
+**Using the docs:**
+
+1. Open the Swagger UI URL with `?password=...`
+2. Click the **Authorize** button (top right)
+3. Enter your Bearer token from the `/api/login` endpoint
+4. All endpoints are now testable via "Try it out"
+
+### Regenerating the Docs
+
+Documentation is auto-generated from PHP annotations in the controller files. After modifying annotations, regenerate the JSON spec:
+```bash
+# Inside the Docker container
+php artisan l5-swagger:generate
+
+# Or from the host
+docker exec tether_app php artisan l5-swagger:generate
+```
+
+In CI/CD, docs are regenerated automatically on every deploy (see `.github/workflows/`).
+
+**Local development:** Set `L5_SWAGGER_GENERATE_ALWAYS=true` in `.env` to regenerate on every page load. Set to `false` in all deployed environments.
+
+### Adding Documentation to New Endpoints
+
+1. Add `@OA\Get`, `@OA\Post`, etc. annotations above the controller method
+2. Use an existing tag from `app/Swagger/SwaggerInfo.php` or add a new `@OA\Tag`
+3. For reusable response shapes, add `@OA\Schema` to `SwaggerInfo.php`
+4. Run `php artisan l5-swagger:generate` to verify
+5. Check the Swagger UI to confirm rendering
+
+### Configuration
+
+| Setting | `.env` Variable | Default | Description |
+|---------|----------------|---------|-------------|
+| Auto-regenerate | `L5_SWAGGER_GENERATE_ALWAYS` | `false` | Regenerate docs on every request (dev only) |
+| Doc expansion | `L5_SWAGGER_UI_DOC_EXPANSION` | `none` | `none`, `list`, or `full` |
+| Password | `SWAGGER_PASSWORD` | — | Password to access Swagger UI |
+| Base URL | `L5_SWAGGER_CONST_HOST` | — | API base URL shown in the UI |
+
+Config file: `config/l5-swagger.php`
+Annotations entry point: `app/Swagger/SwaggerInfo.php`
+Generated spec: `storage/api-docs/api-docs.json`
+
+### Endpoint Reference
+
 Base URL: `http://localhost:8000/api`
 
-All endpoints require Bearer token authentication.
+All admin endpoints require Bearer token authentication (via Sanctum).
 
-### Uploads
+<details>
+<summary><strong>Auth</strong></summary>
 
-| Method | Endpoint                               | Description           |
-| ------ | -------------------------------------- | --------------------- |
-| GET    | `/admin/uploads`                       | List uploads          |
-| POST   | `/admin/uploads`                       | Upload CSV file       |
-| GET    | `/admin/uploads/{id}`                  | Get upload details    |
-| DELETE | `/admin/uploads/{id}`                  | Delete upload         |
-| POST   | `/admin/uploads/{id}/validate`         | Trigger validation    |
-| GET    | `/admin/uploads/{id}/validation-stats` | Validation statistics |
-| GET    | `/admin/uploads/{id}/debtors`          | List upload debtors   |
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/login` | Login (handles 2FA states) |
+| POST | `/auth/setup-2fa` | Complete 2FA setup |
+| POST | `/auth/verify-otp` | Verify OTP code |
+| POST | `/auth/resend-otp` | Resend OTP |
+| POST | `/auth/verify-backup-code` | Verify backup code (recovery) |
+| POST | `/logout` | Logout and revoke token |
+| GET | `/user` | Get current user |
 
-### Debtors
+</details>
 
-| Method | Endpoint                       | Description        |
-| ------ | ------------------------------ | ------------------ |
-| GET    | `/admin/debtors`               | List debtors       |
-| GET    | `/admin/debtors/{id}`          | Get debtor         |
-| PUT    | `/admin/debtors/{id}`          | Update debtor      |
-| DELETE | `/admin/debtors/{id}`          | Delete debtor      |
-| POST   | `/admin/debtors/{id}/validate` | Re-validate debtor |
+<details>
+<summary><strong>Uploads</strong></summary>
 
-### VOP Verification
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/admin/uploads` | List uploads |
+| POST | `/admin/uploads` | Upload CSV/XLSX file |
+| GET | `/admin/uploads/{id}` | Get upload details |
+| DELETE | `/admin/uploads/{id}` | Delete upload |
+| GET | `/admin/uploads/{id}/status` | Processing status |
+| GET | `/admin/uploads/{id}/debtors` | List upload debtors |
+| POST | `/admin/uploads/{id}/validate` | Run validation |
+| GET | `/admin/uploads/{id}/validation-stats` | Validation statistics |
+| POST | `/admin/uploads/{id}/filter-chargebacks` | Remove chargebacked debtors |
+| PATCH | `/admin/uploads/{id}/cooldown` | Set 30-day cooldown |
+| POST | `/admin/uploads/{id}/reassign` | Reassign to EMP account |
+| PATCH | `/admin/uploads/{id}/settings` | Update settings (billing cap) |
+| GET | `/admin/uploads/{id}/billing-cycles` | Billing cycle breakdown |
+| GET | `/admin/uploads/search` | Search by filename |
 
-| Method | Endpoint                         | Description            |
-| ------ | -------------------------------- | ---------------------- |
-| GET    | `/admin/vop-logs`                | List VOP logs          |
-| GET    | `/admin/vop-logs/{id}`           | Get VOP log            |
-| POST   | `/admin/uploads/{id}/verify-vop` | Start VOP verification |
-| GET    | `/admin/uploads/{id}/vop-stats`  | VOP statistics         |
-| POST   | `/admin/vop/verify-single`       | Verify single IBAN     |
+</details>
 
-### Billing
+<details>
+<summary><strong>Debtors</strong></summary>
 
-| Method | Endpoint                             | Description          |
-| ------ | ------------------------------------ | -------------------- |
-| GET    | `/admin/billing-attempts`            | List attempts        |
-| GET    | `/admin/billing-attempts/{id}`       | Get attempt          |
-| POST   | `/admin/uploads/{id}/sync`           | Start billing sync   |
-| GET    | `/admin/uploads/{id}/billing-stats`  | Billing statistics   |
-| POST   | `/admin/billing-attempts/{id}/retry` | Retry failed attempt |
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/admin/debtors` | List debtors |
+| GET | `/admin/debtors/{id}` | Get debtor |
+| PUT | `/admin/debtors/{id}` | Update debtor |
+| DELETE | `/admin/debtors/{id}` | Delete debtor |
+| POST | `/admin/debtors/{id}/validate` | Re-validate debtor |
+| POST | `/admin/debtors/bulk-reassign` | Bulk reassign to EMP account |
+| GET | `/admin/debtors/orphans/count` | Orphaned debtors count |
+| DELETE | `/admin/debtors/orphans` | Remove orphaned debtors |
 
-### Reconciliation
+</details>
 
-| Method | Endpoint                                   | Description                 |
-| ------ | ------------------------------------------ | --------------------------- |
-| GET    | `/admin/reconciliation/stats`              | Global reconciliation stats |
-| GET    | `/admin/uploads/{id}/reconciliation-stats` | Upload reconciliation stats |
-| POST   | `/admin/billing-attempts/{id}/reconcile`   | Reconcile single attempt    |
-| POST   | `/admin/uploads/{id}/reconcile`            | Reconcile upload attempts   |
-| POST   | `/admin/reconciliation/bulk`               | Bulk reconciliation         |
+<details>
+<summary><strong>VOP Verification</strong></summary>
 
-### Statistics
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/admin/uploads/{id}/vop-stats` | VOP stats for upload |
+| POST | `/admin/uploads/{id}/verify-vop` | Start VOP verification |
+| GET | `/admin/uploads/{id}/vop-logs` | VOP logs for upload |
+| POST | `/admin/vop/verify-single` | Verify single IBAN |
+| GET | `/admin/vop-logs` | List all VOP logs |
+| GET | `/admin/vop-logs/{id}` | Get VOP log |
 
-| Method | Endpoint                        | Description                 |
-| ------ | ------------------------------- | --------------------------- |
-| GET    | `/admin/dashboard`              | Dashboard data              |
-| GET    | `/admin/stats/chargeback-rates` | Chargeback rates by country |
-| GET    | `/admin/stats/chargeback-codes` | Chargeback by error code    |
-| GET    | `/admin/stats/chargeback-banks` | Chargeback by bank          |
+</details>
 
-### Webhooks
+<details>
+<summary><strong>BAV (Bank Account Verification)</strong></summary>
 
-| Method | Endpoint        | Description                  |
-| ------ | --------------- | ---------------------------- |
-| POST   | `/webhooks/emp` | emerchantpay webhook handler |
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/admin/bav/balance` | Credit balance |
+| POST | `/admin/bav/adjust` | Adjust credits |
+| GET | `/admin/uploads/{id}/bav/stats` | BAV stats for upload |
+| POST | `/admin/uploads/{id}/bav/start` | Start BAV verification |
+| GET | `/admin/uploads/{id}/bav/status` | BAV progress |
+| POST | `/admin/uploads/{id}/bav/cancel` | Cancel BAV verification |
+
+</details>
+
+<details>
+<summary><strong>BAV Batches (Standalone)</strong></summary>
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/admin/bav/batches` | List batches |
+| POST | `/admin/bav/batches/upload` | Upload CSV for batch BAV |
+| POST | `/admin/bav/batches/{id}/start` | Start batch processing |
+| GET | `/admin/bav/batches/{id}/status` | Batch progress |
+| GET | `/admin/bav/batches/{id}/download` | Download results CSV |
+| GET | `/admin/bav/batches/balance` | BAV credit balance |
+
+</details>
+
+<details>
+<summary><strong>Billing</strong></summary>
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/admin/uploads/{id}/sync` | Start billing sync/resync |
+| GET | `/admin/uploads/{id}/billing-stats` | Billing statistics |
+| POST | `/admin/billing/{id}/cancel` | Cancel active billing |
+| POST | `/admin/billing/{id}/void` | Void transactions |
+| GET | `/admin/billing-attempts` | List billing attempts |
+| GET | `/admin/billing-attempts/{id}` | Get billing attempt |
+| POST | `/admin/billing-attempts/{id}/retry` | Retry failed attempt |
+
+</details>
+
+<details>
+<summary><strong>Clean Users Export</strong></summary>
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/admin/billing-attempts/clean-users/stats` | Clean users count |
+| GET | `/admin/billing-attempts/clean-users/export` | Export CSV |
+| GET | `/admin/billing-attempts/clean-users/export/{jobId}/status` | Export job status |
+| GET | `/admin/billing-attempts/clean-users/export/{jobId}/download` | Download export |
+
+</details>
+
+<details>
+<summary><strong>Reconciliation</strong></summary>
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/admin/billing-attempts/{id}/reconcile` | Reconcile single attempt |
+| POST | `/admin/uploads/{id}/reconcile` | Reconcile upload attempts |
+| GET | `/admin/uploads/{id}/reconciliation-stats` | Upload reconciliation stats |
+| GET | `/admin/reconciliation/stats` | Global reconciliation stats |
+| POST | `/admin/reconciliation/bulk` | Bulk reconciliation |
+
+</details>
+
+<details>
+<summary><strong>EMP Accounts & Refresh</strong></summary>
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/admin/emp/accounts` | List EMP accounts |
+| GET | `/admin/emp/accounts/active` | Get active account |
+| POST | `/admin/emp/accounts/{id}/activate` | Set account as active |
+| GET | `/admin/emp/accounts/{id}/stats` | Account statistics |
+| PUT | `/admin/emp/accounts/{id}/cap` | Update monthly cap |
+| GET | `/admin/emp/caps` | All accounts caps & usage |
+| POST | `/admin/emp/refresh` | Start EMP refresh |
+| GET | `/admin/emp/refresh/status` | Current refresh status |
+| GET | `/admin/emp/refresh/{jobId}` | Refresh job status |
+
+</details>
+
+<details>
+<summary><strong>Statistics & Analytics</strong></summary>
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/admin/dashboard` | Dashboard overview |
+| GET | `/admin/stats/chargeback-rates` | CB rates by country |
+| GET | `/admin/stats/chargeback-codes` | CB reason code breakdown |
+| GET | `/admin/stats/chargeback-banks` | CB stats by bank |
+| GET | `/admin/stats/price-points` | CB stats by price point |
+| GET | `/admin/stats/chargeback-all-time` | All-time CB code stats |
+| GET | `/admin/analytics/bic` | BIC analytics overview |
+| GET | `/admin/analytics/bic/export` | Export BIC analytics CSV |
+| GET | `/admin/analytics/bic/price-points` | BIC price point breakdown |
+| GET | `/admin/analytics/bic/cb-codes` | BIC CB code breakdown |
+| POST | `/admin/analytics/bic/clear-cache` | Clear BIC analytics cache |
+| GET | `/admin/analytics/bic/{bic}` | Single BIC summary |
+
+</details>
+
+<details>
+<summary><strong>Chargebacks</strong></summary>
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/admin/chargebacks` | List chargebacks with stats |
+| GET | `/admin/chargebacks/codes` | Unique reason codes |
+| GET | `/admin/chargebacks/upload/{id}` | Upload CB reason breakdown |
+| GET | `/admin/chargebacks/upload/{id}/{code}/records` | CB records by code |
+
+</details>
+
+<details>
+<summary><strong>Other</strong></summary>
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/admin/tether-instances` | List Tether instances |
+| GET | `/admin/webhook-relays` | List webhook relays |
+| POST | `/admin/webhook-relays` | Create webhook relay |
+| PUT | `/admin/webhook-relays/{id}` | Update webhook relay |
+| DELETE | `/admin/webhook-relays/{id}` | Delete webhook relay |
+| CRUD | `/admin/billing/descriptors` | Billing descriptors |
+| POST | `/webhooks/emp/{token}` | EMP webhook handler |
+
+</details>
 
 ## Project Structure
 ```

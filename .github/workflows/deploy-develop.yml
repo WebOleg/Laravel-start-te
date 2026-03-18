@@ -99,5 +99,6 @@ jobs:
             $COMPOSE exec -T --user www-data app php artisan view:clear || true
 
             $COMPOSE exec -T --user www-data app php artisan migrate --force
+            $COMPOSE exec -T --user www-data app php artisan l5-swagger:generate
 
             $COMPOSE ps
