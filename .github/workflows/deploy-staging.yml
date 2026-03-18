@@ -51,6 +51,9 @@ jobs:
             # Clean possible stale git locks (safe to do as repo owner)
             rm -f .git/index.lock .git/packed-refs.lock .git/objects/pack/*.lock || true
 
+            # Reclaim dirs that the container chowned to www-data on the last deploy.
+            sudo chown -R "${USER}:${USER}" storage bootstrap/cache || true
+
             # Retry fetch in case of transient network hiccups
             for i in 1 2 3; do
               if git fetch --all --prune; then
