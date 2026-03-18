@@ -36,6 +36,7 @@ jobs:
             docker compose -f infrastructure/docker/api-node/docker-compose.yml up -d --build --remove-orphans
             docker exec tether_app composer install --no-dev --optimize-autoloader
             docker exec tether_app php artisan migrate --force
+            docker exec tether_app php artisan l5-swagger:generate
             docker exec tether_app php artisan optimize:clear
             docker exec tether_app php artisan config:cache
             docker exec tether_app php artisan route:cache
@@ -64,6 +65,7 @@ jobs:
             docker rm -f tether_app tether_nginx || true
             docker compose -f infrastructure/docker/api-node/docker-compose.yml up -d --build --remove-orphans
             docker exec tether_app composer install --no-dev --optimize-autoloader
+            docker exec tether_app php artisan l5-swagger:generate
             docker exec tether_app php artisan optimize:clear
             docker exec tether_app php artisan config:cache
             docker exec tether_app php artisan route:cache
