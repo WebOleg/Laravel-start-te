@@ -51,6 +51,14 @@ jobs:
             # Clean possible stale git locks (safe to do as repo owner)
             rm -f .git/index.lock .git/packed-refs.lock .git/objects/pack/*.lock || true
 
+            # Reclaim ALL repo files from www-data back to deploy user.
+            docker run --rm -v "$REPO_DIR:/repo" alpine \
+              sh -c "chown -R $(id -u):$(id -g) /repo && chown -R $(id -u):$(id -g) /repo/storage /repo/bootstrap/cache 2>/dev/null; true"
+
+            # Nuke local changes left by previous deploy (composer install, artisan, etc.)
+            git checkout -- . || true
+            git clean -fd || true
+
             # Retry fetch in case of transient network hiccups
             for i in 1 2 3; do
               if git fetch --all --prune; then
@@ -95,5 +103,6 @@ jobs:
             $COMPOSE exec -T --user www-data app php artisan view:clear || true
 
             $COMPOSE exec -T --user www-data app php artisan migrate --force
+            $COMPOSE exec -T --user www-data app php artisan l5-swagger:generate
 
             $COMPOSE ps

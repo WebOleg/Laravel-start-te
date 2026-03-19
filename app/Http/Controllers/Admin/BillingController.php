@@ -15,6 +15,7 @@ use App\Services\Dto\ResyncEligibility;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Http\Request;
+use OpenApi\Annotations as OA;
 
 class BillingController extends Controller
 {
@@ -23,7 +24,36 @@ class BillingController extends Controller
     ) {}
 
     /**
-     * Void all successful transactions for an upload via Queue.
+     * Void all successful transactions for an upload.
+     *
+     * @OA\Post(
+     *     path="/api/admin/billing/{upload}/void",
+     *     summary="Void transactions for an upload",
+     *     description="Queues a void job for all approved/pending transactions of an upload. Only transactions within the last 24 hours can be voided. For resynced uploads, only the latest run's transactions are voided.",
+     *     tags={"Billing"},
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="upload", in="path", required=true, description="Upload ID", @OA\Schema(type="integer")),
+     *     @OA\Response(
+     *         response=202,
+     *         description="Void process queued",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="message", type="string", example="Void process queued for 150 transactions."),
+     *             @OA\Property(property="data", type="object",
+     *                 @OA\Property(property="queued_count", type="integer", example=150),
+     *                 @OA\Property(property="is_resync", type="boolean", example=false)
+     *             )
+     *         )
+     *     ),
+     *     @OA\Response(
+     *         response=422,
+     *         description="Cannot void (too old or no eligible transactions)",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="message", type="string", example="Cannot void transactions older than 24 hours. Please use Refund instead.")
+     *         )
+     *     ),
+     *     @OA\Response(response=401, description="Unauthenticated"),
+     *     @OA\Response(response=404, description="Upload not found")
+     * )
      */
     public function void(Upload $upload): JsonResponse
     {
@@ -61,7 +91,37 @@ class BillingController extends Controller
 
     /**
      * Cancel an active billing sync or resync.
-     * Sets a signal flag that running jobs check to terminate execution.
+     *
+     * @OA\Post(
+     *     path="/api/admin/billing/{upload}/cancel",
+     *     summary="Cancel active billing for an upload",
+     *     description="Sets a termination signal that running billing jobs check to stop execution. Works for both initial syncs and resyncs. Clears all sync lock keys.",
+     *     tags={"Billing"},
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="upload", in="path", required=true, description="Upload ID", @OA\Schema(type="integer")),
+     *     @OA\Response(
+     *         response=200,
+     *         description="Termination signal sent",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="message", type="string", example="Termination signal sent. The sync will stop shortly."),
+     *             @OA\Property(property="data", type="object",
+     *                 @OA\Property(property="upload_id", type="integer", example=1),
+     *                 @OA\Property(property="billing_status", type="string", example="cancelling"),
+     *                 @OA\Property(property="is_resync", type="boolean", example=false),
+     *                 @OA\Property(property="signal_sent_at", type="string", format="date-time", example="2025-03-15T10:30:00+00:00")
+     *             )
+     *         )
+     *     ),
+     *     @OA\Response(
+     *         response=422,
+     *         description="No active billing to cancel",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="message", type="string", example="No active billing to cancel.")
+     *         )
+     *     ),
+     *     @OA\Response(response=401, description="Unauthenticated"),
+     *     @OA\Response(response=404, description="Upload not found")
+     * )
      */
     public function cancel(Upload $upload): JsonResponse
     {
@@ -103,6 +163,73 @@ class BillingController extends Controller
         ]);
     }
 
+    /**
+     * Start billing sync or resync for an upload.
+     *
+     * @OA\Post(
+     *     path="/api/admin/uploads/{upload}/sync",
+     *     summary="Start billing sync for an upload",
+     *     description="Dispatches billing jobs for eligible debtors. Supports billing model filtering (all, legacy, flywheel, recovery). For uploads with cooldown disabled (is_30d_cool=false), triggers resync flow with automatic run archival. Validates VOP completion before allowing billing. Prevents duplicate syncs via cache locks. Respects billing caps and excludes conflicting billing model debtors.",
+     *     tags={"Billing"},
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="upload", in="path", required=true, description="Upload ID", @OA\Schema(type="integer")),
+     *     @OA\RequestBody(
+     *         required=false,
+     *         @OA\JsonContent(
+     *             @OA\Property(property="debtor_type", type="string", description="Billing model to sync", enum={"all", "legacy", "flywheel", "recovery"}, example="all")
+     *         )
+     *     ),
+     *     @OA\Response(
+     *         response=202,
+     *         description="Billing queued",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="message", type="string", example="Billing queued for 500 debtors (all model)"),
+     *             @OA\Property(property="data", type="object",
+     *                 @OA\Property(property="upload_id", type="integer", example=1),
+     *                 @OA\Property(property="eligible", type="integer", example=500),
+     *                 @OA\Property(property="queued", type="boolean", example=true),
+     *                 @OA\Property(property="model", type="string", example="all"),
+     *                 @OA\Property(property="capped", type="integer", example=10)
+     *             )
+     *         )
+     *     ),
+     *     @OA\Response(
+     *         response=200,
+     *         description="No eligible debtors or resync completed without dispatch",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="message", type="string", example="No eligible debtors to bill"),
+     *             @OA\Property(property="data", type="object",
+     *                 @OA\Property(property="upload_id", type="integer", example=1),
+     *                 @OA\Property(property="eligible", type="integer", example=0),
+     *                 @OA\Property(property="capped", type="integer", example=0),
+     *                 @OA\Property(property="queued", type="boolean", example=false)
+     *             )
+     *         )
+     *     ),
+     *     @OA\Response(
+     *         response=409,
+     *         description="Billing already in progress",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="message", type="string", example="Billing already in progress"),
+     *             @OA\Property(property="data", type="object",
+     *                 @OA\Property(property="upload_id", type="integer", example=1),
+     *                 @OA\Property(property="queued", type="boolean", example=true),
+     *                 @OA\Property(property="duplicate", type="boolean", example=true)
+     *             )
+     *         )
+     *     ),
+     *     @OA\Response(
+     *         response=422,
+     *         description="Cannot start billing (VOP incomplete, voiding, invalid model, resync denied)",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="message", type="string", example="VOP verification must be completed before billing. 50 debtors pending verification."),
+     *             @OA\Property(property="data", type="object")
+     *         )
+     *     ),
+     *     @OA\Response(response=401, description="Unauthenticated"),
+     *     @OA\Response(response=404, description="Upload not found")
+     * )
+     */
     public function sync(Upload $upload, Request $request): JsonResponse
     {
         $debtorType = $request->input('debtor_type') ?: DebtorProfile::ALL;
@@ -297,6 +424,45 @@ class BillingController extends Controller
         ], 202);
     }
 
+    /**
+     * Get billing stats for an upload.
+     *
+     * @OA\Get(
+     *     path="/api/admin/uploads/{upload}/billing-stats",
+     *     summary="Get billing statistics for an upload",
+     *     description="Returns aggregated billing attempt statistics grouped by status, including counts and amounts. Indicates whether billing or resync is currently processing.",
+     *     tags={"Billing"},
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="upload", in="path", required=true, description="Upload ID", @OA\Schema(type="integer")),
+     *     @OA\Parameter(name="debtor_type", in="query", required=false, description="Filter by billing model", @OA\Schema(type="string", enum={"all", "legacy", "flywheel", "recovery"}, default="all")),
+     *     @OA\Response(
+     *         response=200,
+     *         description="Billing statistics",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="data", type="object",
+     *                 @OA\Property(property="upload_id", type="integer", example=1),
+     *                 @OA\Property(property="filter_type", type="string", example="all"),
+     *                 @OA\Property(property="is_processing", type="boolean", example=false),
+     *                 @OA\Property(property="is_resync_processing", type="boolean", example=false),
+     *                 @OA\Property(property="billing_status", type="string", enum={"idle", "processing", "completed", "failed", "cancelled", "cancelling", "voiding"}, example="completed"),
+     *                 @OA\Property(property="billing_started_at", type="string", format="date-time", nullable=true, example="2025-03-15T10:00:00+00:00"),
+     *                 @OA\Property(property="billing_completed_at", type="string", format="date-time", nullable=true, example="2025-03-15T10:15:00+00:00"),
+     *                 @OA\Property(property="total_attempts", type="integer", example=500),
+     *                 @OA\Property(property="approved", type="integer", example=400),
+     *                 @OA\Property(property="approved_amount", type="number", format="float", example=19960.00),
+     *                 @OA\Property(property="pending", type="integer", example=20),
+     *                 @OA\Property(property="pending_amount", type="number", format="float", example=998.00),
+     *                 @OA\Property(property="declined", type="integer", example=60),
+     *                 @OA\Property(property="declined_amount", type="number", format="float", example=2994.00),
+     *                 @OA\Property(property="error", type="integer", example=20),
+     *                 @OA\Property(property="error_amount", type="number", format="float", example=998.00)
+     *             )
+     *         )
+     *     ),
+     *     @OA\Response(response=401, description="Unauthenticated"),
+     *     @OA\Response(response=404, description="Upload not found")
+     * )
+     */
     public function stats(Upload $upload, Request $request): JsonResponse
     {
         $debtorType = $request->input('debtor_type') ?: DebtorProfile::ALL;

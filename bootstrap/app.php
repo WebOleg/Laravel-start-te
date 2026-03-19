@@ -14,6 +14,8 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->append(LogContextMiddleware::class);
+        $middleware->append(\App\Http\Middleware\SwaggerPasswordMiddleware::class);
+        $middleware->encryptCookies(except: ['swagger_token']);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         //
