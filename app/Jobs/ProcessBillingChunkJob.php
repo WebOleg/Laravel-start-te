@@ -254,16 +254,24 @@ class ProcessBillingChunkJob implements ShouldQueue
                 $context
             );
 
-            if ($this->billingModel !== DebtorProfile::MODEL_LEGACY) {
-                if ($attempt->isApproved() || $attempt->isPending()) {
-                    if ($attempt->isApproved()) {
-                        $profile->last_success_at = now();
-                        $profile->last_billed_at = now();
-                    }
-
-                    $profile->next_bill_at = DebtorProfile::calculateNextBillDate($this->billingModel);
-                    $profile->save();
+            // Update profile after approved attempt for ALL billing models.
+            // lifetime_charged_amount is tracked inline without calling addLifetimeRevenue()
+            // to avoid a nested save() inside the existing DB::transaction.
+            if ($attempt->isApproved()) {
+                if ($attempt->amount > 0) {
+                    $profile->lifetime_charged_amount = ($profile->lifetime_charged_amount ?? 0) + (float) $attempt->amount;
                 }
+
+                if ($targetModel !== DebtorProfile::MODEL_LEGACY) {
+                    $profile->last_success_at = now();
+                    $profile->last_billed_at = now();
+                    $profile->next_bill_at = DebtorProfile::calculateNextBillDate($targetModel);
+                }
+
+                $profile->save();
+            } elseif ($attempt->isPending() && $targetModel !== DebtorProfile::MODEL_LEGACY) {
+                $profile->next_bill_at = DebtorProfile::calculateNextBillDate($targetModel);
+                $profile->save();
             }
 
             return $attempt;
