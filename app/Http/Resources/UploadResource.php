@@ -112,17 +112,14 @@ class UploadResource extends JsonResource
                 $this->billing_runs ?? []
             ),
 
-            // True when cooldown is explicitly OFF, billing is not currently running,
-            // and the per-upload resync cap has not yet been reached.
+            // True when cooldown is explicitly OFF and billing is not currently running.
             // Resync only targets Legacy debtors; the full model-level check
             // is enforced by BillingResyncService when the user triggers resync.
             'can_resync' => $this->is_30d_cool === false
-                && $this->billing_status !== Upload::JOB_PROCESSING
-                && count($this->billing_runs ?? []) < Upload::MAX_RESYNC_ATTEMPTS,
+                && $this->billing_status !== Upload::JOB_PROCESSING,
 
-            // Expose the cap and current usage so the frontend can render progress (e.g. "2 / 5 resyncs used").
+            // Expose current resync usage so the frontend can render the counter (e.g. "2 resyncs").
             'resync_count' => count($this->billing_runs ?? []),
-            'max_resync'   => Upload::MAX_RESYNC_ATTEMPTS,
         ];
     }
 }
