@@ -53,6 +53,7 @@ class EmpChargebackSyncService
             'pages_processed' => 0,
             'chargebacks_created' => 0,
             'reason_backfilled' => 0,
+            'profiles_deactivated' => 0,
         ];
 
         Log::info('EMP Chargeback Sync: Starting', ['date' => $date, 'dry_run' => $dryRun]);
@@ -178,18 +179,15 @@ class EmpChargebackSyncService
 
     /**
      * Ensure chargeback record exists for already-chargebacked billing attempts.
-     * Also backfill reason_code on billing_attempt if missing (reconciliation sets
-     * status to chargebacked without reason; Chargeback API provides the reason).
+     * Also backfill reason_code on billing_attempt if missing and ensure
+     * debtor profile is deactivated — it may have been missed if chargeback
+     * was previously processed without profile deactivation.
      */
     private function ensureChargebackRecord(BillingAttempt $billingAttempt, array $chargeback, array &$stats, string $importDate): void
     {
         $reasonCode = $chargeback['reason_code'] ?? null;
         $reasonDescription = $chargeback['reason_description'] ?? null;
 
-        // Backfill reason_code on billing_attempt if missing.
-        // Reconciliation marks status as chargebacked without the reason;
-        // the Chargeback API provides the actual reason code.
-        // Backfill reason_code on billing_attempt if missing
         if ($reasonCode && !$billingAttempt->chargeback_reason_code) {
             $billingAttempt->update([
                 'chargeback_reason_code' => $reasonCode,
@@ -203,10 +201,7 @@ class EmpChargebackSyncService
             ]);
         }
 
-
-        // Ensure chargeback record in chargebacks table
         $existing = $billingAttempt->chargeback;
-
         if (!$existing) {
             $chargeback['import_date'] = $importDate;
             $created = $this->chargebackService->createFromApiSync($billingAttempt, $chargeback);
@@ -214,6 +209,9 @@ class EmpChargebackSyncService
                 $stats['chargebacks_created']++;
             }
         }
+
+        // Ensure profile is deactivated — may have been missed on previous sync runs.
+        $this->deactivateProfile($billingAttempt, $chargeback['chargeback_amount'] ?? null, $stats);
     }
 
     private function applyChargeback(BillingAttempt $billingAttempt, array $chargeback, array &$stats, string $importDate): string
@@ -250,6 +248,10 @@ class EmpChargebackSyncService
                     $debtor->update(['status' => Debtor::STATUS_CHARGEBACKED]);
                 }
 
+                // Deactivate debtor profile — mirrors webhook path (ProcessEmpWebhookJob::deactivateProfile).
+                // Critical: sync path must produce identical profile state as webhook path.
+                $this->deactivateProfile($billingAttempt, $chargeback['chargeback_amount'] ?? null, $stats);
+
                 if ($reasonCode && in_array($reasonCode, self::AUTO_BLACKLIST_CODES) && $debtor) {
                     $this->blacklistDebtor($debtor, $reasonCode, $reasonDescription, $stats);
                 }
@@ -270,6 +272,44 @@ class EmpChargebackSyncService
             ]);
             return 'errors';
         }
+    }
+
+    /**
+     * Deactivate debtor profile after chargeback.
+     * Mirrors ProcessEmpWebhookJob::deactivateProfile — both paths must produce identical state.
+     * Idempotent: safe to call multiple times on the same profile.
+     * Note: lifetime amount is updated inline without calling deductLifetimeRevenue()
+     * to avoid nested save() calls inside DB::transaction.
+     */
+    private function deactivateProfile(BillingAttempt $billingAttempt, mixed $chargebackAmount, array &$stats): void
+    {
+        $profile = $billingAttempt->debtorProfile ?? $billingAttempt->debtor?->debtorProfile;
+
+        if (!$profile) {
+            return;
+        }
+
+        if (!$profile->is_active) {
+            return;
+        }
+
+        $amountToDeduct = $chargebackAmount ?? $billingAttempt->amount;
+        if ($amountToDeduct > 0) {
+            $current = $profile->lifetime_charged_amount ?? 0;
+            $profile->lifetime_charged_amount = max(0, $current - (float) $amountToDeduct);
+        }
+
+        $profile->is_active = false;
+        $profile->next_bill_at = null;
+        $profile->save();
+
+        $stats['profiles_deactivated'] = ($stats['profiles_deactivated'] ?? 0) + 1;
+
+        Log::info('EMP Chargeback Sync: Profile deactivated', [
+            'billing_attempt_id' => $billingAttempt->id,
+            'debtor_profile_id' => $profile->id,
+            'amount_deducted' => $amountToDeduct,
+        ]);
     }
 
     private function blacklistDebtor(Debtor $debtor, string $reasonCode, ?string $reasonDescription, array &$stats): void
