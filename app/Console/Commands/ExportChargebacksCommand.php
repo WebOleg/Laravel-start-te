@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Models\BillingAttempt;
 use App\Traits\WithLogContext;
+use Carbon\Carbon;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Storage;
 
@@ -11,7 +12,7 @@ class ExportChargebacksCommand extends Command
 {
     use WithLogContext;
 
-    protected $signature = 'chargebacks:export {--upload_id=} {--disk=local} {--reason-code= : Filter by chargeback reason code (e.g. XT73)}';
+    protected $signature = 'chargebacks:export {--upload_id=} {--disk=local} {--reason-code= : Filter by chargeback reason code (e.g. XT73)} {--from= : Filter chargebacks from this date (Y-m-d)} {--to= : Filter chargebacks up to this date (Y-m-d)} {--date= : Filter chargebacks on a specific date (Y-m-d)} {--emp-account-id= : Filter by EMP account ID}';
 
     protected $description = 'Export chargebacks to CSV file';
 
@@ -23,8 +24,51 @@ class ExportChargebacksCommand extends Command
         $uploadId = $this->option('upload_id');
         $disk = $this->option('disk');
         $reasonCode = $this->option('reason-code');
-        $filenameSuffix = $reasonCode ? '_' . strtoupper($reasonCode) : '';
-        $filename = 'chargebacks_export' . $filenameSuffix . '_' . date('Y-m-d_His') . '.csv';
+        $from = $this->option('from');
+        $to = $this->option('to');
+        $date = $this->option('date');
+        $empAccountId = $this->option('emp-account-id');
+
+        // Validate mutual exclusivity of --date vs --from/--to
+        if ($date && ($from || $to)) {
+            $this->error('Cannot use --date together with --from or --to. Use either --date for a single day, or --from/--to for a range.');
+            return 1;
+        }
+
+        // Validate date formats
+        if ($from && !$this->isValidDate($from)) {
+            $this->error('Invalid --from date format. Expected Y-m-d (e.g. 2026-01-15)');
+            return 1;
+        }
+        if ($to && !$this->isValidDate($to)) {
+            $this->error('Invalid --to date format. Expected Y-m-d (e.g. 2026-01-15)');
+            return 1;
+        }
+        if ($date && !$this->isValidDate($date)) {
+            $this->error('Invalid --date format. Expected Y-m-d (e.g. 2026-01-15)');
+            return 1;
+        }
+
+        // Build filename suffix
+        $filenameParts = ['chargebacks_export'];
+        if ($reasonCode) {
+            $filenameParts[] = strtoupper($reasonCode);
+        }
+        if ($date) {
+            $filenameParts[] = $date;
+        } else {
+            if ($from) {
+                $filenameParts[] = 'from' . $from;
+            }
+            if ($to) {
+                $filenameParts[] = 'to' . $to;
+            }
+        }
+        if ($empAccountId) {
+            $filenameParts[] = 'emp' . $empAccountId;
+        }
+        $filenameParts[] = date('Y-m-d_His');
+        $filename = implode('_', $filenameParts) . '.csv';
 
         $this->info('Fetching chargebacks');
 
@@ -39,6 +83,25 @@ class ExportChargebacksCommand extends Command
         if ($reasonCode) {
             $query->where('chargeback_reason_code', strtoupper($reasonCode));
             $this->info('Filtering by reason code: ' . strtoupper($reasonCode));
+        }
+
+        if ($date) {
+            $query->whereDate('chargebacked_at', $date);
+            $this->info('Filtering by date: ' . $date);
+        } else {
+            if ($from) {
+                $query->where('chargebacked_at', '>=', Carbon::parse($from)->startOfDay());
+                $this->info('Filtering from: ' . $from);
+            }
+            if ($to) {
+                $query->where('chargebacked_at', '<=', Carbon::parse($to)->endOfDay());
+                $this->info('Filtering to: ' . $to);
+            }
+        }
+
+        if ($empAccountId) {
+            $query->where('emp_account_id', $empAccountId);
+            $this->info('Filtering by EMP account ID: ' . $empAccountId);
         }
 
         $chargebacks = $query->get();
@@ -141,5 +204,12 @@ class ExportChargebacksCommand extends Command
         fclose($handle);
 
         return $csvContent;
+    }
+
+    private function isValidDate(string $value): bool
+    {
+        $date = \DateTime::createFromFormat('Y-m-d', $value);
+
+        return $date && $date->format('Y-m-d') === $value;
     }
 }

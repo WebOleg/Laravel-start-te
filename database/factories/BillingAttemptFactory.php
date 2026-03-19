@@ -80,6 +80,9 @@ class BillingAttemptFactory extends Factory
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
             'error_code' => 'AC04',
             'error_message' => 'Account closed',
+            'chargeback_reason_code' => 'XT73',
+            'chargeback_reason_description' => 'SEPA Direct Debit recall',
+            'chargebacked_at' => fake()->dateTimeBetween('-30 days', 'now'),
         ]);
     }
 
