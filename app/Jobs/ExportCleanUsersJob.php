@@ -104,7 +104,7 @@ class ExportCleanUsersJob implements ShouldQueue
                     ->where('status', BillingAttempt::STATUS_APPROVED)
                     ->whereNotNull('debtor_id')
                     ->groupBy('debtor_id')
-                    ->havingRaw("COUNT(*) >= {$minCount}");
+                    ->havingRaw('COUNT(*) >= ?', [$minCount]);
 
                 $query->whereIn('debtor_id', $debtorsWithMultiple);
             }

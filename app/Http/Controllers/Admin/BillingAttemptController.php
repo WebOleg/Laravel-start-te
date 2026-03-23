@@ -205,11 +205,11 @@ class BillingAttemptController extends Controller
      * @OA\Get(
      *     path="/api/admin/billing-attempts/clean-users/stats",
      *     summary="Get clean users stats",
-     *     description="Returns the count of 'clean' debtors — those with approved charges, no lifetime chargebacks, and not charged in the last X days. Supports broad mode (>=1 approved) and strict mode (>=2 approved).",
+     *     description="Returns the count of 'clean' debtors — those with approved charges, no lifetime chargebacks, and not charged in the last X days. Supports broad (>=1 approved), strict (>=2 approved), and strict3 (>=3 approved) modes.",
      *     tags={"Clean Users"},
      *     security={{"bearerAuth":{}}},
      *     @OA\Parameter(name="min_days", in="query", required=false, description="Exclude debtors charged in last N days", @OA\Schema(type="integer", minimum=1, maximum=365, default=30)),
-     *     @OA\Parameter(name="mode", in="query", required=false, description="Broad: >=1 approved, Strict: >=2 approved", @OA\Schema(type="string", enum={"broad", "strict"}, default="broad")),
+     *     @OA\Parameter(name="mode", in="query", required=false, description="Broad: >=1 approved; Strict: >=2 approved with date filter; Strict3: >=3 approved with date filter", @OA\Schema(type="string", enum={"broad", "strict", "strict3"}, default="broad")),
      *     @OA\Parameter(name="account_id", in="query", required=false, description="Filter by EMP account ID", @OA\Schema(type="integer")),
      *     @OA\Response(
      *         response=200,
@@ -523,7 +523,7 @@ class BillingAttemptController extends Controller
                 ->where('status', BillingAttempt::STATUS_APPROVED)
                 ->whereNotNull('debtor_id')
                 ->groupBy('debtor_id')
-                ->havingRaw("COUNT(*) >= {$minCount}");
+                ->havingRaw('COUNT(*) >= ?', [$minCount]);
 
             $query->whereIn('debtor_id', $debtorsWithMultiple);
         }
