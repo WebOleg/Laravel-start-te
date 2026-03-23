@@ -570,6 +570,81 @@ class BillingAttemptControllerTest extends TestCase
             ->assertJsonPath('data.count', 1);
     }
 
+    public function test_clean_users_stats_accepts_strict3_mode(): void
+    {
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/billing-attempts/clean-users/stats?mode=strict3');
+
+        $response->assertStatus(200)
+            ->assertJsonPath('data.mode', 'strict3');
+    }
+
+    public function test_clean_users_stats_strict3_excludes_debtor_with_two_approvals(): void
+    {
+        $debtor = Debtor::factory()->create();
+
+        // Two approved attempts — below the strict3 threshold of 3
+        BillingAttempt::factory()->create([
+            'debtor_id' => $debtor->id,
+            'status' => BillingAttempt::STATUS_APPROVED,
+            'attempt_number' => 1,
+            'emp_created_at' => now()->subDays(60),
+        ]);
+        BillingAttempt::factory()->create([
+            'debtor_id' => $debtor->id,
+            'status' => BillingAttempt::STATUS_APPROVED,
+            'attempt_number' => 2,
+            'emp_created_at' => now()->subDays(60),
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/billing-attempts/clean-users/stats?min_days=30&mode=strict3');
+
+        $response->assertStatus(200)
+            ->assertJsonPath('data.count', 0);
+    }
+
+    public function test_clean_users_stats_strict3_includes_debtor_with_three_or_more_approvals(): void
+    {
+        $debtor = Debtor::factory()->create();
+
+        // Three approved attempts — meets the strict3 threshold
+        BillingAttempt::factory()->create([
+            'debtor_id' => $debtor->id,
+            'status' => BillingAttempt::STATUS_APPROVED,
+            'attempt_number' => 1,
+            'emp_created_at' => now()->subDays(60),
+        ]);
+        BillingAttempt::factory()->create([
+            'debtor_id' => $debtor->id,
+            'status' => BillingAttempt::STATUS_APPROVED,
+            'attempt_number' => 2,
+            'emp_created_at' => now()->subDays(60),
+        ]);
+        BillingAttempt::factory()->create([
+            'debtor_id' => $debtor->id,
+            'status' => BillingAttempt::STATUS_APPROVED,
+            'attempt_number' => 3,
+            'emp_created_at' => now()->subDays(60),
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/billing-attempts/clean-users/stats?min_days=30&mode=strict3');
+
+        $response->assertStatus(200)
+            ->assertJsonPath('data.count', 1);
+    }
+
+    public function test_export_clean_users_accepts_strict3_mode(): void
+    {
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson('/api/admin/billing-attempts/clean-users/export?limit=100&mode=strict3');
+
+        // Should pass validation and return a streamed CSV, not 422
+        $response->assertStatus(200);
+        $this->assertStringContainsString('text/csv', $response->headers->get('Content-Type'));
+    }
+
     public function test_export_clean_users_requires_authentication(): void
     {
         $response = $this->getJson('/api/admin/billing-attempts/clean-users/export?limit=10');
