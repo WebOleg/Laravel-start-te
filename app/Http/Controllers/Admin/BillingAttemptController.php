@@ -232,7 +232,7 @@ class BillingAttemptController extends Controller
     {
         $request->validate([
             'min_days' => 'nullable|integer|min:1|max:365',
-            'mode' => 'nullable|in:broad,strict,strict2',
+            'mode' => 'nullable|in:broad,strict,strict3',
             'account_id' => 'nullable|integer',
         ]);
 
@@ -264,7 +264,7 @@ class BillingAttemptController extends Controller
      *     security={{"bearerAuth":{}}},
      *     @OA\Parameter(name="limit", in="query", required=true, description="Number of records to export", @OA\Schema(type="integer", minimum=1, maximum=100000)),
      *     @OA\Parameter(name="min_days", in="query", required=false, description="Exclude debtors charged in last N days", @OA\Schema(type="integer", minimum=1, maximum=365, default=30)),
-     *     @OA\Parameter(name="mode", in="query", required=false, description="Broad: >=1 approved; Strict: >=2 approved with date filter; Strict2: >=2 approved lifetime (no date filter)", @OA\Schema(type="string", enum={"broad", "strict", "strict2"}, default="broad")),
+     *     @OA\Parameter(name="mode", in="query", required=false, description="Broad: >=1 approved; Strict: >=2 approved with date filter; Strict3: >=3 approved with date filter", @OA\Schema(type="string", enum={"broad", "strict", "strict3"}, default="broad")),
      *     @OA\Parameter(name="account_id", in="query", required=false, description="Filter by EMP account ID", @OA\Schema(type="integer")),
      *     @OA\Response(
      *         response=200,
@@ -291,7 +291,7 @@ class BillingAttemptController extends Controller
         $request->validate([
             'limit' => 'required|integer|min:1|max:100000',
             'min_days' => 'nullable|integer|min:1|max:365',
-            'mode' => 'nullable|in:broad,strict,strict2',
+            'mode' => 'nullable|in:broad,strict,strict3',
             'account_id' => 'nullable|integer',
         ]);
 
@@ -485,7 +485,7 @@ class BillingAttemptController extends Controller
      * Logic: approved charge + no lifetime CB + not charged in last X days.
      * Broad: >=1 approved charge.
      * Strict: >=2 approved charges, with date filter.
-     * Strict2: >=2 approved charges, lifetime (no date filter).
+     * Strict3: >=3 approved charges, with date filter.
      */
     private function buildCleanUsersQuery(int $minDays, string $mode = 'broad', ?int $accountId = null)
     {
@@ -500,25 +500,30 @@ class BillingAttemptController extends Controller
             ->whereNotNull('debtor_id')
             ->whereNotIn('debtor_id', $chargebackedSubquery);
 
-        if ($mode !== 'strict2') {
-            $recentlyChargedSubquery = BillingAttempt::select('debtor_id')
-                ->where('emp_created_at', '>=', now()->subDays($minDays))
-                ->whereNotNull('debtor_id')
-                ->distinct();
+        $recentlyChargedSubquery = BillingAttempt::select('debtor_id')
+            ->where('emp_created_at', '>=', now()->subDays($minDays))
+            ->whereNotNull('debtor_id')
+            ->distinct();
 
-            $query->whereNotIn('debtor_id', $recentlyChargedSubquery);
-        }
+        $query->whereNotIn('debtor_id', $recentlyChargedSubquery);
 
         if ($accountId) {
             $query->where('emp_account_id', $accountId);
         }
 
-        if ($mode === 'strict' || $mode === 'strict2') {
+        // Map modes to minimum approved charges required
+        $modeRequirements = [
+            'strict' => 2,
+            'strict3' => 3,
+        ];
+
+        if (isset($modeRequirements[$mode])) {
+            $minCount = $modeRequirements[$mode];
             $debtorsWithMultiple = BillingAttempt::select('debtor_id')
                 ->where('status', BillingAttempt::STATUS_APPROVED)
                 ->whereNotNull('debtor_id')
                 ->groupBy('debtor_id')
-                ->havingRaw('COUNT(*) >= 2');
+                ->havingRaw("COUNT(*) >= {$minCount}");
 
             $query->whereIn('debtor_id', $debtorsWithMultiple);
         }

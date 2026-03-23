@@ -79,14 +79,12 @@ class ExportCleanUsersJob implements ShouldQueue
                 ->whereNotIn('debtor_id', $chargebackedSubquery)
                 ->oldest('emp_created_at');
 
-            if ($this->mode !== 'strict2') {
-                $recentlyChargedSubquery = BillingAttempt::select('debtor_id')
-                    ->where('emp_created_at', '>=', now()->subDays($this->minDays))
-                    ->whereNotNull('debtor_id')
-                    ->distinct();
+            $recentlyChargedSubquery = BillingAttempt::select('debtor_id')
+                ->where('emp_created_at', '>=', now()->subDays($this->minDays))
+                ->whereNotNull('debtor_id')
+                ->distinct();
 
-                $query->whereNotIn('debtor_id', $recentlyChargedSubquery);
-            }
+            $query->whereNotIn('debtor_id', $recentlyChargedSubquery);
 
             if ($this->tetherInstanceId) {
                 $query->where('tether_instance_id', $this->tetherInstanceId);
@@ -94,12 +92,19 @@ class ExportCleanUsersJob implements ShouldQueue
                 $query->where('emp_account_id', $this->accountId);
             }
 
-            if ($this->mode === 'strict' || $this->mode === 'strict2') {
+            // Map modes to minimum approved charges required
+            $modeRequirements = [
+                'strict' => 2,
+                'strict3' => 3,
+            ];
+
+            if (isset($modeRequirements[$this->mode])) {
+                $minCount = $modeRequirements[$this->mode];
                 $debtorsWithMultiple = BillingAttempt::select('debtor_id')
                     ->where('status', BillingAttempt::STATUS_APPROVED)
                     ->whereNotNull('debtor_id')
                     ->groupBy('debtor_id')
-                    ->havingRaw('COUNT(*) >= 2');
+                    ->havingRaw("COUNT(*) >= {$minCount}");
 
                 $query->whereIn('debtor_id', $debtorsWithMultiple);
             }
