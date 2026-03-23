@@ -70,11 +70,6 @@ class ExportCleanUsersJob implements ShouldQueue
                 ->whereNotNull('debtor_id')
                 ->distinct();
 
-            $recentlyChargedSubquery = BillingAttempt::select('debtor_id')
-                ->where('emp_created_at', '>=', now()->subDays($this->minDays))
-                ->whereNotNull('debtor_id')
-                ->distinct();
-
             $query = BillingAttempt::query()
                 ->with('debtor:id,first_name,last_name,iban,bic')
                 ->select('id', 'debtor_id', 'amount', 'currency')
@@ -82,8 +77,16 @@ class ExportCleanUsersJob implements ShouldQueue
                 ->where('attempt_number', 1)
                 ->whereNotNull('debtor_id')
                 ->whereNotIn('debtor_id', $chargebackedSubquery)
-                ->whereNotIn('debtor_id', $recentlyChargedSubquery)
                 ->oldest('emp_created_at');
+
+            if ($this->mode !== 'strict2') {
+                $recentlyChargedSubquery = BillingAttempt::select('debtor_id')
+                    ->where('emp_created_at', '>=', now()->subDays($this->minDays))
+                    ->whereNotNull('debtor_id')
+                    ->distinct();
+
+                $query->whereNotIn('debtor_id', $recentlyChargedSubquery);
+            }
 
             if ($this->tetherInstanceId) {
                 $query->where('tether_instance_id', $this->tetherInstanceId);
@@ -91,7 +94,7 @@ class ExportCleanUsersJob implements ShouldQueue
                 $query->where('emp_account_id', $this->accountId);
             }
 
-            if ($this->mode === 'strict') {
+            if ($this->mode === 'strict' || $this->mode === 'strict2') {
                 $debtorsWithMultiple = BillingAttempt::select('debtor_id')
                     ->where('status', BillingAttempt::STATUS_APPROVED)
                     ->whereNotNull('debtor_id')
