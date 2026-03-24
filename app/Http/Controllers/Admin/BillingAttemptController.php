@@ -210,7 +210,7 @@ class BillingAttemptController extends Controller
      *     security={{"bearerAuth":{}}},
      *     @OA\Parameter(name="min_days", in="query", required=false, description="Exclude debtors charged in last N days", @OA\Schema(type="integer", minimum=1, maximum=365, default=30)),
      *     @OA\Parameter(name="mode", in="query", required=false, description="Broad: >=1 approved; Strict: >=2 approved with date filter; Strict3: >=3 approved with date filter", @OA\Schema(type="string", enum={"broad", "strict", "strict3"}, default="broad")),
-     *     @OA\Parameter(name="account_id", in="query", required=false, description="Filter by EMP account ID", @OA\Schema(type="integer")),
+     *     @OA\Parameter(name="account_id", in="query", required=false, description="Filter by EMP account ID", @OA\Schema(type="inter")),
      *     @OA\Response(
      *         response=200,
      *         description="Clean users count and parameters",
@@ -484,8 +484,8 @@ class BillingAttemptController extends Controller
      * Build optimized query for clean users.
      * Logic: approved charge + no lifetime CB + not charged in last X days.
      * Broad: >=1 approved charge.
-     * Strict: >=2 approved charges, with date filter.
-     * Strict3: >=3 approved charges, with date filter.
+     * Strict: >=2 approved charges lifetime across all uploads.
+     * Strict3: >=3 approved charges lifetime across all uploads.
      */
     private function buildCleanUsersQuery(int $minDays, string $mode = 'broad', ?int $accountId = null)
     {
@@ -494,9 +494,17 @@ class BillingAttemptController extends Controller
             ->whereNotNull('debtor_id')
             ->distinct();
 
+        // Select the first approved attempt per debtor by lowest id.
+        // Using whereIn on MIN(id) instead of attempt_number=1 ensures debtors
+        // whose first attempt was an error but later got approved are included.
+        $firstApprovedIds = BillingAttempt::selectRaw('MIN(id)')
+            ->where('status', BillingAttempt::STATUS_APPROVED)
+            ->whereNotNull('debtor_id')
+            ->groupBy('debtor_id');
+
         $query = BillingAttempt::query()
             ->where('status', BillingAttempt::STATUS_APPROVED)
-            ->where('attempt_number', 1)
+            ->whereIn('id', $firstApprovedIds)
             ->whereNotNull('debtor_id')
             ->whereNotIn('debtor_id', $chargebackedSubquery);
 
@@ -511,7 +519,7 @@ class BillingAttemptController extends Controller
             $query->where('emp_account_id', $accountId);
         }
 
-        // Map modes to minimum approved charges required
+        // Map modes to minimum approved charges required lifetime across all uploads.
         $modeRequirements = [
             'strict' => 2,
             'strict3' => 3,

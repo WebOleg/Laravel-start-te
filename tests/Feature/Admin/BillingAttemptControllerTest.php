@@ -511,7 +511,6 @@ class BillingAttemptControllerTest extends TestCase
     {
         $debtor = Debtor::factory()->create();
 
-        // Approved attempt (should count)
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'status' => BillingAttempt::STATUS_APPROVED,
@@ -519,7 +518,6 @@ class BillingAttemptControllerTest extends TestCase
             'emp_created_at' => now()->subDays(60),
         ]);
 
-        // Chargeback on same debtor (should exclude)
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
@@ -536,7 +534,6 @@ class BillingAttemptControllerTest extends TestCase
     {
         $debtor = Debtor::factory()->create();
 
-        // Approved attempt charged 5 days ago (within 30-day window)
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'status' => BillingAttempt::STATUS_APPROVED,
@@ -555,7 +552,6 @@ class BillingAttemptControllerTest extends TestCase
     {
         $debtor = Debtor::factory()->create();
 
-        // Approved, old enough, no chargebacks
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'status' => BillingAttempt::STATUS_APPROVED,
@@ -583,7 +579,6 @@ class BillingAttemptControllerTest extends TestCase
     {
         $debtor = Debtor::factory()->create();
 
-        // Two approved attempts — below the strict3 threshold of 3
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'status' => BillingAttempt::STATUS_APPROVED,
@@ -608,7 +603,6 @@ class BillingAttemptControllerTest extends TestCase
     {
         $debtor = Debtor::factory()->create();
 
-        // Three approved attempts — meets the strict3 threshold
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'status' => BillingAttempt::STATUS_APPROVED,
@@ -640,7 +634,6 @@ class BillingAttemptControllerTest extends TestCase
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
             ->getJson('/api/admin/billing-attempts/clean-users/export?limit=100&mode=strict3');
 
-        // Should pass validation and return a streamed CSV, not 422
         $response->assertStatus(200);
         $this->assertStringContainsString('text/csv', $response->headers->get('Content-Type'));
     }
@@ -665,7 +658,6 @@ class BillingAttemptControllerTest extends TestCase
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
             ->getJson('/api/admin/billing-attempts/clean-users/export?limit=100');
 
-        // Small limit → streamed CSV download
         $response->assertStatus(200);
         $this->assertStringContainsString('text/csv', $response->headers->get('Content-Type'));
     }
@@ -796,13 +788,12 @@ class BillingAttemptControllerTest extends TestCase
         $this->assertStringContainsString('text/csv', $response->headers->get('Content-Type'));
     }
 
-    // ── strict3 Mode: Threshold & Counting Edge Cases ──────────────────
+    // strict3 Mode: Threshold & Counting Edge Cases
 
     public function test_clean_users_stats_strict3_includes_debtor_with_more_than_three_approvals(): void
     {
         $debtor = Debtor::factory()->create();
 
-        // 5 approved attempts — well above the strict3 threshold of 3
         for ($i = 1; $i <= 5; $i++) {
             BillingAttempt::factory()->create([
                 'debtor_id' => $debtor->id,
@@ -825,7 +816,6 @@ class BillingAttemptControllerTest extends TestCase
         $qualifiesB = Debtor::factory()->create();
         $doesNotQualify = Debtor::factory()->create();
 
-        // Debtor A: 4 approvals → qualifies
         for ($i = 1; $i <= 4; $i++) {
             BillingAttempt::factory()->create([
                 'debtor_id' => $qualifiesA->id,
@@ -835,7 +825,6 @@ class BillingAttemptControllerTest extends TestCase
             ]);
         }
 
-        // Debtor B: exactly 3 approvals → qualifies
         for ($i = 1; $i <= 3; $i++) {
             BillingAttempt::factory()->create([
                 'debtor_id' => $qualifiesB->id,
@@ -845,7 +834,6 @@ class BillingAttemptControllerTest extends TestCase
             ]);
         }
 
-        // Debtor C: only 2 approvals → does NOT qualify
         for ($i = 1; $i <= 2; $i++) {
             BillingAttempt::factory()->create([
                 'debtor_id' => $doesNotQualify->id,
@@ -864,7 +852,6 @@ class BillingAttemptControllerTest extends TestCase
 
     public function test_clean_users_stats_strict3_returns_zero_when_none_meet_threshold(): void
     {
-        // Two debtors, each with only 1 approval
         foreach (range(1, 2) as $_) {
             $debtor = Debtor::factory()->create();
             BillingAttempt::factory()->create([
@@ -882,13 +869,12 @@ class BillingAttemptControllerTest extends TestCase
             ->assertJsonPath('data.count', 0);
     }
 
-    // ── strict3 Mode: Filter Interactions ──────────────────────────────
+    // strict3 Mode: Filter Interactions
 
     public function test_clean_users_stats_strict3_excludes_chargebacked_debtor(): void
     {
         $debtor = Debtor::factory()->create();
 
-        // 3 approved attempts — meets threshold
         for ($i = 1; $i <= 3; $i++) {
             BillingAttempt::factory()->create([
                 'debtor_id' => $debtor->id,
@@ -898,7 +884,6 @@ class BillingAttemptControllerTest extends TestCase
             ]);
         }
 
-        // But also a chargeback → should be excluded
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'status' => BillingAttempt::STATUS_CHARGEBACKED,
@@ -915,7 +900,6 @@ class BillingAttemptControllerTest extends TestCase
     {
         $debtor = Debtor::factory()->create();
 
-        // 3 approved attempts, but one is recent (5 days ago)
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'status' => BillingAttempt::STATUS_APPROVED,
@@ -950,7 +934,6 @@ class BillingAttemptControllerTest extends TestCase
         $debtorA = Debtor::factory()->create();
         $debtorB = Debtor::factory()->create();
 
-        // Debtor A: 3 approvals on account A
         for ($i = 1; $i <= 3; $i++) {
             BillingAttempt::factory()->create([
                 'debtor_id' => $debtorA->id,
@@ -961,7 +944,6 @@ class BillingAttemptControllerTest extends TestCase
             ]);
         }
 
-        // Debtor B: 3 approvals on account B
         for ($i = 1; $i <= 3; $i++) {
             BillingAttempt::factory()->create([
                 'debtor_id' => $debtorB->id,
@@ -972,7 +954,6 @@ class BillingAttemptControllerTest extends TestCase
             ]);
         }
 
-        // Filter by account A → only debtor A should count
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
             ->getJson('/api/admin/billing-attempts/clean-users/stats?min_days=30&mode=strict3&account_id=' . $accountA->id);
 
@@ -980,15 +961,12 @@ class BillingAttemptControllerTest extends TestCase
             ->assertJsonPath('data.count', 1);
     }
 
-    // ── strict3 Mode: attempt_number Subtlety ──────────────────────────
+    // strict3 Mode: attempt_number Subtlety
 
     public function test_clean_users_stats_strict3_counts_all_attempt_numbers_for_threshold(): void
     {
         $debtor = Debtor::factory()->create();
 
-        // 3 approved attempts across different attempt_numbers
-        // The threshold subquery counts ALL approved (any attempt_number)
-        // but the main query only returns attempt_number=1 rows
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'status' => BillingAttempt::STATUS_APPROVED,
@@ -1008,8 +986,6 @@ class BillingAttemptControllerTest extends TestCase
             'emp_created_at' => now()->subDays(60),
         ]);
 
-        // Debtor has 3 approved attempts total → meets threshold
-        // AND has an attempt_number=1 row → should appear in results
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
             ->getJson('/api/admin/billing-attempts/clean-users/stats?min_days=30&mode=strict3');
 
@@ -1017,13 +993,13 @@ class BillingAttemptControllerTest extends TestCase
             ->assertJsonPath('data.count', 1);
     }
 
-    public function test_clean_users_stats_strict3_excludes_debtor_without_first_attempt(): void
+    public function test_clean_users_stats_strict3_includes_debtor_without_first_attempt(): void
     {
         $debtor = Debtor::factory()->create();
 
-        // 3 approved attempts but NONE with attempt_number=1
-        // Threshold subquery sees 3 approved → passes
-        // Main query filters attempt_number=1 → no rows for this debtor
+        // 3 approved attempts with attempt_number 2, 3, 4 (first attempt was an error).
+        // With MIN(id) subquery the debtor IS included because we pick the first
+        // approved attempt by id regardless of attempt_number.
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'status' => BillingAttempt::STATUS_APPROVED,
@@ -1047,10 +1023,10 @@ class BillingAttemptControllerTest extends TestCase
             ->getJson('/api/admin/billing-attempts/clean-users/stats?min_days=30&mode=strict3');
 
         $response->assertStatus(200)
-            ->assertJsonPath('data.count', 0);
+            ->assertJsonPath('data.count', 1);
     }
 
-    // ── strict3 Mode: Export ───────────────────────────────────────────
+    // strict3 Mode: Export
 
     public function test_export_clean_users_strict3_streamed_csv_contains_only_qualifying_debtors(): void
     {
@@ -1065,7 +1041,6 @@ class BillingAttemptControllerTest extends TestCase
             'iban' => 'NL91ABNA0417164300',
         ]);
 
-        // Qualifying debtor: 3 approved, old enough
         for ($i = 1; $i <= 3; $i++) {
             BillingAttempt::factory()->create([
                 'debtor_id' => $qualifying->id,
@@ -1075,7 +1050,6 @@ class BillingAttemptControllerTest extends TestCase
             ]);
         }
 
-        // Non-qualifying: only 2 approved
         for ($i = 1; $i <= 2; $i++) {
             BillingAttempt::factory()->create([
                 'debtor_id' => $nonQualifying->id,
@@ -1109,11 +1083,10 @@ class BillingAttemptControllerTest extends TestCase
         Bus::assertDispatched(ExportCleanUsersJob::class);
     }
 
-    // ── strict3 Mode: Cross-Mode Comparison ────────────────────────────
+    // strict3 Mode: Cross-Mode Comparison
 
     public function test_clean_users_stats_strict3_count_lte_strict_lte_broad(): void
     {
-        // Debtor with 1 approval → only counted by broad
         $debtor1 = Debtor::factory()->create();
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor1->id,
@@ -1122,7 +1095,6 @@ class BillingAttemptControllerTest extends TestCase
             'emp_created_at' => now()->subDays(60),
         ]);
 
-        // Debtor with 2 approvals → counted by broad & strict
         $debtor2 = Debtor::factory()->create();
         for ($i = 1; $i <= 2; $i++) {
             BillingAttempt::factory()->create([
@@ -1133,7 +1105,6 @@ class BillingAttemptControllerTest extends TestCase
             ]);
         }
 
-        // Debtor with 3 approvals → counted by all modes
         $debtor3 = Debtor::factory()->create();
         for ($i = 1; $i <= 3; $i++) {
             BillingAttempt::factory()->create([
@@ -1155,11 +1126,9 @@ class BillingAttemptControllerTest extends TestCase
         $strictCount = $strictResponse->json('data.count');
         $strict3Count = $strict3Response->json('data.count');
 
-        // broad >= strict >= strict3
         $this->assertGreaterThanOrEqual($strictCount, $broadCount);
         $this->assertGreaterThanOrEqual($strict3Count, $strictCount);
 
-        // With the data above: broad=3, strict=2, strict3=1
         $this->assertEquals(3, $broadCount);
         $this->assertEquals(2, $strictCount);
         $this->assertEquals(1, $strict3Count);
