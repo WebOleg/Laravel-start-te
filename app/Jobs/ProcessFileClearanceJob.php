@@ -85,7 +85,7 @@ class ProcessFileClearanceJob implements ShouldQueue, ShouldBeUnique
         }
 
         // 2. Open incremental CSV writer
-        [$csvHandle, $csvPath] = $service->openCsvWriter($outputHeaders, $this->originalFileName);
+        [$csvHandle, $csvPath, $csvFileName] = $service->openCsvWriter($outputHeaders, $this->originalFileName);
 
         $excludedDetails = [];
         $vopResolved     = 0;
@@ -136,7 +136,7 @@ class ProcessFileClearanceJob implements ShouldQueue, ShouldBeUnique
                 }
             }
         } finally {
-            $service->closeCsvWriter($csvHandle);
+            $csvPath = $service->closeCsvWriter($csvHandle, $csvPath, $csvFileName);
         }
 
         // 4. Cleanup: temp file + S3 source
@@ -186,8 +186,10 @@ class ProcessFileClearanceJob implements ShouldQueue, ShouldBeUnique
     private function updateProgress(array $data): void
     {
         $cacheKey = "file_clearance:{$this->token}";
-        $existing = Cache::get($cacheKey, []);
-        Cache::put($cacheKey, array_merge($existing, $data), 7200);
+        Cache::lock($cacheKey . ':lock', 5)->block(3, function () use ($cacheKey, $data) {
+            $existing = Cache::get($cacheKey, []);
+            Cache::put($cacheKey, array_merge($existing, $data), 7200);
+        });
     }
 
     private function cleanupTempFile(?string $path): void
