@@ -24,6 +24,7 @@ use App\Http\Controllers\Admin\BavBatchController as AdminBavBatchController;
 use App\Http\Controllers\Admin\TetherInstanceController;
 use App\Http\Middleware\EmpWebhookSecurity;
 use App\Http\Controllers\Webhook\EmpWebhookController;
+use App\Http\Controllers\Admin\FileClearanceController as AdminFileClearanceController;
 
 Route::post('/login', [AuthController::class, 'login'])->name('login');
 
@@ -148,6 +149,10 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::apiResource('webhook-relays', WebhookRelayController::class)->except(['show']);
 
         Route::apiResource('billing/descriptors', DescriptorController::class);
+        
+        Route::post('file-clearance', [AdminFileClearanceController::class, 'store']);
+        Route::get('file-clearance/{token}/status', [AdminFileClearanceController::class, 'status']);
+        Route::get('file-clearance/{token}/download', [AdminFileClearanceController::class, 'download']);
     });
 });
 
