@@ -14,7 +14,7 @@ use Illuminate\Support\Facades\Log;
 class DebtorValidationService
 {
     public const NAME_MAX_LENGTH = 35;
-    public const INVALID_NAME_PATTERN = '/[0-9*#@$%^&+=\[\]{}|\\\\<>áàâäçèéêëîïíóòôöúùûüÿñÁÀÂÄÇÈÉÊËÎÏÍÓÒÔÖÚÙÛÜŸÑ]/';
+    public const INVALID_NAME_PATTERN = "/[0-9*#@\$%^&+=\[\]{}|\\\\<>'áàâäçèéêëîïíóòôöúùûüÿñÁÀÂÄÇÈÉÊËÎÏÍÓÒÔÖÚÙÛÜŸÑ]/";
 
     public function __construct(
         private IbanValidator $ibanValidator,
@@ -116,13 +116,13 @@ class DebtorValidationService
 
         if (!empty($debtor->first_name)) {
             if (preg_match(self::INVALID_NAME_PATTERN, $debtor->first_name)) {
-                $errors[] = 'First name contains numbers or symbols';
+                $errors[] = 'First name contains invalid characters';
             }
         }
 
         if (!empty($debtor->last_name)) {
             if (preg_match(self::INVALID_NAME_PATTERN, $debtor->last_name)) {
-                $errors[] = 'Last name contains numbers or symbols';
+                $errors[] = 'Last name contains invalid characters';
             }
         }
 

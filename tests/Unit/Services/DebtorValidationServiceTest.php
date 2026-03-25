@@ -460,7 +460,7 @@ class DebtorValidationServiceTest extends TestCase
 
         $errors = $this->service->validateDebtor($debtor);
 
-        $this->assertContains('First name contains numbers or symbols', $errors);
+        $this->assertContains('First name contains invalid characters', $errors);
     }
 
     public function test_last_name_with_symbols_is_invalid(): void
@@ -476,7 +476,7 @@ class DebtorValidationServiceTest extends TestCase
 
         $errors = $this->service->validateDebtor($debtor);
 
-        $this->assertContains('Last name contains numbers or symbols', $errors);
+        $this->assertContains('Last name contains invalid characters', $errors);
     }
 
     public function test_name_with_special_accented_chars_is_invalid(): void
@@ -493,7 +493,7 @@ class DebtorValidationServiceTest extends TestCase
         $errors = $this->service->validateDebtor($debtor);
 
         // The INVALID_NAME_PATTERN includes accented characters like é
-        $this->assertContains('First name contains numbers or symbols', $errors);
+        $this->assertContains('First name contains invalid characters', $errors);
     }
 
     public function test_name_with_hyphen_and_space_is_valid(): void
@@ -512,8 +512,8 @@ class DebtorValidationServiceTest extends TestCase
 
         $errors = $this->service->validateDebtor($debtor);
 
-        $this->assertNotContains('First name contains numbers or symbols', $errors);
-        $this->assertNotContains('Last name contains numbers or symbols', $errors);
+        $this->assertNotContains('First name contains invalid characters', $errors);
+        $this->assertNotContains('Last name contains invalid characters', $errors);
     }
 
     public function test_validates_valid_email(): void
