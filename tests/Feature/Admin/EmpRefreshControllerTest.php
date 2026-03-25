@@ -24,8 +24,7 @@ class EmpRefreshControllerTest extends TestCase
         Cache::flush();
         Queue::fake();
         $this->user = User::factory()->create();
-        
-        // Create a default EMP account for tests
+
         $this->empAccount = EmpAccount::create([
             'name' => 'Test Account',
             'slug' => 'test-account',
@@ -99,7 +98,6 @@ class EmpRefreshControllerTest extends TestCase
     {
         Sanctum::actingAs($this->user);
 
-        // Create another account
         $account2 = EmpAccount::create([
             'name' => 'Test Account 2',
             'slug' => 'test-account-2',
@@ -141,8 +139,7 @@ class EmpRefreshControllerTest extends TestCase
     public function test_refresh_fails_when_no_accounts_configured(): void
     {
         Sanctum::actingAs($this->user);
-        
-        // Delete all accounts
+
         EmpAccount::query()->delete();
 
         $response = $this->postJson('/api/admin/emp/refresh', [
@@ -254,7 +251,6 @@ class EmpRefreshControllerTest extends TestCase
         $response1->assertStatus(202);
         $jobId = $response1->json('data.job_id');
 
-        // Try to start second job while first is in progress
         $response2 = $this->postJson('/api/admin/emp/refresh', [
             'from' => '2024-02-01',
             'to' => '2024-02-28',
@@ -303,7 +299,6 @@ class EmpRefreshControllerTest extends TestCase
         $response->assertStatus(202);
         $jobId = $response->json('data.job_id');
 
-        // Check active job cache
         $activeJob = Cache::get('emp_refresh_active');
         $this->assertNotNull($activeJob);
         $this->assertEquals($jobId, $activeJob['job_id']);
@@ -312,7 +307,6 @@ class EmpRefreshControllerTest extends TestCase
         $this->assertEquals('2024-01-31', $activeJob['to']);
         $this->assertEquals([$this->empAccount->id], $activeJob['account_ids']);
 
-        // Check job-specific cache
         $jobCache = Cache::get("emp_refresh_{$jobId}");
         $this->assertNotNull($jobCache);
         $this->assertEquals('pending', $jobCache['status']);
@@ -567,5 +561,58 @@ class EmpRefreshControllerTest extends TestCase
             ->assertJsonPath('data.stats.updated', 0)
             ->assertJsonPath('data.stats.unchanged', 0)
             ->assertJsonPath('data.stats.errors', 0);
+    }
+
+    public function test_job_status_includes_per_account_stats_and_duration(): void
+    {
+        Sanctum::actingAs($this->user);
+
+        $jobId = 'test-job-per-account';
+        Cache::put("emp_refresh_{$jobId}", [
+            'status' => 'completed',
+            'progress' => 100,
+            'stats' => [
+                'inserted' => 114,
+                'updated' => 0,
+                'unchanged' => 41189,
+                'errors' => 8,
+                'total' => 41311,
+            ],
+            'per_account' => [
+                'Optivest' => [
+                    'inserted' => 45,
+                    'updated' => 0,
+                    'unchanged' => 20000,
+                    'errors' => 0,
+                    'total' => 20045,
+                    'pages' => 201,
+                    'duration_seconds' => 87,
+                ],
+                'Danieli Soft' => [
+                    'inserted' => 69,
+                    'updated' => 0,
+                    'unchanged' => 21189,
+                    'errors' => 8,
+                    'total' => 21266,
+                    'pages' => 213,
+                    'duration_seconds' => 95,
+                ],
+            ],
+            'duration_seconds' => 154,
+            'accounts_total' => 2,
+            'accounts_processed' => 2,
+            'completed_at' => now()->toIso8601String(),
+        ], 3600);
+
+        $response = $this->getJson("/api/admin/emp/refresh/{$jobId}");
+
+        $response->assertStatus(200)
+            ->assertJsonPath('data.status', 'completed')
+            ->assertJsonPath('data.stats.inserted', 114)
+            ->assertJsonPath('data.per_account.Optivest.inserted', 45)
+            ->assertJsonPath('data.per_account.Danieli Soft.inserted', 69)
+            ->assertJsonPath('data.per_account.Optivest.pages', 201)
+            ->assertJsonPath('data.per_account.Danieli Soft.errors', 8)
+            ->assertJsonPath('data.duration_seconds', 154);
     }
 }

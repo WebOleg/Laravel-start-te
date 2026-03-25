@@ -109,13 +109,10 @@ class EmpRefreshController extends Controller
             Cache::forget('emp_refresh_active');
         }
 
-        // Determine which accounts to refresh
         $accountIds = [];
         if (isset($validated['emp_account_id'])) {
-            // Single account refresh
             $accountIds = [$validated['emp_account_id']];
         } else {
-            // All accounts refresh
             $accountIds = EmpAccount::pluck('id')->toArray();
 
             if (empty($accountIds)) {
@@ -146,6 +143,8 @@ class EmpRefreshController extends Controller
                 'unchanged' => 0,
                 'errors' => 0,
             ],
+            'per_account' => [],
+            'duration_seconds' => 0,
             'accounts_total' => count($accountIds),
             'accounts_processed' => 0,
             'current_account' => null,
@@ -178,7 +177,7 @@ class EmpRefreshController extends Controller
      * @OA\Get(
      *     path="/api/admin/emp/refresh/{jobId}",
      *     summary="Get EMP refresh job status",
-     *     description="Returns the current status and progress of a specific EMP refresh job by its UUID. Includes sync stats (inserted, updated, unchanged, errors) and per-account progress.",
+     *     description="Returns the current status and progress of a specific EMP refresh job by its UUID. Includes sync stats (inserted, updated, unchanged, errors), per-account breakdown and duration.",
      *     tags={"EMP"},
      *     security={{"bearerAuth":{}}},
      *     @OA\Parameter(name="jobId", in="path", required=true, description="Refresh job UUID", @OA\Schema(type="string", format="uuid")),
@@ -196,6 +195,8 @@ class EmpRefreshController extends Controller
      *                     @OA\Property(property="unchanged", type="integer", example=800),
      *                     @OA\Property(property="errors", type="integer", example=2)
      *                 ),
+     *                 @OA\Property(property="per_account", type="object", nullable=true),
+     *                 @OA\Property(property="duration_seconds", type="integer", nullable=true, example=154),
      *                 @OA\Property(property="accounts_total", type="integer", example=2),
      *                 @OA\Property(property="accounts_processed", type="integer", example=1),
      *                 @OA\Property(property="current_account", type="string", nullable=true, example="Primary Account"),
@@ -226,6 +227,8 @@ class EmpRefreshController extends Controller
                             'unchanged' => 0,
                             'errors' => 0,
                         ],
+                        'per_account' => [],
+                        'duration_seconds' => 0,
                         'accounts_total' => $active['accounts_total'] ?? 0,
                         'accounts_processed' => 0,
                         'started_at' => $active['started_at'] ?? null,
@@ -241,6 +244,8 @@ class EmpRefreshController extends Controller
                     'status' => 'completed',
                     'progress' => 100,
                     'stats' => null,
+                    'per_account' => null,
+                    'duration_seconds' => null,
                     'started_at' => null,
                     'completed_at' => null,
                 ],
@@ -258,6 +263,8 @@ class EmpRefreshController extends Controller
                     'unchanged' => 0,
                     'errors' => 0,
                 ],
+                'per_account' => $status['per_account'] ?? [],
+                'duration_seconds' => $status['duration_seconds'] ?? 0,
                 'accounts_total' => $status['accounts_total'] ?? 0,
                 'accounts_processed' => $status['accounts_processed'] ?? 0,
                 'current_account' => $status['current_account'] ?? null,
@@ -290,6 +297,8 @@ class EmpRefreshController extends Controller
      *                     @OA\Property(property="unchanged", type="integer", example=800),
      *                     @OA\Property(property="errors", type="integer", example=2)
      *                 ),
+     *                 @OA\Property(property="per_account", type="object", nullable=true),
+     *                 @OA\Property(property="duration_seconds", type="integer", nullable=true, example=154),
      *                 @OA\Property(property="accounts_total", type="integer", example=2),
      *                 @OA\Property(property="accounts_processed", type="integer", example=1),
      *                 @OA\Property(property="current_account", type="string", nullable=true, example="Primary Account")
@@ -329,6 +338,8 @@ class EmpRefreshController extends Controller
                             'unchanged' => 0,
                             'errors' => 0,
                         ],
+                        'per_account' => [],
+                        'duration_seconds' => 0,
                         'accounts_total' => $active['accounts_total'] ?? 0,
                         'accounts_processed' => 0,
                     ],
@@ -354,6 +365,8 @@ class EmpRefreshController extends Controller
                     'job_id' => $active['job_id'],
                     'progress' => 100,
                     'stats' => $jobStatus['stats'] ?? null,
+                    'per_account' => $jobStatus['per_account'] ?? [],
+                    'duration_seconds' => $jobStatus['duration_seconds'] ?? 0,
                 ],
             ]);
         }
@@ -364,6 +377,8 @@ class EmpRefreshController extends Controller
                 'job_id' => $active['job_id'],
                 'progress' => $jobStatus['progress'] ?? 0,
                 'stats' => $jobStatus['stats'] ?? null,
+                'per_account' => $jobStatus['per_account'] ?? [],
+                'duration_seconds' => $jobStatus['duration_seconds'] ?? 0,
                 'accounts_total' => $jobStatus['accounts_total'] ?? 0,
                 'accounts_processed' => $jobStatus['accounts_processed'] ?? 0,
                 'current_account' => $jobStatus['current_account'] ?? null,
