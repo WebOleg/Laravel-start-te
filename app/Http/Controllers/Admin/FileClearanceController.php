@@ -6,7 +6,7 @@
  * Endpoints:
  *   POST  /api/admin/file-clearance                Upload → validate headers → store on S3 → dispatch job
  *   GET   /api/admin/file-clearance/{token}/status  Poll processing progress
- *   GET   /api/admin/file-clearance/{token}/download Download cleaned CSV
+ *   GET   /api/admin/file-clearance/{token}/download Download cleaned CSV (streamed from S3)
  *
  * The controller does NO heavy parsing. It reuses FilePreValidationService
  * (same as UploadController::store) to read only headers + a sample,
@@ -25,7 +25,6 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use OpenApi\Annotations as OA;
-use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 class FileClearanceController extends Controller
 {
@@ -173,7 +172,7 @@ class FileClearanceController extends Controller
     }
 
     /**
-     * Download the cleared CSV.
+     * Download the cleared CSV (streamed from S3).
      *
      * @OA\Get(
      *     path="/api/admin/file-clearance/{token}/download",
@@ -185,7 +184,7 @@ class FileClearanceController extends Controller
      *     @OA\Response(response=404, description="Not ready or expired")
      * )
      */
-    public function download(string $token): BinaryFileResponse|JsonResponse
+    public function download(string $token): \Symfony\Component\HttpFoundation\StreamedResponse|JsonResponse
     {
         $data = Cache::get("file_clearance:{$token}");
 
@@ -195,18 +194,28 @@ class FileClearanceController extends Controller
             ], 404);
         }
 
-        $filePath = $data['file_path'] ?? null;
+        $s3Path = $data['s3_path_result'] ?? null;
 
-        if (!$filePath || !file_exists($filePath)) {
+        if (!$s3Path) {
             return response()->json([
                 'message' => 'Cleaned file not found. Please run clearance again.',
             ], 404);
         }
 
-        return response()->download(
-            $filePath,
-            $data['file_name'] ?? 'cleared.csv',
-            ['Content-Type' => 'text/csv; charset=UTF-8']
-        );
+        try {
+            return $this->clearanceService->streamDownloadFromS3(
+                $s3Path,
+                $data['file_name'] ?? 'cleared.csv',
+            );
+        } catch (\RuntimeException $e) {
+            Log::error('FileClearance: download failed', [
+                'token'   => $token,
+                's3_path' => $s3Path,
+                'error'   => $e->getMessage(),
+            ]);
+            return response()->json([
+                'message' => 'Cleaned file not found. Please run clearance again.',
+            ], 404);
+        }
     }
 }
