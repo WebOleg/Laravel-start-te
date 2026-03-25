@@ -39,6 +39,7 @@ class ProcessFileClearanceJob implements ShouldQueue, ShouldBeUnique
 
     private const PROGRESS_INTERVAL    = 50;
     private const MAX_EXCLUDED_STORED  = 500;
+    private array $progressState = [];
 
     public function __construct(
         private string $token,
@@ -68,6 +69,8 @@ class ProcessFileClearanceJob implements ShouldQueue, ShouldBeUnique
             's3_path'    => $this->s3Path,
             'file'       => $this->originalFileName,
         ]);
+
+        $this->progressState = Cache::get("file_clearance:{$this->token}", []);
 
         $this->updateProgress([
             'status'     => 'processing',
@@ -177,6 +180,10 @@ class ProcessFileClearanceJob implements ShouldQueue, ShouldBeUnique
             'error' => $exception->getMessage(),
         ]);
 
+        if (empty($this->progressState)) {
+            $this->progressState = Cache::get("file_clearance:{$this->token}", []);
+        }
+
         $this->updateProgress([
             'status' => 'failed',
             'error'  => $exception->getMessage(),
@@ -185,11 +192,8 @@ class ProcessFileClearanceJob implements ShouldQueue, ShouldBeUnique
 
     private function updateProgress(array $data): void
     {
-        $cacheKey = "file_clearance:{$this->token}";
-        Cache::lock($cacheKey . ':lock', 5)->block(3, function () use ($cacheKey, $data) {
-            $existing = Cache::get($cacheKey, []);
-            Cache::put($cacheKey, array_merge($existing, $data), 7200);
-        });
+        $this->progressState = array_merge($this->progressState, $data);
+        Cache::put("file_clearance:{$this->token}", $this->progressState, 7200);
     }
 
     private function cleanupTempFile(?string $path): void

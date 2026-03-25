@@ -25,6 +25,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use OpenApi\Annotations as OA;
+use Illuminate\Support\Facades\Storage;
 
 class FileClearanceController extends Controller
 {
