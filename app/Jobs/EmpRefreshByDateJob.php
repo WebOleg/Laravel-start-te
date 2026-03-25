@@ -40,10 +40,11 @@ class EmpRefreshByDateJob implements ShouldQueue
 
     public function handle(): void
     {
-        // Initialize the context
         $this->initLogContext();
 
         $cacheKey = "emp_refresh_{$this->jobId}";
+        $startedAt = now();
+
         $totalStats = [
             'inserted' => 0,
             'updated' => 0,
@@ -51,6 +52,8 @@ class EmpRefreshByDateJob implements ShouldQueue
             'errors' => 0,
             'total' => 0,
         ];
+
+        $perAccountStats = [];
 
         try {
             $this->updateCache($cacheKey, 'processing', 0, $totalStats, [
@@ -85,13 +88,23 @@ class EmpRefreshByDateJob implements ShouldQueue
                     'account_name' => $account->name,
                 ]);
 
-                // Create service with specific account
                 $client = new EmpClient($account);
                 $service = new EmpRefreshService($client);
 
                 $page = 1;
                 $hasMore = true;
                 $totalPages = 0;
+                $accountStartedAt = now();
+
+                $perAccountStats[$account->name] = [
+                    'inserted' => 0,
+                    'updated' => 0,
+                    'unchanged' => 0,
+                    'errors' => 0,
+                    'total' => 0,
+                    'pages' => 0,
+                    'duration_seconds' => 0,
+                ];
 
                 while ($hasMore && $page <= self::MAX_PAGES) {
                     $result = $service->fetchPage($this->startDate, $this->endDate, $page);
@@ -102,6 +115,7 @@ class EmpRefreshByDateJob implements ShouldQueue
                             'page' => $page,
                         ]);
                         $totalStats['errors']++;
+                        $perAccountStats[$account->name]['errors']++;
                         break;
                     }
 
@@ -124,7 +138,13 @@ class EmpRefreshByDateJob implements ShouldQueue
                     $totalStats['errors'] += $pageStats['errors'];
                     $totalStats['total'] += count($transactions);
 
-                    // Calculate progress across all accounts
+                    $perAccountStats[$account->name]['inserted'] += $pageStats['inserted'];
+                    $perAccountStats[$account->name]['updated'] += $pageStats['updated'];
+                    $perAccountStats[$account->name]['unchanged'] += $pageStats['unchanged'] ?? 0;
+                    $perAccountStats[$account->name]['errors'] += $pageStats['errors'];
+                    $perAccountStats[$account->name]['total'] += count($transactions);
+                    $perAccountStats[$account->name]['pages'] = $page;
+
                     $accountProgress = $totalPages > 0
                         ? min(99, (int) round(($page / $totalPages) * 100))
                         : min(95, $page);
@@ -134,12 +154,14 @@ class EmpRefreshByDateJob implements ShouldQueue
                         ($accountProgress / count($this->accountIds))
                     );
 
+                    // per_account is NOT written on every page — only progress and current state.
+                    // per_account is written only after account completion and at job completion.
                     $this->updateCache($cacheKey, 'processing', $overallProgress, $totalStats, [
                         'accounts_total' => count($this->accountIds),
                         'accounts_processed' => $accountsProcessed,
                         'current_account' => $account->name,
                         'current_page' => $page,
-                        'total_pages' => $totalPages,
+                      'total_pages' => $totalPages,
                     ]);
 
                     Log::info('EmpRefreshByDateJob: page processed', [
@@ -156,6 +178,7 @@ class EmpRefreshByDateJob implements ShouldQueue
                     usleep(200000);
                 }
 
+                $perAccountStats[$account->name]['duration_seconds'] = $accountStartedAt->diffInSeconds(now());
                 $accountsProcessed++;
 
                 Log::info('EmpRefreshByDateJob: account completed', [
@@ -163,6 +186,16 @@ class EmpRefreshByDateJob implements ShouldQueue
                     'account_id' => $accountId,
                     'account_name' => $account->name,
                     'pages_processed' => $page - 1,
+                    'account_stats' => $perAccountStats[$account->name],
+                ]);
+
+                // Write per_account after each account completes — not on every page.
+                $this->updateCache($cacheKey, 'processing', $overallProgress ?? 0, $totalStats, [
+                    'accounts_total' => count($this->accountIds),
+                    'accounts_processed' => $accountsProcessed,
+                    'current_account' => null,
+                    'per_account' => $perAccountStats,
+                    'duration_seconds' => $startedAt->diffInSeconds(now()),
                 ]);
             }
 
@@ -170,14 +203,18 @@ class EmpRefreshByDateJob implements ShouldQueue
                 'accounts_total' => count($this->accountIds),
                 'accounts_processed' => $accountsProcessed,
                 'current_account' => null,
+                'per_account' => $perAccountStats,
+                'duration_seconds' => $startedAt->diffInSeconds(now()),
             ], true);
 
-            Cache::forget('emp_refresh_active');
+          Cache::forget('emp_refresh_active');
 
             Log::info('EmpRefreshByDateJob: completed', [
                 'job_id' => $this->jobId,
                 'accounts_processed' => $accountsProcessed,
                 'stats' => $totalStats,
+                'per_account' => $perAccountStats,
+                'duration_seconds' => $startedAt->diffInSeconds(now()),
             ]);
 
         } catch (\Exception $e) {
@@ -187,6 +224,8 @@ class EmpRefreshByDateJob implements ShouldQueue
                 'error' => $e->getMessage(),
                 'progress' => 0,
                 'stats' => $totalStats,
+                'per_account' => $perAccountStats,
+                'duration_seconds' => $startedAt->diffInSeconds(now()),
             ], self::CACHE_TTL);
 
             Cache::forget('emp_refresh_active');
