@@ -27,6 +27,7 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 
 class ProcessFileClearanceJob implements ShouldQueue, ShouldBeUnique
 {
@@ -140,6 +141,13 @@ class ProcessFileClearanceJob implements ShouldQueue, ShouldBeUnique
             }
         } finally {
             $csvPath = $service->closeCsvWriter($csvHandle, $csvPath, $csvFileName);
+        }
+
+        // Wait for S3 consistency before marking completed
+        $maxWait = 30;
+        for ($i = 0; $i < $maxWait; $i++) {
+            if (Storage::disk('s3')->exists($csvPath)) break;
+            sleep(1);
         }
 
         // 4. Cleanup: temp file + S3 source
