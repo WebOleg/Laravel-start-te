@@ -94,7 +94,7 @@ class UploadEdgeCasesTest extends TestCase
             ->postJson('/api/admin/uploads', ['file' => $file]);
 
         $response->assertStatus(422)
-            ->assertJsonPath('errors.0', 'Missing required column: amount (amount, sum, total, or price).');
+            ->assertJsonPath('errors.0', 'Missing required header: amount.');
     }
 
     public function test_valid_file_processes_successfully(): void
