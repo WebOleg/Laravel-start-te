@@ -28,6 +28,7 @@ jobs:
           script: |
             set -euo pipefail
             cd /opt/tether-laravel
+            sudo chown -R deploy:deploy /opt/tether-laravel/storage
             sudo -u deploy git stash || true
             sudo -u deploy git clean -fd || true
             sudo -u deploy git fetch origin main
@@ -58,6 +59,7 @@ jobs:
           script: |
             set -euo pipefail
             cd /opt/tether-laravel
+            sudo chown -R deploy:deploy /opt/tether-laravel/storage
             sudo -u deploy git stash || true
             sudo -u deploy git clean -fd || true
             sudo -u deploy git fetch origin main
@@ -87,6 +89,7 @@ jobs:
           script: |
             set -euo pipefail
             cd /opt/tether-laravel
+            sudo chown -R deploy:deploy /opt/tether-laravel/storage
             sudo -u deploy git stash || true
             sudo -u deploy git clean -fd || true
             sudo -u deploy git fetch origin main
