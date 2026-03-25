@@ -154,7 +154,7 @@ class ProcessFileClearanceJob implements ShouldQueue, ShouldBeUnique
             'vop_failed'       => $vopFailed,
             'headers'          => $outputHeaders,
             'excluded_details' => $excludedDetails,
-            'file_path'        => $csvPath,
+            's3_path_result'   => $csvPath,
             'file_name'        => basename($csvPath),
             'completed_at'     => now()->toISOString(),
         ]);
