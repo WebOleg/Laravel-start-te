@@ -365,12 +365,13 @@ class FileClearanceService
 
         // Always resolve BIC via VOP - VOP is the source of truth
         $resolvedBic = $ibanApiService->getBic($iban);
+
         if (!empty($resolvedBic)) {
             $bic         = $resolvedBic;
             $vopResolved = true;
         } else {
             $vopFailed = true;
-            // Fall back to file BIC if VOP fails
+            // Fall back to file BIC if VOP fails (used for output + blacklist check)
             $bic = $bicHeader !== null ? trim($row[$bicHeader] ?? '') : '';
         }
 
@@ -380,6 +381,8 @@ class FileClearanceService
         if ($blacklistService->isBlacklisted($iban)) {
             $reasons[] = 'IBAN is blacklisted';
         }
+
+        // Check BIC blacklist: prefer VOP-resolved, fall back to file BIC
         if (!empty($bic) && $blacklistService->isBicBlacklisted($bic)) {
             $reasons[] = 'BIC is blacklisted';
         }
@@ -429,29 +432,24 @@ class FileClearanceService
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    // INCREMENTAL CSV WRITER
+    // INCREMENTAL CSV WRITER — writes to temp file, uploads to S3 on close
     // ═══════════════════════════════════════════════════════════════════
 
     /**
-     * Open a CSV for incremental writing.
-     * @return array{resource, string}  [$handle, $fullPath]
+     * Open a CSV for incremental writing (temp file).
+     * @return array{resource, string, string}  [$handle, $tempPath, $fileName]
      */
     public function openCsvWriter(array $headers, string $originalName): array
     {
-        $dir = storage_path('app/clearance');
-        if (!is_dir($dir)) {
-            mkdir($dir, 0755, true);
-        }
-
         $baseName = pathinfo($originalName, PATHINFO_FILENAME);
         $fileName = $baseName . '_cleared_' . now()->format('Ymd_His') . '.csv';
-        $fullPath = $dir . '/' . $fileName;
+        $tempPath = sys_get_temp_dir() . '/clearance_out_' . uniqid() . '.csv';
 
-        $handle = fopen($fullPath, 'w');
+        $handle = fopen($tempPath, 'w');
         fwrite($handle, "\xEF\xBB\xBF"); // BOM for Excel
         fputcsv($handle, $headers);
 
-        return [$handle, $fullPath];
+        return [$handle, $tempPath, $fileName];
     }
 
     public function writeCsvRow($handle, array $headers, array $row, bool $bicInjected): void
@@ -467,9 +465,53 @@ class FileClearanceService
         fputcsv($handle, $line);
     }
 
-    public function closeCsvWriter($handle): void
+    /**
+     * Close the CSV handle and upload the result to S3.
+     *
+     * @return string  S3 path of the uploaded cleared file.
+     */
+    public function closeCsvWriter($handle, string $tempPath, string $fileName): string
     {
         fclose($handle);
+
+        $s3Path = 'clearance/results/' . Str::uuid() . '/' . $fileName;
+
+        $uploaded = Storage::disk('s3')->put($s3Path, file_get_contents($tempPath), [
+            'ContentType' => 'text/csv; charset=UTF-8',
+            'Metadata'    => [
+                'original-filename' => $fileName,
+            ],
+        ]);
+
+        // Clean up temp file
+        @unlink($tempPath);
+
+        if (!$uploaded) {
+            throw new \RuntimeException("Failed to upload cleared CSV to S3: {$s3Path}");
+        }
+
+        Log::info('FileClearance: cleared CSV uploaded to S3', [
+            's3_path'   => $s3Path,
+            'file_name' => $fileName,
+        ]);
+
+        return $s3Path;
+    }
+
+    /**
+     * Stream the cleared CSV from S3 for download.
+     *
+     * @return \Symfony\Component\HttpFoundation\StreamedResponse
+     */
+    public function streamDownloadFromS3(string $s3Path, string $fileName): \Symfony\Component\HttpFoundation\StreamedResponse
+    {
+        if (!Storage::disk('s3')->exists($s3Path)) {
+            throw new \RuntimeException("Cleared file not found in S3: {$s3Path}");
+        }
+
+        return Storage::disk('s3')->download($s3Path, $fileName, [
+            'Content-Type' => 'text/csv; charset=UTF-8',
+        ]);
     }
 
     // ═══════════════════════════════════════════════════════════════════

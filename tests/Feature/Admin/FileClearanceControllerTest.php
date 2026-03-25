@@ -27,6 +27,8 @@ class FileClearanceControllerTest extends TestCase
     {
         parent::setUp();
 
+        Storage::fake('s3');
+
         $this->user = User::factory()->create();
         $this->token = $this->user->createToken('test')->plainTextToken;
     }
@@ -272,17 +274,17 @@ class FileClearanceControllerTest extends TestCase
         $token = 'test-token-completed';
 
         Cache::put("file_clearance:{$token}", [
-            'status'        => 'completed',
-            'total_rows'    => 50,
-            'processed'     => 50,
-            'cleared_rows'  => 45,
-            'excluded_rows' => 5,
-            'vop_resolved'  => 48,
-            'vop_failed'    => 2,
-            'original_file' => 'test.csv',
-            'completed_at'  => now()->toISOString(),
-            'file_path'     => '/tmp/cleared.csv',
-            'file_name'     => 'cleared_test.csv',
+            'status'         => 'completed',
+            'total_rows'     => 50,
+            'processed'      => 50,
+            'cleared_rows'   => 45,
+            'excluded_rows'  => 5,
+            'vop_resolved'   => 48,
+            'vop_failed'     => 2,
+            'original_file'  => 'test.csv',
+            'completed_at'   => now()->toISOString(),
+            's3_path_result' => 'clearance/results/abc/cleared_test.csv',
+            'file_name'      => 'cleared_test.csv',
         ], 7200);
 
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
@@ -435,7 +437,7 @@ class FileClearanceControllerTest extends TestCase
             ->assertJsonPath('message', 'File not ready or token expired.');
     }
 
-    public function test_download_returns_404_when_file_path_missing(): void
+    public function test_download_returns_404_when_s3_path_missing(): void
     {
         $token = 'test-token-no-path';
 
@@ -452,15 +454,21 @@ class FileClearanceControllerTest extends TestCase
             ->assertJsonPath('message', 'Cleaned file not found. Please run clearance again.');
     }
 
-    public function test_download_returns_404_when_file_does_not_exist_on_disk(): void
+    public function test_download_returns_404_when_file_does_not_exist_on_s3(): void
     {
         $token = 'test-token-missing-file';
 
         Cache::put("file_clearance:{$token}", [
-            'status'    => 'completed',
-            'file_path' => '/tmp/nonexistent_cleared_file.csv',
-            'file_name' => 'cleared.csv',
+            'status'         => 'completed',
+            's3_path_result' => 'clearance/results/abc/nonexistent.csv',
+            'file_name'      => 'cleared.csv',
         ], 7200);
+
+        $this->mock(FileClearanceService::class, function ($mock) {
+            $mock->shouldReceive('streamDownloadFromS3')
+                ->once()
+                ->andThrow(new \RuntimeException('Cleared file not found in S3'));
+        });
 
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
             ->getJson("/api/admin/file-clearance/{$token}/download");
@@ -476,13 +484,15 @@ class FileClearanceControllerTest extends TestCase
     public function test_download_returns_csv_file_when_completed(): void
     {
         $token = 'test-token-download';
-        $tempFile = tempnam(sys_get_temp_dir(), 'clearance_test_');
-        file_put_contents($tempFile, "iban,bic,status\nDE89370400440532013000,COBADEFFXXX,cleared\n");
+        $s3Path = 'clearance/results/abc/cleared_output.csv';
+        $csvContent = "iban,bic,status\nDE89370400440532013000,COBADEFFXXX,cleared\n";
+
+        Storage::disk('s3')->put($s3Path, $csvContent);
 
         Cache::put("file_clearance:{$token}", [
-            'status'    => 'completed',
-            'file_path' => $tempFile,
-            'file_name' => 'cleared_output.csv',
+            'status'         => 'completed',
+            's3_path_result' => $s3Path,
+            'file_name'      => 'cleared_output.csv',
         ], 7200);
 
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
@@ -491,20 +501,19 @@ class FileClearanceControllerTest extends TestCase
         $response->assertStatus(200)
             ->assertHeader('content-type', 'text/csv; charset=UTF-8')
             ->assertDownload('cleared_output.csv');
-
-        // Cleanup
-        @unlink($tempFile);
     }
 
     public function test_download_uses_default_filename_when_not_set(): void
     {
         $token = 'test-token-default-name';
-        $tempFile = tempnam(sys_get_temp_dir(), 'clearance_test_');
-        file_put_contents($tempFile, "iban\nDE89370400440532013000\n");
+        $s3Path = 'clearance/results/def/cleared.csv';
+        $csvContent = "iban\nDE89370400440532013000\n";
+
+        Storage::disk('s3')->put($s3Path, $csvContent);
 
         Cache::put("file_clearance:{$token}", [
-            'status'    => 'completed',
-            'file_path' => $tempFile,
+            'status'         => 'completed',
+            's3_path_result' => $s3Path,
             // file_name intentionally omitted
         ], 7200);
 
@@ -513,9 +522,6 @@ class FileClearanceControllerTest extends TestCase
 
         $response->assertStatus(200)
             ->assertDownload('cleared.csv');
-
-        // Cleanup
-        @unlink($tempFile);
     }
 
     // ──────────────────────────────────────────────

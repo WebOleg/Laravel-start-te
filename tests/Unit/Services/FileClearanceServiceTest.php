@@ -778,6 +778,81 @@ class FileClearanceServiceTest extends TestCase
     }
 
     // ══════════════════════════════════════════════════════════════
+    // processRow() — BIC blacklist with VOP vs file fallback
+    // ══════════════════════════════════════════════════════════════
+
+    public function test_process_row_checks_vop_bic_against_blacklist(): void
+    {
+        $ibanApi = $this->createMock(IbanApiService::class);
+        $ibanApi->method('getBic')->willReturn('VOPBLACKLISTED');
+
+        $ibanValidator = $this->createMock(IbanValidator::class);
+        $ibanValidator->method('normalize')->willReturnArgument(0);
+        $ibanValidator->method('validate')->willReturn([
+            'valid' => true,
+            'is_sepa' => true,
+            'country_code' => 'DE',
+            'errors' => [],
+        ]);
+
+        $blacklist = $this->createMock(BlacklistService::class);
+        $blacklist->method('isBlacklisted')->willReturn(false);
+        $blacklist->method('isBicBlacklisted')->with('VOPBLACKLISTED')->willReturn(true);
+        $blacklist->method('isNameBlacklisted')->willReturn(false);
+
+        $row = ['iban' => 'DE89370400440532013000', 'bic' => 'FILEBICOK'];
+        $headerMeta = [
+            'iban_header' => 'iban',
+            'bic_header' => 'bic',
+            'first_name_header' => null,
+            'last_name_header' => null,
+            'name_header' => null,
+            'email_header' => null,
+        ];
+
+        $result = $this->service->processRow($row, 1, $headerMeta, $ibanApi, $ibanValidator, $blacklist);
+
+        $this->assertNull($result['row']);
+        $this->assertContains('BIC is blacklisted', $result['excluded']['reasons']);
+    }
+
+    public function test_process_row_checks_file_bic_against_blacklist_when_vop_fails(): void
+    {
+        $ibanApi = $this->createMock(IbanApiService::class);
+        $ibanApi->method('getBic')->willReturn(null);
+
+        $ibanValidator = $this->createMock(IbanValidator::class);
+        $ibanValidator->method('normalize')->willReturnArgument(0);
+        $ibanValidator->method('validate')->willReturn([
+            'valid' => true,
+            'is_sepa' => true,
+            'country_code' => 'DE',
+            'errors' => [],
+        ]);
+
+        $blacklist = $this->createMock(BlacklistService::class);
+        $blacklist->method('isBlacklisted')->willReturn(false);
+        $blacklist->method('isBicBlacklisted')->with('FILEBLACKLISTED')->willReturn(true);
+        $blacklist->method('isNameBlacklisted')->willReturn(false);
+
+        $row = ['iban' => 'DE89370400440532013000', 'bic' => 'FILEBLACKLISTED'];
+        $headerMeta = [
+            'iban_header' => 'iban',
+            'bic_header' => 'bic',
+            'first_name_header' => null,
+            'last_name_header' => null,
+            'name_header' => null,
+            'email_header' => null,
+        ];
+
+        $result = $this->service->processRow($row, 1, $headerMeta, $ibanApi, $ibanValidator, $blacklist);
+
+        $this->assertNull($result['row']);
+        $this->assertTrue($result['vop_failed']);
+        $this->assertContains('BIC is blacklisted', $result['excluded']['reasons']);
+    }
+
+    // ══════════════════════════════════════════════════════════════
     // processRow() — Name from full_name field
     // ══════════════════════════════════════════════════════════════
 
@@ -861,45 +936,48 @@ class FileClearanceServiceTest extends TestCase
     }
 
     // ══════════════════════════════════════════════════════════════
-    // CSV Writer
+    // CSV Writer — writes to temp, uploads to S3 on close
     // ══════════════════════════════════════════════════════════════
 
-    public function test_open_csv_writer_creates_file_with_bom_and_headers(): void
+    public function test_open_csv_writer_creates_temp_file_with_bom_and_headers(): void
     {
-        [$handle, $fullPath] = $this->service->openCsvWriter(['iban', 'bic', 'name'], 'original.csv');
+        [$handle, $tempPath, $fileName] = $this->service->openCsvWriter(['iban', 'bic', 'name'], 'original.csv');
 
         $this->assertIsResource($handle);
-        $this->assertFileExists($fullPath);
-        $this->assertStringContainsString('original_cleared_', basename($fullPath));
-        $this->assertStringEndsWith('.csv', $fullPath);
+        $this->assertFileExists($tempPath);
+        $this->assertStringContainsString('original_cleared_', $fileName);
+        $this->assertStringEndsWith('.csv', $fileName);
 
-        $this->service->closeCsvWriter($handle);
+        // Close without uploading to S3 — just fclose for this unit test
+        fclose($handle);
 
-        $content = file_get_contents($fullPath);
+        $content = file_get_contents($tempPath);
         $this->assertStringStartsWith("\xEF\xBB\xBF", $content); // BOM
         $this->assertStringContainsString('iban,bic,name', $content);
 
-        @unlink($fullPath);
+        @unlink($tempPath);
     }
 
     public function test_write_csv_row_writes_correct_data(): void
     {
         $headers = ['iban', 'name'];
-        [$handle, $fullPath] = $this->service->openCsvWriter($headers, 'test.csv');
+        [$handle, $tempPath, $fileName] = $this->service->openCsvWriter($headers, 'test.csv');
 
         $this->service->writeCsvRow($handle, $headers, ['iban' => 'DE89370400440532013000', 'name' => 'John'], false);
-        $this->service->closeCsvWriter($handle);
 
-        $content = file_get_contents($fullPath);
+        // Close without S3 upload for content inspection
+        fclose($handle);
+
+        $content = file_get_contents($tempPath);
         $this->assertStringContainsString('DE89370400440532013000,John', $content);
 
-        @unlink($fullPath);
+        @unlink($tempPath);
     }
 
     public function test_write_csv_row_uses_resolved_bic_when_injected(): void
     {
         $headers = ['iban', 'bic', 'name'];
-        [$handle, $fullPath] = $this->service->openCsvWriter($headers, 'test.csv');
+        [$handle, $tempPath, $fileName] = $this->service->openCsvWriter($headers, 'test.csv');
 
         $row = [
             'iban' => 'DE89370400440532013000',
@@ -908,28 +986,61 @@ class FileClearanceServiceTest extends TestCase
         ];
 
         $this->service->writeCsvRow($handle, $headers, $row, true);
-        $this->service->closeCsvWriter($handle);
 
-        $content = file_get_contents($fullPath);
+        fclose($handle);
+
+        $content = file_get_contents($tempPath);
         $this->assertStringContainsString('COBADEFFXXX', $content);
 
-        @unlink($fullPath);
+        @unlink($tempPath);
     }
 
     public function test_csv_writer_handles_multiple_rows(): void
     {
         $headers = ['iban', 'name'];
-        [$handle, $fullPath] = $this->service->openCsvWriter($headers, 'multi.csv');
+        [$handle, $tempPath, $fileName] = $this->service->openCsvWriter($headers, 'multi.csv');
 
         $this->service->writeCsvRow($handle, $headers, ['iban' => 'DE89370400440532013000', 'name' => 'John'], false);
         $this->service->writeCsvRow($handle, $headers, ['iban' => 'FR7630006000011234567890189', 'name' => 'Jane'], false);
         $this->service->writeCsvRow($handle, $headers, ['iban' => 'ES9121000418450200051332', 'name' => 'Bob'], false);
-        $this->service->closeCsvWriter($handle);
 
-        $lines = file($fullPath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        fclose($handle);
+
+        $lines = file($tempPath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
         // 1 header + 3 data rows (first line has BOM so count from content)
         $this->assertCount(4, $lines);
 
-        @unlink($fullPath);
+        @unlink($tempPath);
+    }
+
+    public function test_close_csv_writer_uploads_to_s3(): void
+    {
+        $headers = ['iban', 'name'];
+        [$handle, $tempPath, $fileName] = $this->service->openCsvWriter($headers, 'test.csv');
+
+        $this->service->writeCsvRow($handle, $headers, ['iban' => 'DE89370400440532013000', 'name' => 'John'], false);
+
+        $s3Path = $this->service->closeCsvWriter($handle, $tempPath, $fileName);
+
+        $this->assertStringStartsWith('clearance/results/', $s3Path);
+        $this->assertStringEndsWith($fileName, $s3Path);
+        Storage::disk('s3')->assertExists($s3Path);
+
+        // Temp file should be cleaned up
+        $this->assertFileDoesNotExist($tempPath);
+    }
+
+    public function test_close_csv_writer_s3_content_matches(): void
+    {
+        $headers = ['iban', 'name'];
+        [$handle, $tempPath, $fileName] = $this->service->openCsvWriter($headers, 'verify.csv');
+
+        $this->service->writeCsvRow($handle, $headers, ['iban' => 'DE89370400440532013000', 'name' => 'John'], false);
+
+        $s3Path = $this->service->closeCsvWriter($handle, $tempPath, $fileName);
+
+        $s3Content = Storage::disk('s3')->get($s3Path);
+        $this->assertStringContainsString('iban,name', $s3Content);
+        $this->assertStringContainsString('DE89370400440532013000,John', $s3Content);
     }
 }
