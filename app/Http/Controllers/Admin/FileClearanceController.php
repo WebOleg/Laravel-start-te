@@ -194,7 +194,7 @@ class FileClearanceController extends Controller
             ], 404);
         }
 
-        $s3Path = $data['file_path'] ?? null;
+        $s3Path = $data['s3_path_result'] ?? null;
 
         if (!$s3Path) {
             return response()->json([
