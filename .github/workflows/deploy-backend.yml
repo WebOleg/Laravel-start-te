@@ -28,12 +28,14 @@ jobs:
           script: |
             set -euo pipefail
             cd /opt/tether-laravel
+            sudo chown -R deploy:deploy /opt/tether-laravel/storage
             sudo -u deploy git stash || true
             sudo -u deploy git clean -fd || true
             sudo -u deploy git fetch origin main
             sudo -u deploy git reset --hard origin/main
             docker rm -f tether_app tether_nginx || true
             docker compose -f infrastructure/docker/api-node/docker-compose.yml up -d --build --remove-orphans
+            docker exec tether_app sh -c 'chown -R www-data:www-data /var/www/storage && chmod -R 775 /var/www/storage'
             docker exec tether_app composer install --no-dev --optimize-autoloader
             docker exec tether_app php artisan migrate --force
             docker exec tether_app php artisan l5-swagger:generate
@@ -58,12 +60,14 @@ jobs:
           script: |
             set -euo pipefail
             cd /opt/tether-laravel
+            sudo chown -R deploy:deploy /opt/tether-laravel/storage
             sudo -u deploy git stash || true
             sudo -u deploy git clean -fd || true
             sudo -u deploy git fetch origin main
             sudo -u deploy git reset --hard origin/main
             docker rm -f tether_app tether_nginx || true
             docker compose -f infrastructure/docker/api-node/docker-compose.yml up -d --build --remove-orphans
+            docker exec tether_app sh -c 'chown -R www-data:www-data /var/www/storage && chmod -R 775 /var/www/storage'
             docker exec tether_app composer install --no-dev --optimize-autoloader
             docker exec tether_app php artisan l5-swagger:generate
             docker exec tether_app php artisan optimize:clear
@@ -87,12 +91,14 @@ jobs:
           script: |
             set -euo pipefail
             cd /opt/tether-laravel
+            sudo chown -R deploy:deploy /opt/tether-laravel/storage
             sudo -u deploy git stash || true
             sudo -u deploy git clean -fd || true
             sudo -u deploy git fetch origin main
             sudo -u deploy git reset --hard origin/main
             docker rm -f tether_app tether_nginx tether_horizon || true
             docker compose -f infrastructure/docker/worker/docker-compose.yml up -d --build --remove-orphans
+            docker exec tether_app sh -c 'chown -R www-data:www-data /var/www/storage && chmod -R 775 /var/www/storage'
             docker exec tether_app composer install --no-dev --optimize-autoloader
             docker exec tether_app php artisan optimize:clear
             docker exec tether_app php artisan config:cache
