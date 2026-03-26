@@ -78,7 +78,7 @@ class UploadHeaderValidationTest extends TestCase
 
         $response->assertStatus(422)
             ->assertJsonPath('message', 'File validation failed.')
-            ->assertJsonPath('errors.0', 'Missing required header: name.');
+            ->assertJsonPath('errors.0', "Missing required header: first_name, last_name. Provide a 'name' column, or both 'first_name' and 'last_name'.");
     }
 
     public function test_upload_with_misspelled_header_returns_422_with_suggestion(): void
@@ -97,22 +97,22 @@ class UploadHeaderValidationTest extends TestCase
             ->assertJsonStructure(['errors', 'warnings', 'suggestions']);
 
         $json = $response->json();
-        $this->assertContains('Missing required header: name.', $json['errors']);
+        $this->assertContains("Missing required header: first_name, last_name. Provide a 'name' column, or both 'first_name' and 'last_name'.", $json['errors']);
         $this->assertEquals('last_name', $json['suggestions']['lst_name']);
     }
 
     public function test_upload_with_misspelled_header_but_valid_coverage_returns_201_with_warnings(): void
     {
-        // "lst_name" is misspelled but "first_name" covers the name requirement
+        // "lst_name" is misspelled but "name" covers the name requirement
         $file = UploadedFile::fake()->createWithContent(
             'partial_typo.csv',
-            "iban,first_name,lst_name,amount\nDE89370400440532013000,John,Doe,100.00\n"
+            "iban,name,lst_name,amount\nDE89370400440532013000,John Doe,Doe,100.00\n"
         );
 
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
             ->postJson('/api/admin/uploads', ['file' => $file]);
 
-        // File is processable — first_name covers the name group
+        // File is processable — 'name' covers the name requirement
         $response->assertStatus(201);
     }
 

@@ -54,16 +54,15 @@ class FilePreValidationServiceTest extends TestCase
     {
         $result = $this->service->validateHeaders(['iban', 'amount', 'email']);
 
-        $this->assertContains('Missing required header: name.', $result['errors']);
+        $this->assertContains("Missing required header: first_name, last_name. Provide a 'name' column, or both 'first_name' and 'last_name'.", $result['errors']);
     }
 
     public function test_misspelled_header_as_only_name_header_returns_error_and_suggestion(): void
     {
-        // "lst_name" has no other name header to fall back on
+        // "lst_name" is misspelled — first_name alone doesn't satisfy (needs both first_name + last_name)
         $result = $this->service->validateHeaders(['first_name', 'lst_name', 'iban', 'amount']);
 
-        // first_name covers the name group — so no error, but should warn
-        $this->assertEmpty($result['errors']);
+        $this->assertContains("Missing required header: last_name. Provide a 'name' column, or both 'first_name' and 'last_name'.", $result['errors']);
         $this->assertNotEmpty($result['warnings']);
         $this->assertArrayHasKey('lst_name', $result['suggestions']);
         $this->assertEquals('last_name', $result['suggestions']['lst_name']);
@@ -74,7 +73,7 @@ class FilePreValidationServiceTest extends TestCase
         // Only misspelled name headers — no valid name column
         $result = $this->service->validateHeaders(['frst_name', 'lst_name', 'iban', 'amount']);
 
-        $this->assertContains('Missing required header: name.', $result['errors']);
+        $this->assertContains("Missing required header: first_name, last_name. Provide a 'name' column, or both 'first_name' and 'last_name'.", $result['errors']);
         $this->assertNotEmpty($result['suggestions']);
     }
 
@@ -103,12 +102,12 @@ class FilePreValidationServiceTest extends TestCase
         $this->assertCount(3, $result['errors']);
         $this->assertContains('Missing required header: IBAN.', $result['errors']);
         $this->assertContains('Missing required header: amount.', $result['errors']);
-        $this->assertContains('Missing required header: name.', $result['errors']);
+        $this->assertContains("Missing required header: first_name, last_name. Provide a 'name' column, or both 'first_name' and 'last_name'.", $result['errors']);
     }
 
     public function test_empty_header_is_ignored(): void
     {
-        $result = $this->service->validateHeaders(['first_name', '', 'iban', 'amount']);
+        $result = $this->service->validateHeaders(['first_name', 'last_name', '', 'iban', 'amount']);
 
         $this->assertEmpty($result['errors']);
     }
@@ -131,12 +130,12 @@ class FilePreValidationServiceTest extends TestCase
 
     public function test_csv_with_misspelled_header_returns_warnings_and_suggestions(): void
     {
-        $path = $this->createTempCsv("first_name,lst_name,iban,amount\nJohn,Doe,DE89370400440532013000,100.00");
+        $path = $this->createTempCsv("name,lst_name,iban,amount\nJohn Doe,Doe,DE89370400440532013000,100.00");
         $file = $this->createUploadedFile($path, 'typo.csv');
 
         $result = $this->service->validate($file);
 
-        // first_name covers the name requirement, so file is valid but with warnings
+        // 'name' covers the name requirement, so file is valid but with warnings for lst_name
         $this->assertTrue($result['valid']);
         $this->assertNotEmpty($result['warnings']);
         $this->assertEquals('last_name', $result['suggestions']['lst_name']);
@@ -215,14 +214,14 @@ class FilePreValidationServiceTest extends TestCase
     public function test_excel_file_with_misspelled_header_returns_suggestion(): void
     {
         $path = $this->createTempExcel([
-            ['First Name', 'Lst Name', 'IBAN', 'Amount'],
-            ['John', 'Doe', 'DE89370400440532013000', 100.00],
+            ['Name', 'Lst Name', 'IBAN', 'Amount'],
+            ['John Doe', 'Doe', 'DE89370400440532013000', 100.00],
         ]);
         $file = $this->createUploadedFile($path, 'typo.xlsx');
 
         $result = $this->service->validate($file);
 
-        // first_name still covers name requirement
+        // 'name' covers the name requirement; lst_name triggers warning
         $this->assertTrue($result['valid']);
         $this->assertNotEmpty($result['warnings']);
         $this->assertArrayHasKey('lst_name', $result['suggestions']);
@@ -295,79 +294,86 @@ class FilePreValidationServiceTest extends TestCase
 
     public static function namePartialProvider(): array
     {
-        // Any single field in the name group passes because the check is array_intersect
+        // A single first/last name field does NOT satisfy the requirement — need both or a full-name field
         return [
-            'first_name only (no last_name)'     => [['first_name']],
-            'last_name only (no first_name)'      => [['last_name']],
-            'firstname only (no last_name)'       => [['firstname']],
-            'lastname only (no first_name)'       => [['lastname']],
-            'surname only (no first_name)'        => [['surname']],
+            'first_name only (no last_name)'     => [['first_name'], "Missing required header: last_name. Provide a 'name' column, or both 'first_name' and 'last_name'."],
+            'last_name only (no first_name)'      => [['last_name'], "Missing required header: first_name. Provide a 'name' column, or both 'first_name' and 'last_name'."],
+            'firstname only (no last_name)'       => [['firstname'], "Missing required header: last_name. Provide a 'name' column, or both 'first_name' and 'last_name'."],
+            'lastname only (no first_name)'       => [['lastname'], "Missing required header: first_name. Provide a 'name' column, or both 'first_name' and 'last_name'."],
+            'surname only (no first_name)'        => [['surname'], "Missing required header: first_name. Provide a 'name' column, or both 'first_name' and 'last_name'."],
         ];
     }
 
     #[DataProvider('namePartialProvider')]
-    public function test_name_partial_headers_still_pass(array $nameHeaders): void
+    public function test_name_partial_headers_still_pass(array $nameHeaders, string $expectedError): void
     {
         $headers = array_merge($nameHeaders, ['iban', 'amount']);
         $result = $this->service->validateHeaders($headers);
 
-        $this->assertEmpty($result['errors'], 'Expected no error — a single name-group field satisfies the requirement: ' . implode(', ', $nameHeaders));
+        $this->assertContains($expectedError, $result['errors'], 'Expected name error for partial headers: ' . implode(', ', $nameHeaders));
     }
 
     public function test_name_missing_entirely_returns_error(): void
     {
         $result = $this->service->validateHeaders(['iban', 'amount', 'email']);
 
-        $this->assertContains('Missing required header: name.', $result['errors']);
+        $this->assertContains("Missing required header: first_name, last_name. Provide a 'name' column, or both 'first_name' and 'last_name'.", $result['errors']);
     }
 
     public static function nameMisspelledFailProvider(): array
     {
-        // Each row: [headers, expectedMissingError, expectedSuggestions]
-        // These have NO valid name column → error + suggestion
+        // Each row: [headers, expectedMissingError, expectedSuggestions, expectedErrorMessage]
+        // The service requires BOTH first_name AND last_name, or a full-name field.
+        // When one side is valid and the other misspelled, an error is still produced for the missing side.
+        $bothMissing = "Missing required header: first_name, last_name. Provide a 'name' column, or both 'first_name' and 'last_name'.";
+        $missingFirst = "Missing required header: first_name. Provide a 'name' column, or both 'first_name' and 'last_name'.";
+        $missingLast = "Missing required header: last_name. Provide a 'name' column, or both 'first_name' and 'last_name'.";
+
         return [
-            'frst_name + last_name'        => [['frst_name', 'last_name'], false, ['frst_name' => 'first_name']],
-            'frist_name + last_name'       => [['frist_name', 'last_name'], false, ['frist_name' => 'first_name']],
-            'first_nme + last_name'        => [['first_nme', 'last_name'], false, ['first_nme' => 'first_name']],
-            'first_name + lst_name'        => [['first_name', 'lst_name'], false, ['lst_name' => 'last_name']],
-            'first_name + lst_nme'         => [['first_name', 'lst_nme'], false, ['lst_nme' => 'last_name']],
-            'first_name + lastt_name'      => [['first_name', 'lastt_name'], false, ['lastt_name' => 'last_name']],
-            'first_name + surnme'          => [['first_name', 'surnme'], false, ['surnme' => 'surname']],
-            'first_name + surnam'          => [['first_name', 'surnam'], false, ['surnam' => 'surname']],
-            'frst_name + lst_nme (both)'   => [['frst_name', 'lst_nme'], true, ['frst_name' => 'first_name', 'lst_nme' => 'last_name']],
-            'frist_name + lst_name (both)' => [['frist_name', 'lst_name'], true, ['frist_name' => 'first_name', 'lst_name' => 'last_name']],
-            'ful_name'                     => [['ful_name'], true, ['ful_name' => 'full_name']],
-            'fulll_name'                   => [['fulll_name'], true, ['fulll_name' => 'full_name']],
-            'full_nme'                     => [['full_nme'], true, ['full_nme' => 'full_name']],
-            'fullnme'                      => [['fullnme'], true, ['fullnme' => 'fullname']],
-            'fulname'                      => [['fulname'], true, ['fulname' => 'fullname']],
-            'custmer_name'                 => [['custmer_name'], true, ['custmer_name' => 'customer_name']],
-            'customer_nme'                 => [['customer_nme'], true, ['customer_nme' => 'customer_name']],
-            'costumer_name'                => [['costumer_name'], true, ['costumer_name' => 'customer_name']],
-            'debtr_name'                   => [['debtr_name'], true, ['debtr_name' => 'debtor_name']],
-            'debtor_nme'                   => [['debtor_nme'], true, ['debtor_nme' => 'debtor_name']],
-            'debtorr_name'                 => [['debtorr_name'], true, ['debtorr_name' => 'debtor_name']],
-            'cleint_name'                  => [['cleint_name'], true, ['cleint_name' => 'client_name']],
-            'clint_name'                   => [['clint_name'], true, ['clint_name' => 'client_name']],
-            'client_nme'                   => [['client_nme'], true, ['client_nme' => 'client_name']],
-            'acount_holder'                => [['acount_holder'], true, ['acount_holder' => 'account_holder']],
-            'account_holdr'                => [['account_holdr'], true, ['account_holdr' => 'account_holder']],
-            'acccount_holder'              => [['acccount_holder'], true, ['acccount_holder' => 'account_holder']],
+            'frst_name + last_name'        => [['frst_name', 'last_name'], true, ['frst_name' => 'first_name'], $missingFirst],
+            'frist_name + last_name'       => [['frist_name', 'last_name'], true, ['frist_name' => 'first_name'], $missingFirst],
+            'first_nme + last_name'        => [['first_nme', 'last_name'], true, ['first_nme' => 'first_name'], $missingFirst],
+            'first_name + lst_name'        => [['first_name', 'lst_name'], true, ['lst_name' => 'last_name'], $missingLast],
+            'first_name + lst_nme'         => [['first_name', 'lst_nme'], true, ['lst_nme' => 'last_name'], $missingLast],
+            'first_name + lastt_name'      => [['first_name', 'lastt_name'], true, ['lastt_name' => 'last_name'], $missingLast],
+            'first_name + surnme'          => [['first_name', 'surnme'], true, ['surnme' => 'surname'], $missingLast],
+            'first_name + surnam'          => [['first_name', 'surnam'], true, ['surnam' => 'surname'], $missingLast],
+            'frst_name + lst_nme (both)'   => [['frst_name', 'lst_nme'], true, ['frst_name' => 'first_name', 'lst_nme' => 'last_name'], $bothMissing],
+            'frist_name + lst_name (both)' => [['frist_name', 'lst_name'], true, ['frist_name' => 'first_name', 'lst_name' => 'last_name'], $bothMissing],
+            'ful_name'                     => [['ful_name'], true, ['ful_name' => 'full_name'], $bothMissing],
+            'fulll_name'                   => [['fulll_name'], true, ['fulll_name' => 'full_name'], $bothMissing],
+            'full_nme'                     => [['full_nme'], true, ['full_nme' => 'full_name'], $bothMissing],
+            'fullnme'                      => [['fullnme'], true, ['fullnme' => 'fullname'], $bothMissing],
+            'fulname'                      => [['fulname'], true, ['fulname' => 'fullname'], $bothMissing],
+            'custmer_name'                 => [['custmer_name'], true, ['custmer_name' => 'customer_name'], $bothMissing],
+            'customer_nme'                 => [['customer_nme'], true, ['customer_nme' => 'customer_name'], $bothMissing],
+            'costumer_name'                => [['costumer_name'], true, ['costumer_name' => 'customer_name'], $bothMissing],
+            'debtr_name'                   => [['debtr_name'], true, ['debtr_name' => 'debtor_name'], $bothMissing],
+            'debtor_nme'                   => [['debtor_nme'], true, ['debtor_nme' => 'debtor_name'], $bothMissing],
+            'debtorr_name'                 => [['debtorr_name'], true, ['debtorr_name' => 'debtor_name'], $bothMissing],
+            'cleint_name'                  => [['cleint_name'], true, ['cleint_name' => 'client_name'], $bothMissing],
+            'clint_name'                   => [['clint_name'], true, ['clint_name' => 'client_name'], $bothMissing],
+            'client_nme'                   => [['client_nme'], true, ['client_nme' => 'client_name'], $bothMissing],
+            'acount_holder'                => [['acount_holder'], true, ['acount_holder' => 'account_holder'], $bothMissing],
+            'account_holdr'                => [['account_holdr'], true, ['account_holdr' => 'account_holder'], $bothMissing],
+            'acccount_holder'              => [['acccount_holder'], true, ['acccount_holder' => 'account_holder'], $bothMissing],
         ];
     }
 
     #[DataProvider('nameMisspelledFailProvider')]
-    public function test_name_misspelled_headers(array $nameHeaders, bool $expectMissingError, array $expectedSuggestions): void
+    public function test_name_misspelled_headers(array $nameHeaders, bool $expectMissingError, array $expectedSuggestions, string $expectedErrorMessage): void
     {
         $headers = array_merge($nameHeaders, ['iban', 'amount']);
         $result = $this->service->validateHeaders($headers);
 
         if ($expectMissingError) {
-            $this->assertContains('Missing required header: name.', $result['errors'],
+            $this->assertContains($expectedErrorMessage, $result['errors'],
                 'Expected missing-name error for headers: ' . implode(', ', $nameHeaders));
         } else {
-            $this->assertNotContains('Missing required header: name.', $result['errors'],
-                'Did not expect missing-name error — a valid name header is present alongside the typo');
+            $this->assertEmpty(
+                array_filter($result['errors'], fn ($e) => str_contains($e, "Provide a 'name' column")),
+                'Did not expect missing-name error — a valid name header is present alongside the typo'
+            );
         }
 
         foreach ($expectedSuggestions as $typo => $expected) {
