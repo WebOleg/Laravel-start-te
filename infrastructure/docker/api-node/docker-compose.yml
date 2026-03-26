@@ -11,6 +11,7 @@ services:
     volumes:
       - ../../../:/var/www
       - ../../../storage:/var/www/storage
+      - ../../../docker/php/uploads.ini:/usr/local/etc/php/conf.d/uploads.ini
     networks:
       - tether_network
     extra_hosts:

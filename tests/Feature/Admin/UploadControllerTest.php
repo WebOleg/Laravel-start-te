@@ -637,7 +637,7 @@ class UploadControllerTest extends TestCase
         $this->assertEquals($newAccount->id, $upload->emp_account_id);
     }
 
-    public function test_reassign_rejects_inactive_account(): void
+    public function test_reassign_allows_inactive_account(): void
     {
         $inactiveAccount = EmpAccount::factory()->create(['is_active' => false]);
         $upload = Upload::factory()->create();
@@ -647,8 +647,28 @@ class UploadControllerTest extends TestCase
                 'emp_account_id' => $inactiveAccount->id,
             ]);
 
-        $response->assertStatus(422)
-            ->assertJsonFragment(['message' => 'Target EMP account is not active.']);
+        $response->assertStatus(200);
+    }
+
+    public function test_reassign_rejects_when_billing_attempts_exist(): void
+    {
+        $oldAccount = EmpAccount::factory()->create();
+        $newAccount = EmpAccount::factory()->create();
+        $upload = Upload::factory()->create(['emp_account_id' => $oldAccount->id]);
+        $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
+
+        BillingAttempt::factory()->create([
+            'upload_id' => $upload->id,
+            'debtor_id' => $debtor->id,
+            'status' => BillingAttempt::STATUS_APPROVED,
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->postJson("/api/admin/uploads/{$upload->id}/reassign", [
+                'emp_account_id' => $newAccount->id,
+            ]);
+
+        $response->assertStatus(422);
     }
 
     public function test_reassign_rejects_same_account(): void
