@@ -277,10 +277,19 @@ class UploadController extends Controller
 
             $preValidation = $this->preValidationService->validate($file);
             if (!$preValidation['valid']) {
-                return response()->json([
+                $response = [
                     'message' => 'File validation failed.',
                     'errors' => $preValidation['errors'],
-                ], 422);
+                ];
+
+                if (!empty($preValidation['warnings'])) {
+                    $response['warnings'] = $preValidation['warnings'];
+                }
+                if (!empty($preValidation['suggestions'])) {
+                    $response['suggestions'] = $preValidation['suggestions'];
+                }
+
+                return response()->json($response, 422);
             }
 
             $forceAsync = $request->boolean('async');

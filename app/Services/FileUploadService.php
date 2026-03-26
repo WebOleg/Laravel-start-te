@@ -23,7 +23,7 @@ class FileUploadService
 {
     use ParsesDebtorData;
 
-    private const COLUMN_MAP = [
+    public const COLUMN_MAP = [
         'iban' => 'iban',
         'iban_number' => 'iban',
         'bank_account' => 'iban',
