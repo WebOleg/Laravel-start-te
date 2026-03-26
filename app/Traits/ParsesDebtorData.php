@@ -13,7 +13,17 @@ trait ParsesDebtorData
      */
     private function splitFullName(array &$data): void
     {
-        if (!empty($data['first_name']) || !empty($data['last_name'])) {
+        if (!empty($data['first_name']) && !empty($data['last_name'])) {
+            return;
+        }
+
+        // If only one of first_name/last_name is set (no full 'name' field), copy as fallback
+        if (empty($data['name'])) {
+            if (!empty($data['last_name']) && empty($data['first_name'])) {
+                $data['first_name'] = $data['last_name'];
+            } elseif (!empty($data['first_name']) && empty($data['last_name'])) {
+                $data['last_name'] = $data['first_name'];
+            }
             return;
         }
 

@@ -241,7 +241,7 @@ class DebtorImportService
                 if (count($errors) < 100) {
                     $errors[] = [
                         'row' => $rowNumber,
-                        'message' => $e->getMessage(),
+                        'message' => $this->sanitizeErrorMessage($e),
                         'data' => array_slice(array_values((array) $rows[$index]), 0, 3),
                     ];
                 }
@@ -426,6 +426,32 @@ class DebtorImportService
             'days_ago' => $extra['days_ago'] ?? null,
             'last_status' => $extra['last_status'] ?? null,
         ], static fn ($v) => $v !== null);
+    }
+
+    private function sanitizeErrorMessage(\Throwable $e): string
+    {
+        if ($e instanceof QueryException) {
+            // NOT NULL violation — extract the column name for a clean message
+            if (preg_match('/null value in column "(\w+)"/', $e->getMessage(), $matches)) {
+                $column = $matches[1];
+                $readable = str_replace('_', ' ', $column);
+                return "Missing required field: {$readable}. Ensure your CSV includes a '{$column}' column (or a 'name' column that can be split into first_name and last_name).";
+            }
+
+            // Unique constraint violation
+            if (preg_match('/duplicate key value violates unique constraint "(\w+)"/', $e->getMessage(), $matches)) {
+                return "Duplicate entry detected (constraint: {$matches[1]}).";
+            }
+
+            // Generic DB error — strip SQL and connection details
+            $msg = $e->getMessage();
+            if (($pos = strpos($msg, '(Connection:')) !== false) {
+                $msg = trim(substr($msg, 0, $pos));
+            }
+            return $msg;
+        }
+
+        return $e->getMessage();
     }
 
     public function finalizeUpload(Upload $upload, array $result): void

@@ -20,10 +20,6 @@ class FilePreValidationService
             'label' => 'amount',
             'fields' => ['amount'],
         ],
-        'name' => [
-            'label' => 'name',
-            'fields' => ['name', 'first_name', 'last_name'],
-        ],
     ];
 
     public function validate(UploadedFile $file): array
@@ -161,6 +157,22 @@ class FilePreValidationService
             if (empty(array_intersect($mappedFields, $group['fields']))) {
                 $errors[] = "Missing required header: {$group['label']}.";
             }
+        }
+
+        // Name requires either 'name' (full name) or BOTH 'first_name' and 'last_name'
+        $hasFullName = in_array('name', $mappedFields, true);
+        $hasFirstName = in_array('first_name', $mappedFields, true);
+        $hasLastName = in_array('last_name', $mappedFields, true);
+
+        if (!$hasFullName && !($hasFirstName && $hasLastName)) {
+            $missing = [];
+            if (!$hasFirstName) {
+                $missing[] = 'first_name';
+            }
+            if (!$hasLastName) {
+                $missing[] = 'last_name';
+            }
+            $errors[] = "Missing required header: " . implode(', ', $missing) . ". Provide a 'name' column, or both 'first_name' and 'last_name'.";
         }
 
         return [
