@@ -518,9 +518,6 @@ class UploadController extends Controller
             $upload->update($updateData);
         }
 
-        // Reset validation state for debtors that have not been billed.
-        // Approved and pending billing attempts are protected — those debtors are skipped.
-        // Chargebacked debtors are also skipped to preserve financial history.
         $upload->debtors()
             ->where('validation_status', '!=', 'chargebacked')
             ->whereDoesntHave('billingAttempts', function ($q) {
@@ -763,7 +760,7 @@ class UploadController extends Controller
      * @OA\Post(
      *     path="/api/admin/uploads/{upload}/reassign",
      *     summary="Reassign upload to a different EMP account",
-     *     description="Reassigns the upload, all its debtors, and unsent pending billing attempts to a new EMP account. Submitted attempts (with unique_id) are left unchanged. Runs in a transaction.",
+     *     description="Reassigns the upload and all its debtors to a new EMP account. Only allowed if the upload has no billing attempts. Submitted attempts (with unique_id) are left unchanged.",
      *     tags={"Uploads"},
      *     security={{"bearerAuth":{}}},
      *     @OA\Parameter(name="upload", in="path", required=true, @OA\Schema(type="integer")),
@@ -781,7 +778,7 @@ class UploadController extends Controller
      *             )
      *         )
      *     ),
-     *     @OA\Response(response=422, description="Target account inactive or already assigned"),
+     *     @OA\Response(response=422, description="Cannot reassign: upload has billing attempts or already assigned"),
      *     @OA\Response(response=401, description="Unauthenticated"),
      *     @OA\Response(response=404, description="Upload not found"),
      *     @OA\Response(response=500, description="Transaction failed")
@@ -796,9 +793,11 @@ class UploadController extends Controller
         $targetAccountId = $validated['emp_account_id'];
         $targetAccount = EmpAccount::findOrFail($targetAccountId);
 
-        if (!$targetAccount->is_active) {
+        // Block reassign if upload has any billing attempts.
+        $hasBillingAttempts = $upload->billingAttempts()->exists();
+        if ($hasBillingAttempts) {
             return response()->json([
-                'message' => 'Target EMP account is not active.',
+                'message' => 'Cannot reassign: this upload already has billing attempts. Account can only be changed before any payment is submitted to EMP.',
             ], 422);
         }
 
