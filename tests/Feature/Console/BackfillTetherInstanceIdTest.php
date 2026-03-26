@@ -26,7 +26,6 @@ class BackfillTetherInstanceIdTest extends TestCase
         TetherInstance::query()->delete();
     }
 
-    /** @test */
     public function test_backfill_sets_tether_instance_id_on_all_null_rows(): void
     {
         $instance = TetherInstance::factory()->create(['id' => 1]);
