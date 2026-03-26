@@ -301,9 +301,9 @@ file: (binary)
 |-------|-------------|
 | `Unsupported file type.` | Not CSV/XLSX/XLS/TXT |
 | `File is empty or has no headers.` | No rows |
-| `Missing required header: IBAN.` | No IBAN column found (or misspelled) |
-| `Missing required header: amount.` | No amount column found (or misspelled) |
-| `Missing required header: name.` | No name column found (or misspelled) |
+| `Missing required header: IBAN.` | No IBAN header found (or misspelled) |
+| `Missing required header: amount.` | No amount header found (or misspelled) |
+| `Missing required header: name.` | No name header found (or misspelled) |
 
 ### Get Upload Status
 ```
