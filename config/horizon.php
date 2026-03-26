@@ -1,4 +1,5 @@
 <?php
+
 /**
  * Horizon configuration for Tether fintech platform.
  *
@@ -12,6 +13,7 @@
  * - reconciliation: Reconciliation jobs
  * - emp-refresh: EMP inbound sync (long-running import)
  * - exports: CSV/report exports (long-running, low priority)
+ * - clearance: File clearance jobs (VOP BIC resolution + blacklist filtering, long-running)
  * - default: File processing, imports
  * - low: Reports, notifications, cleanup
  */
@@ -33,6 +35,7 @@ return [
         'redis:reconciliation' => 60,
         'redis:emp-refresh' => 120,
         'redis:exports' => 300,
+        'redis:clearance' => 300,
         'redis:default' => 120,
         'redis:low' => 300,
     ],
@@ -120,6 +123,18 @@ return [
             'timeout' => 900,
             'nice' => 10,
         ],
+        'supervisor-clearance' => [
+            'connection' => 'redis',
+            'queue' => ['clearance'],
+            'balance' => 'simple',
+            'maxProcesses' => 2,
+            'maxTime' => 0,
+            'maxJobs' => 50,
+            'memory' => 256,
+            'tries' => 2,
+            'timeout' => 3600,
+            'nice' => 5,
+        ],
         'supervisor-default' => [
             'connection' => 'redis',
             'queue' => ['default'],
@@ -170,6 +185,9 @@ return [
             'supervisor-exports' => [
                 'maxProcesses' => 2,
             ],
+            'supervisor-clearance' => [
+                'maxProcesses' => 3,
+            ],
             'supervisor-default' => [
                 'maxProcesses' => 5,
                 'balanceMaxShift' => 2,
@@ -197,6 +215,9 @@ return [
             'supervisor-exports' => [
                 'maxProcesses' => 1,
             ],
+            'supervisor-clearance' => [
+                'maxProcesses' => 1,
+            ],
             'supervisor-default' => [
                 'maxProcesses' => 2,
             ],
@@ -218,6 +239,9 @@ return [
                 'maxProcesses' => 1,
             ],
             'supervisor-exports' => [
+                'maxProcesses' => 1,
+            ],
+            'supervisor-clearance' => [
                 'maxProcesses' => 1,
             ],
             'supervisor-default' => [
