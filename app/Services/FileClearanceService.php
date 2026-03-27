@@ -509,7 +509,10 @@ class FileClearanceService
             throw new \RuntimeException("Cleared file not found in S3: {$s3Path}");
         }
 
-        return Storage::disk('s3')->download($s3Path, $fileName, [
+        /** @var \Illuminate\Filesystem\FilesystemAdapter $disk */
+        $disk = Storage::disk('s3');
+
+        return $disk->download($s3Path, $fileName, [
             'Content-Type' => 'text/csv; charset=UTF-8',
         ]);
     }
