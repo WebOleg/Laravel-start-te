@@ -39,7 +39,7 @@ class FilePreValidationService
 
     private function validateCsv(string $path): array
     {
-        $csv = Reader::createFromPath($path, 'r');
+        $csv = Reader::from($path, 'r');
         $csv->setDelimiter($this->detectDelimiter($path));
 
         $headers = $csv->fetchOne(0);
