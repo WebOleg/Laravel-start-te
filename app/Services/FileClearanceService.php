@@ -11,8 +11,13 @@
  * Phase 2 (background job):
  *   downloadFromS3()  — pulls the file to a temp path (same as ProcessUploadJob).
  *   streamRows()      — generator that yields one row at a time, constant memory.
- *   processRow()      — normalise IBAN → resolve BIC via VOP → blacklist checks.
+ *   processRow()      — normalise IBAN → resolve BIC via VOP → blacklist checks → name validation.
  *   openCsvWriter() / writeCsvRow() / closeCsvWriter() — incremental CSV output.
+ *
+ * Exclusion files (3 separate CSVs):
+ *   - excluded_ibans:  rows filtered by IBAN blacklist
+ *   - excluded_bics:   rows filtered by BIC blacklist
+ *   - invalid_names:   rows with invalid characters in first/last name
  *
  * Constraints:
  *   - VOP (IbanApiService) is limitless — no credit limits.
@@ -28,9 +33,24 @@ use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use League\Csv\Reader;
 use PhpOffice\PhpSpreadsheet\IOFactory;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class FileClearanceService
 {
+    // Exclusion category identifiers
+    public const CATEGORY_IBAN_BLACKLISTED = 'iban_blacklisted';
+    public const CATEGORY_BIC_BLACKLISTED  = 'bic_blacklisted';
+    public const CATEGORY_INVALID_NAME     = 'invalid_name';
+
+    // CSV file suffixes
+    public const SUFFIX_CLEARED       = 'cleared';
+    public const SUFFIX_EXCLUDED_IBANS = 'excluded_ibans';
+    public const SUFFIX_EXCLUDED_BICS  = 'excluded_bics';
+    public const SUFFIX_INVALID_NAMES  = 'invalid_names';
+
+    // Column appended to exclusion CSVs
+    public const EXCLUSION_REASON_HEADER = 'exclusion_reason';
+
     private const COLUMN_MAP = [
         'iban'              => 'iban',
         'iban_number'       => 'iban',
@@ -297,9 +317,26 @@ class FileClearanceService
     }
 
     /**
-     * Process a single row: normalize IBAN, resolve BIC via VOP, check blacklists.
+     * Process a single row: normalize IBAN, resolve BIC via VOP, check blacklists, validate names.
      *
-     * @return array{row: ?array, excluded: ?array, vop_resolved: bool, vop_failed: bool}
+     * Returns categorized exclusion reasons so the job can route rows
+     * to the correct exclusion file(s).
+     *
+     * Exclusion categories (a row can match multiple):
+     *   - 'iban_blacklisted'  → IBAN is on the blacklist
+     *   - 'bic_blacklisted'   → BIC is on the blacklist
+     *   - 'invalid_name'      → first or last name contains invalid characters / exceeds max length
+     *
+     * Other exclusion reasons (missing IBAN, invalid IBAN, non-SEPA, email blacklist)
+     * are kept in the general excluded_details but do NOT produce a separate file.
+     *
+     * @return array{
+     *     row: ?array,
+     *     excluded: ?array,
+     *     exclusion_categories: string[],
+     *     vop_resolved: bool,
+     *     vop_failed: bool,
+     * }
      */
     public function processRow(
         array $row,
@@ -321,10 +358,11 @@ class FileClearanceService
 
         if (empty($iban)) {
             return [
-                'row'      => null,
-                'excluded' => ['row_index' => $displayRowIndex, 'iban' => null, 'bic' => null, 'reasons' => ['Missing IBAN']],
-                'vop_resolved' => false,
-                'vop_failed'   => false,
+                'row'                  => null,
+                'excluded'             => ['row_index' => $displayRowIndex, 'iban' => null, 'bic' => null, 'reasons' => ['Missing IBAN']],
+                'exclusion_categories' => [],
+                'vop_resolved'         => false,
+                'vop_failed'           => false,
             ];
         }
 
@@ -336,30 +374,32 @@ class FileClearanceService
         $ibanValidation = $ibanValidator->validate($iban);
         if (!$ibanValidation['valid']) {
             return [
-                'row'      => null,
-                'excluded' => [
+                'row'                  => null,
+                'excluded'             => [
                     'row_index' => $displayRowIndex,
                     'iban'      => $this->maskIban($iban),
                     'bic'       => null,
                     'reasons'   => ['Invalid IBAN: ' . implode(', ', $ibanValidation['errors'])],
                 ],
-                'vop_resolved' => false,
-                'vop_failed'   => false,
+                'exclusion_categories' => [],
+                'vop_resolved'         => false,
+                'vop_failed'           => false,
             ];
         }
 
         // Check SEPA zone
         if (!$ibanValidation['is_sepa']) {
             return [
-                'row'      => null,
-                'excluded' => [
+                'row'                  => null,
+                'excluded'             => [
                     'row_index' => $displayRowIndex,
                     'iban'      => $this->maskIban($iban),
                     'bic'       => null,
                     'reasons'   => ['Country ' . $ibanValidation['country_code'] . ' is not in SEPA zone'],
                 ],
-                'vop_resolved' => false,
-                'vop_failed'   => false,
+                'exclusion_categories' => [],
+                'vop_resolved'         => false,
+                'vop_failed'           => false,
             ];
         }
 
@@ -375,19 +415,23 @@ class FileClearanceService
             $bic = $bicHeader !== null ? trim($row[$bicHeader] ?? '') : '';
         }
 
-        // Blacklist checks
-        $reasons = [];
+        // Collect all reasons + categorise for separate files
+        $reasons             = [];
+        $exclusionCategories = [];
 
+        // IBAN blacklist
         if ($blacklistService->isBlacklisted($iban)) {
-            $reasons[] = 'IBAN is blacklisted';
+            $reasons[]             = 'IBAN is blacklisted';
+            $exclusionCategories[] = self::CATEGORY_IBAN_BLACKLISTED;
         }
 
-        // Check BIC blacklist: prefer VOP-resolved, fall back to file BIC
+        // BIC blacklist
         if (!empty($bic) && $blacklistService->isBicBlacklisted($bic)) {
-            $reasons[] = 'BIC is blacklisted';
+            $reasons[]             = 'BIC is blacklisted';
+            $exclusionCategories[] = self::CATEGORY_BIC_BLACKLISTED;
         }
 
-        // Name blacklist
+        // Name validation (invalid characters + length — mirrors DebtorValidationService)
         $firstName = $firstNameHeader ? trim($row[$firstNameHeader] ?? '') : '';
         $lastName  = $lastNameHeader  ? trim($row[$lastNameHeader] ?? '')  : '';
         if (empty($firstName) && empty($lastName) && $nameHeader) {
@@ -395,6 +439,14 @@ class FileClearanceService
             $firstName = $parts[0] ?? '';
             $lastName  = $parts[1] ?? '';
         }
+
+        $nameErrors = DebtorValidationService::validateNameStrings($firstName, $lastName);
+        if (!empty($nameErrors)) {
+            $reasons               = array_merge($reasons, $nameErrors);
+            $exclusionCategories[] = self::CATEGORY_INVALID_NAME;
+        }
+
+        // Name blacklist (separate from invalid-name validation)
         if (!empty($firstName) && !empty($lastName) && $blacklistService->isNameBlacklisted($firstName, $lastName)) {
             $reasons[] = 'Name is blacklisted';
         }
@@ -407,10 +459,16 @@ class FileClearanceService
 
         if (!empty($reasons)) {
             return [
-                'row'      => null,
-                'excluded' => ['row_index' => $displayRowIndex, 'iban' => $this->maskIban($iban), 'bic' => $bic ?: null, 'reasons' => $reasons],
-                'vop_resolved' => $vopResolved,
-                'vop_failed'   => $vopFailed,
+                'row'                  => null,
+                'excluded'             => [
+                    'row_index' => $displayRowIndex,
+                    'iban'      => $this->maskIban($iban),
+                    'bic'       => $bic ?: null,
+                    'reasons'   => $reasons,
+                ],
+                'exclusion_categories' => array_unique($exclusionCategories),
+                'vop_resolved'         => $vopResolved,
+                'vop_failed'           => $vopFailed,
             ];
         }
 
@@ -424,10 +482,11 @@ class FileClearanceService
         $row[$ibanHeader] = $iban;
 
         return [
-            'row'          => $row,
-            'excluded'     => null,
-            'vop_resolved' => $vopResolved,
-            'vop_failed'   => $vopFailed,
+            'row'                  => $row,
+            'excluded'             => null,
+            'exclusion_categories' => [],
+            'vop_resolved'         => $vopResolved,
+            'vop_failed'           => $vopFailed,
         ];
     }
 
@@ -437,13 +496,15 @@ class FileClearanceService
 
     /**
      * Open a CSV for incremental writing (temp file).
+     *
+     * @param  string  $suffix  e.g. 'cleared', 'excluded_ibans', 'excluded_bics', 'invalid_names'
      * @return array{resource, string, string}  [$handle, $tempPath, $fileName]
      */
-    public function openCsvWriter(array $headers, string $originalName): array
+    public function openCsvWriter(array $headers, string $originalName, string $suffix = 'cleared'): array
     {
         $baseName = pathinfo($originalName, PATHINFO_FILENAME);
-        $fileName = $baseName . '_cleared_' . now()->format('Ymd_His') . '.csv';
-        $tempPath = sys_get_temp_dir() . '/clearance_out_' . uniqid() . '.csv';
+        $fileName = $baseName . '_' . $suffix . '_' . now()->format('Ymd_His') . '.csv';
+        $tempPath = sys_get_temp_dir() . '/clearance_out_' . $suffix . '_' . uniqid() . '.csv';
 
         $handle = fopen($tempPath, 'w');
         fwrite($handle, "\xEF\xBB\xBF"); // BOM for Excel
@@ -466,13 +527,46 @@ class FileClearanceService
     }
 
     /**
-     * Close the CSV handle and upload the result to S3.
-     *
-     * @return string  S3 path of the uploaded cleared file.
+     * Write an exclusion row: original row data + a "reason" column appended.
      */
-    public function closeCsvWriter($handle, string $tempPath, string $fileName): string
+    public function writeExclusionCsvRow($handle, array $headers, array $row, string $reason): void
+    {
+        $line = [];
+        foreach ($headers as $h) {
+            if ($h === self::EXCLUSION_REASON_HEADER) {
+                $line[] = $reason;
+            } else {
+                $line[] = $row[$h] ?? '';
+            }
+        }
+        fputcsv($handle, $line);
+    }
+
+    /**
+     * Close the CSV handle and upload the result to S3.
+     * If the file has no data rows (only header), skip upload and return null.
+     *
+     * @return string|null  S3 path of the uploaded file, or null if empty.
+     */
+    public function closeCsvWriter($handle, string $tempPath, string $fileName, bool $skipIfEmpty = false): ?string
     {
         fclose($handle);
+
+        // If requested, check whether the file has any data rows beyond the header
+        if ($skipIfEmpty) {
+            $lineCount = 0;
+            $fh = fopen($tempPath, 'r');
+            while (fgets($fh) !== false) {
+                $lineCount++;
+                if ($lineCount > 1) break; // header + at least 1 data row
+            }
+            fclose($fh);
+
+            if ($lineCount <= 1) {
+                @unlink($tempPath);
+                return null;
+            }
+        }
 
         $s3Path = 'clearance/results/' . Str::uuid() . '/' . $fileName;
 
@@ -490,7 +584,7 @@ class FileClearanceService
             throw new \RuntimeException("Failed to upload cleared CSV to S3: {$s3Path}");
         }
 
-        Log::info('FileClearance: cleared CSV uploaded to S3', [
+        Log::info('FileClearance: CSV uploaded to S3', [
             's3_path'   => $s3Path,
             'file_name' => $fileName,
         ]);
@@ -501,7 +595,9 @@ class FileClearanceService
     /**
      * Stream the cleared CSV from S3 for download.
      *
-     * @return \Symfony\Component\HttpFoundation\StreamedResponse
+     * @param string $s3Path
+     * @param string $fileName
+     * @return StreamedResponse
      */
     public function streamDownloadFromS3(string $s3Path, string $fileName): \Symfony\Component\HttpFoundation\StreamedResponse
     {

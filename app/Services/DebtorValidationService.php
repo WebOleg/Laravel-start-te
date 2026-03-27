@@ -85,6 +85,45 @@ class DebtorValidationService
         return $stats;
     }
 
+
+    /**
+     * Validate first and last name strings against invalid character pattern and max length.
+     *
+     * This is a standalone, static method so it can be called without instantiating
+     * the full service (which requires IbanValidator, BlacklistService, IbanApiService).
+     * FileClearanceService and any other consumer can call this directly.
+     *
+     * @return string[]  List of error messages (empty if both names are valid).
+     */
+    public static function validateNameStrings(string $firstName, string $lastName): array
+    {
+        $errors = [];
+
+        if (!empty($firstName)) {
+            if (strlen($firstName) > self::NAME_MAX_LENGTH) {
+                $errors[] = 'First name cannot exceed ' . self::NAME_MAX_LENGTH . ' characters';
+            }
+            if (preg_match(self::INVALID_NAME_PATTERN, $firstName)) {
+                $errors[] = 'First name contains invalid characters';
+            }
+        }
+
+        if (!empty($lastName)) {
+            if (strlen($lastName) > self::NAME_MAX_LENGTH) {
+                $errors[] = 'Last name cannot exceed ' . self::NAME_MAX_LENGTH . ' characters';
+            }
+            if (preg_match(self::INVALID_NAME_PATTERN, $lastName)) {
+                $errors[] = 'Last name contains invalid characters';
+            }
+        }
+
+        return $errors;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // PROTECTED VALIDATORS (existing interface, unchanged signatures)
+    // ═══════════════════════════════════════════════════════════════════
+
     protected function validateRequiredFields(Debtor $debtor): array
     {
         $errors = [];
@@ -104,30 +143,16 @@ class DebtorValidationService
         return $errors;
     }
 
+    /**
+     * Validate name on a Debtor model.
+     * Delegates to the static validateNameStrings() to avoid duplication.
+     */
     protected function validateName(Debtor $debtor): array
     {
-        $errors = [];
-
-        if (!empty($debtor->first_name) && strlen($debtor->first_name) > self::NAME_MAX_LENGTH) {
-            $errors[] = 'First name cannot exceed ' . self::NAME_MAX_LENGTH . ' characters';
-        }
-        if (!empty($debtor->last_name) && strlen($debtor->last_name) > self::NAME_MAX_LENGTH) {
-            $errors[] = 'Last name cannot exceed ' . self::NAME_MAX_LENGTH . ' characters';
-        }
-
-        if (!empty($debtor->first_name)) {
-            if (preg_match(self::INVALID_NAME_PATTERN, $debtor->first_name)) {
-                $errors[] = 'First name contains invalid characters';
-            }
-        }
-
-        if (!empty($debtor->last_name)) {
-            if (preg_match(self::INVALID_NAME_PATTERN, $debtor->last_name)) {
-                $errors[] = 'Last name contains invalid characters';
-            }
-        }
-
-        return $errors;
+        return static::validateNameStrings(
+            $debtor->first_name ?? '',
+            $debtor->last_name ?? '',
+        );
     }
 
     protected function validateIban(Debtor $debtor): array

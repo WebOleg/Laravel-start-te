@@ -149,10 +149,13 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::apiResource('webhook-relays', WebhookRelayController::class)->except(['show']);
 
         Route::apiResource('billing/descriptors', DescriptorController::class);
-        
+
         Route::post('file-clearance', [AdminFileClearanceController::class, 'store']);
         Route::get('file-clearance/{token}/status', [AdminFileClearanceController::class, 'status']);
         Route::get('file-clearance/{token}/download', [AdminFileClearanceController::class, 'download']);
+        Route::get('file-clearance/{token}/download-excluded-ibans', [AdminFileClearanceController::class, 'downloadExcludedIbans']);
+        Route::get('file-clearance/{token}/download-excluded-bics', [AdminFileClearanceController::class, 'downloadExcludedBics']);
+        Route::get('file-clearance/{token}/download-invalid-names', [AdminFileClearanceController::class, 'downloadInvalidNames']);
     });
 });
 
