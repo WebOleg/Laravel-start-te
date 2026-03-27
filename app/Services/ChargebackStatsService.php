@@ -421,6 +421,7 @@ class ChargebackStatsService
                 DB::raw("SUM(CASE WHEN billing_attempts.status = '".BillingAttempt::STATUS_CHARGEBACKED."' THEN billing_attempts.amount ELSE 0 END) as chargeback_amount"),
             ])
             ->groupBy('vop_logs.bank_name')
+            ->havingRaw("SUM(CASE WHEN billing_attempts.status = '".BillingAttempt::STATUS_CHARGEBACKED."' THEN 1 ELSE 0 END) > 0")
             ->get();
 
         $result = [
