@@ -88,6 +88,17 @@ class EmpAccountSeeder extends Seeder
                 'sort_order' => 7,
                 'monthly_cap' => 300000,
             ],
+            [
+                'name' => 'EU Ecology Services Ltd',
+                'slug' => 'eu-ecology-services-ltd',
+                'endpoint' => 'gate.emerchantpay.net',
+                'username' => 'bad41aa4a0e7c42ef7c2a433958eb767f039c7f9',
+                'password' => '1ab46383f28adf5f2f87ba4c5fc8b7454cafb370',
+                'terminal_token' => 'af7718fc76bf427269ff3eaf8ddfbe40fcf121b9',
+                'is_active' => false,
+                'sort_order' => 8,
+                'monthly_cap' => 300000,
+            ]
         ];
         foreach ($accounts as $account) {
             EmpAccount::updateOrCreate(
