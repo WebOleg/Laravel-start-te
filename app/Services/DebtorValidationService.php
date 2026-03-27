@@ -14,7 +14,8 @@ use Illuminate\Support\Facades\Log;
 class DebtorValidationService
 {
     public const NAME_MAX_LENGTH = 35;
-    public const INVALID_NAME_PATTERN = "/[0-9*#@\$%^&+=\[\]{}|\\\\<>'áàâäçèéêëîïíóòôöúùûüÿñÁÀÂÄÇÈÉÊËÎÏÍÓÒÔÖÚÙÛÜŸÑ]/";
+    //public const INVALID_NAME_PATTERN = "/[0-9*#@\$%^&+=\[\]{}|\\\\<>'áàâäçèéêëîïíóòôöúùûüÿñÁÀÂÄÇÈÉÊËÎÏÍÓÒÔÖÚÙÛÜŸÑ]/";
+    public const INVALID_NAME_PATTERN = "/[0-9*#@\$%^&+=\[\]{}|\\\\<>'áàâäãçèéêëîïíóòôöõúùûüýÿñæœøåßðþěšžčřąęśźżńłőűāēīūģķļņÁÀÂÄÃÇÈÉÊËÎÏÍÓÒÔÖÕÚÙÛÜÝŸÑÆŒØÅÐÞĚŠŽČŘĄĘŚŹŻŃŁŐŰĀĒĪŪĢĶĻŅ]/";
 
     public function __construct(
         private IbanValidator $ibanValidator,

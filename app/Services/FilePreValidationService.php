@@ -39,10 +39,10 @@ class FilePreValidationService
 
     private function validateCsv(string $path): array
     {
-        $csv = Reader::createFromPath($path, 'r');
+        $csv = Reader::from($path, 'r');
         $csv->setDelimiter($this->detectDelimiter($path));
 
-        $headers = $csv->fetchOne(0);
+        $headers = $csv->first();
         if (empty($headers)) {
             return $this->result(false, ['File is empty or has no headers.']);
         }
