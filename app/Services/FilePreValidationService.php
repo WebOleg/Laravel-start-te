@@ -42,7 +42,7 @@ class FilePreValidationService
         $csv = Reader::from($path, 'r');
         $csv->setDelimiter($this->detectDelimiter($path));
 
-        $headers = $csv->fetchOne(0);
+        $headers = $csv->first();
         if (empty($headers)) {
             return $this->result(false, ['File is empty or has no headers.']);
         }
