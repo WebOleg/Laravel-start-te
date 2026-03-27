@@ -360,6 +360,9 @@ class FileClearanceControllerTest extends TestCase
                     'processed',
                     'cleared_rows',
                     'excluded_rows',
+                    'excluded_iban_rows',
+                    'excluded_bic_rows',
+                    'invalid_name_rows',
                     'vop_resolved',
                     'vop_failed',
                     'progress',
@@ -368,6 +371,9 @@ class FileClearanceControllerTest extends TestCase
                     'excluded_details',
                     'original_file',
                     'completed_at',
+                    'has_excluded_ibans',
+                    'has_excluded_bics',
+                    'has_invalid_names',
                 ],
             ]);
     }
@@ -388,12 +394,18 @@ class FileClearanceControllerTest extends TestCase
         $response->assertStatus(200)
             ->assertJsonPath('data.cleared_rows', 0)
             ->assertJsonPath('data.excluded_rows', 0)
+            ->assertJsonPath('data.excluded_iban_rows', 0)
+            ->assertJsonPath('data.excluded_bic_rows', 0)
+            ->assertJsonPath('data.invalid_name_rows', 0)
             ->assertJsonPath('data.vop_resolved', 0)
             ->assertJsonPath('data.vop_failed', 0)
             ->assertJsonPath('data.error', null)
             ->assertJsonPath('data.headers', null)
             ->assertJsonPath('data.excluded_details', null)
-            ->assertJsonPath('data.completed_at', null);
+            ->assertJsonPath('data.completed_at', null)
+            ->assertJsonPath('data.has_excluded_ibans', false)
+            ->assertJsonPath('data.has_excluded_bics', false)
+            ->assertJsonPath('data.has_invalid_names', false);
     }
 
     // ──────────────────────────────────────────────
@@ -451,7 +463,7 @@ class FileClearanceControllerTest extends TestCase
             ->getJson("/api/admin/file-clearance/{$token}/download");
 
         $response->assertStatus(404)
-            ->assertJsonPath('message', 'Cleaned file not found. Please run clearance again.');
+            ->assertJsonPath('message', 'File not available (no matching rows). Nothing to download.');
     }
 
     public function test_download_returns_404_when_file_does_not_exist_on_s3(): void
@@ -474,7 +486,7 @@ class FileClearanceControllerTest extends TestCase
             ->getJson("/api/admin/file-clearance/{$token}/download");
 
         $response->assertStatus(404)
-            ->assertJsonPath('message', 'Cleaned file not found. Please run clearance again.');
+            ->assertJsonPath('message', 'File not found. Please run clearance again.');
     }
 
     // ──────────────────────────────────────────────
@@ -608,5 +620,162 @@ class FileClearanceControllerTest extends TestCase
         $token2 = $response2->json('data.token');
 
         $this->assertNotEquals($token1, $token2);
+    }
+
+    // ──────────────────────────────────────────────
+    // download exclusion files — Authentication
+    // ──────────────────────────────────────────────
+
+    public function test_download_excluded_ibans_requires_authentication(): void
+    {
+        $response = $this->getJson('/api/admin/file-clearance/some-token/download-excluded-ibans');
+        $response->assertStatus(401);
+    }
+
+    public function test_download_excluded_bics_requires_authentication(): void
+    {
+        $response = $this->getJson('/api/admin/file-clearance/some-token/download-excluded-bics');
+        $response->assertStatus(401);
+    }
+
+    public function test_download_invalid_names_requires_authentication(): void
+    {
+        $response = $this->getJson('/api/admin/file-clearance/some-token/download-invalid-names');
+        $response->assertStatus(401);
+    }
+
+    // ──────────────────────────────────────────────
+    // download exclusion files — Not ready / empty
+    // ──────────────────────────────────────────────
+
+    public function test_download_excluded_ibans_returns_404_when_not_completed(): void
+    {
+        $token = 'test-excl-iban-notdone';
+
+        Cache::put("file_clearance:{$token}", [
+            'status'     => 'processing',
+            'total_rows' => 100,
+            'processed'  => 50,
+        ], 7200);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson("/api/admin/file-clearance/{$token}/download-excluded-ibans");
+
+        $response->assertStatus(404)
+            ->assertJsonPath('message', 'File not ready or token expired.');
+    }
+
+    public function test_download_excluded_ibans_returns_404_when_no_rows(): void
+    {
+        $token = 'test-excl-iban-empty';
+
+        Cache::put("file_clearance:{$token}", [
+            'status'     => 'completed',
+            'total_rows' => 100,
+            'processed'  => 100,
+            // s3_path_excluded_ibans intentionally omitted (no rows matched)
+        ], 7200);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson("/api/admin/file-clearance/{$token}/download-excluded-ibans");
+
+        $response->assertStatus(404)
+            ->assertJsonPath('message', 'File not available (no matching rows). Nothing to download.');
+    }
+
+    // ──────────────────────────────────────────────
+    // download exclusion files — Successful Downloads
+    // ──────────────────────────────────────────────
+
+    public function test_download_excluded_ibans_returns_csv(): void
+    {
+        $token = 'test-excl-iban-ok';
+        $s3Path = 'clearance/results/abc/test_excluded_ibans.csv';
+        $csvContent = "iban,exclusion_reason\nDE89370400440532013000,IBAN is blacklisted\n";
+
+        Storage::disk('s3')->put($s3Path, $csvContent);
+
+        Cache::put("file_clearance:{$token}", [
+            'status'                   => 'completed',
+            's3_path_excluded_ibans'   => $s3Path,
+            'file_name_excluded_ibans' => 'test_excluded_ibans.csv',
+        ], 7200);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->get("/api/admin/file-clearance/{$token}/download-excluded-ibans");
+
+        $response->assertStatus(200)
+            ->assertHeader('content-type', 'text/csv; charset=UTF-8')
+            ->assertDownload('test_excluded_ibans.csv');
+    }
+
+    public function test_download_excluded_bics_returns_csv(): void
+    {
+        $token = 'test-excl-bic-ok';
+        $s3Path = 'clearance/results/abc/test_excluded_bics.csv';
+        $csvContent = "iban,bic,exclusion_reason\nDE89370400440532013000,COBADEFFXXX,BIC is blacklisted\n";
+
+        Storage::disk('s3')->put($s3Path, $csvContent);
+
+        Cache::put("file_clearance:{$token}", [
+            'status'                  => 'completed',
+            's3_path_excluded_bics'   => $s3Path,
+            'file_name_excluded_bics' => 'test_excluded_bics.csv',
+        ], 7200);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->get("/api/admin/file-clearance/{$token}/download-excluded-bics");
+
+        $response->assertStatus(200)
+            ->assertHeader('content-type', 'text/csv; charset=UTF-8')
+            ->assertDownload('test_excluded_bics.csv');
+    }
+
+    public function test_download_invalid_names_returns_csv(): void
+    {
+        $token = 'test-excl-name-ok';
+        $s3Path = 'clearance/results/abc/test_invalid_names.csv';
+        $csvContent = "iban,first_name,exclusion_reason\nDE89370400440532013000,J0hn,First name contains invalid characters\n";
+
+        Storage::disk('s3')->put($s3Path, $csvContent);
+
+        Cache::put("file_clearance:{$token}", [
+            'status'                   => 'completed',
+            's3_path_invalid_names'    => $s3Path,
+            'file_name_invalid_names'  => 'test_invalid_names.csv',
+        ], 7200);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->get("/api/admin/file-clearance/{$token}/download-invalid-names");
+
+        $response->assertStatus(200)
+            ->assertHeader('content-type', 'text/csv; charset=UTF-8')
+            ->assertDownload('test_invalid_names.csv');
+    }
+
+    // ──────────────────────────────────────────────
+    // status() — Exclusion availability flags
+    // ──────────────────────────────────────────────
+
+    public function test_status_shows_exclusion_availability_flags(): void
+    {
+        $token = 'test-token-flags';
+
+        Cache::put("file_clearance:{$token}", [
+            'status'                 => 'completed',
+            'total_rows'             => 100,
+            'processed'              => 100,
+            's3_path_excluded_ibans' => 'clearance/results/abc/excluded_ibans.csv',
+            's3_path_invalid_names'  => 'clearance/results/abc/invalid_names.csv',
+            // s3_path_excluded_bics intentionally omitted
+        ], 7200);
+
+        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->getJson("/api/admin/file-clearance/{$token}/status");
+
+        $response->assertStatus(200)
+            ->assertJsonPath('data.has_excluded_ibans', true)
+            ->assertJsonPath('data.has_excluded_bics', false)
+            ->assertJsonPath('data.has_invalid_names', true);
     }
 }
