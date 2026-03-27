@@ -4,9 +4,12 @@
  * Controller for the "File Clearance" sidebar feature.
  *
  * Endpoints:
- *   POST  /api/admin/file-clearance                Upload → validate headers → store on S3 → dispatch job
- *   GET   /api/admin/file-clearance/{token}/status  Poll processing progress
- *   GET   /api/admin/file-clearance/{token}/download Download cleaned CSV (streamed from S3)
+ *   POST  /api/admin/file-clearance                         Upload → validate headers → store on S3 → dispatch job
+ *   GET   /api/admin/file-clearance/{token}/status           Poll processing progress
+ *   GET   /api/admin/file-clearance/{token}/download         Download cleaned CSV (streamed from S3)
+ *   GET   /api/admin/file-clearance/{token}/download-excluded-ibans   Download excluded IBANs CSV
+ *   GET   /api/admin/file-clearance/{token}/download-excluded-bics    Download excluded BICs CSV
+ *   GET   /api/admin/file-clearance/{token}/download-invalid-names    Download invalid names CSV
  *
  * The controller does NO heavy parsing. It reuses FilePreValidationService
  * (same as UploadController::store) to read only headers + a sample,
@@ -160,6 +163,9 @@ class FileClearanceController extends Controller
                 'processed'        => $processed,
                 'cleared_rows'     => $data['cleared_rows'] ?? 0,
                 'excluded_rows'    => $data['excluded_rows'] ?? 0,
+                'excluded_iban_rows'  => $data['excluded_iban_rows'] ?? 0,
+                'excluded_bic_rows'   => $data['excluded_bic_rows'] ?? 0,
+                'invalid_name_rows'   => $data['invalid_name_rows'] ?? 0,
                 'vop_resolved'     => $data['vop_resolved'] ?? 0,
                 'vop_failed'       => $data['vop_failed'] ?? 0,
                 'progress'         => $progress,
@@ -168,6 +174,10 @@ class FileClearanceController extends Controller
                 'excluded_details' => $data['excluded_details'] ?? null,
                 'original_file'    => $data['original_file'] ?? null,
                 'completed_at'     => $data['completed_at'] ?? null,
+                // Download availability flags
+                'has_excluded_ibans'  => !empty($data['s3_path_excluded_ibans']),
+                'has_excluded_bics'   => !empty($data['s3_path_excluded_bics']),
+                'has_invalid_names'   => !empty($data['s3_path_invalid_names']),
             ],
         ]);
     }
@@ -187,6 +197,72 @@ class FileClearanceController extends Controller
      */
     public function download(string $token): \Symfony\Component\HttpFoundation\StreamedResponse|JsonResponse
     {
+        return $this->downloadFile($token, 's3_path_result', 'file_name', 'cleared.csv');
+    }
+
+    /**
+     * Download the excluded IBANs CSV.
+     *
+     * @OA\Get(
+     *     path="/api/admin/file-clearance/{token}/download-excluded-ibans",
+     *     summary="Download rows excluded by IBAN blacklist",
+     *     tags={"File Clearance"},
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="token", in="path", required=true, @OA\Schema(type="string", format="uuid")),
+     *     @OA\Response(response=200, description="CSV file download"),
+     *     @OA\Response(response=404, description="Not ready, empty, or expired")
+     * )
+     */
+    public function downloadExcludedIbans(string $token): \Symfony\Component\HttpFoundation\StreamedResponse|JsonResponse
+    {
+        return $this->downloadFile($token, 's3_path_excluded_ibans', 'file_name_excluded_ibans', 'excluded_ibans.csv');
+    }
+
+    /**
+     * Download the excluded BICs CSV.
+     *
+     * @OA\Get(
+     *     path="/api/admin/file-clearance/{token}/download-excluded-bics",
+     *     summary="Download rows excluded by BIC blacklist",
+     *     tags={"File Clearance"},
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="token", in="path", required=true, @OA\Schema(type="string", format="uuid")),
+     *     @OA\Response(response=200, description="CSV file download"),
+     *     @OA\Response(response=404, description="Not ready, empty, or expired")
+     * )
+     */
+    public function downloadExcludedBics(string $token): \Symfony\Component\HttpFoundation\StreamedResponse|JsonResponse
+    {
+        return $this->downloadFile($token, 's3_path_excluded_bics', 'file_name_excluded_bics', 'excluded_bics.csv');
+    }
+
+    /**
+     * Download the invalid names CSV.
+     *
+     * @OA\Get(
+     *     path="/api/admin/file-clearance/{token}/download-invalid-names",
+     *     summary="Download rows with invalid first/last names",
+     *     tags={"File Clearance"},
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="token", in="path", required=true, @OA\Schema(type="string", format="uuid")),
+     *     @OA\Response(response=200, description="CSV file download"),
+     *     @OA\Response(response=404, description="Not ready, empty, or expired")
+     * )
+     */
+    public function downloadInvalidNames(string $token): \Symfony\Component\HttpFoundation\StreamedResponse|JsonResponse
+    {
+        return $this->downloadFile($token, 's3_path_invalid_names', 'file_name_invalid_names', 'invalid_names.csv');
+    }
+
+    /**
+     * Generic download helper — streams a file from S3 based on cache keys.
+     */
+    private function downloadFile(
+        string $token,
+        string $s3PathKey,
+        string $fileNameKey,
+        string $fallbackFileName,
+    ): \Symfony\Component\HttpFoundation\StreamedResponse|JsonResponse {
         $data = Cache::get("file_clearance:{$token}");
 
         if (!$data || ($data['status'] ?? '') !== 'completed') {
@@ -195,27 +271,28 @@ class FileClearanceController extends Controller
             ], 404);
         }
 
-        $s3Path = $data['s3_path_result'] ?? null;
+        $s3Path = $data[$s3PathKey] ?? null;
 
         if (!$s3Path) {
             return response()->json([
-                'message' => 'Cleaned file not found. Please run clearance again.',
+                'message' => 'File not available (no matching rows). Nothing to download.',
             ], 404);
         }
 
         try {
             return $this->clearanceService->streamDownloadFromS3(
                 $s3Path,
-                $data['file_name'] ?? 'cleared.csv',
+                $data[$fileNameKey] ?? $fallbackFileName,
             );
         } catch (\RuntimeException $e) {
             Log::error('FileClearance: download failed', [
                 'token'   => $token,
                 's3_path' => $s3Path,
+                'key'     => $s3PathKey,
                 'error'   => $e->getMessage(),
             ]);
             return response()->json([
-                'message' => 'Cleaned file not found. Please run clearance again.',
+                'message' => 'File not found. Please run clearance again.',
             ], 404);
         }
     }

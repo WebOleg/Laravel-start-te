@@ -5,8 +5,14 @@
  *
  * Downloads the raw file from S3 (same pattern as ProcessUploadJob),
  * streams rows via generator (constant memory), processes each row
- * (VOP BIC resolution + blacklist filtering), writes cleared rows
- * incrementally to a CSV, and updates progress in cache for polling.
+ * (VOP BIC resolution + blacklist filtering + name validation),
+ * writes cleared rows incrementally to a CSV, and writes excluded rows
+ * to 3 separate exclusion CSVs:
+ *   - excluded_ibans:  rows filtered by IBAN blacklist
+ *   - excluded_bics:   rows filtered by BIC blacklist
+ *   - invalid_names:   rows with invalid first/last name characters
+ *
+ * Updates progress in cache for polling.
  *
  * After completion, deletes the source file from S3 and the temp file.
  *
@@ -98,15 +104,35 @@ class ProcessFileClearanceJob implements ShouldQueue, ShouldBeUnique
                 $outputHeaders[] = 'bic';
             }
 
-            // 2. Open incremental CSV writer
-            [$csvHandle, $csvPath, $csvFileName] = $service->openCsvWriter($outputHeaders, $this->originalFileName);
+            // Exclusion file headers = original headers + reason column
+            $exclusionHeaders = array_merge($this->headers, [FileClearanceService::EXCLUSION_REASON_HEADER]);
 
-            $excludedDetails = [];
-            $vopResolved     = 0;
-            $vopFailed       = 0;
-            $clearedCount    = 0;
-            $excludedCount   = 0;
-            $processed       = 0;
+            // 2. Open incremental CSV writers — main cleared + 3 exclusion files
+            [$csvHandle, $csvPath, $csvFileName] = $service->openCsvWriter(
+                $outputHeaders, $this->originalFileName, FileClearanceService::SUFFIX_CLEARED
+            );
+
+            [$exIbanHandle, $exIbanPath, $exIbanFileName] = $service->openCsvWriter(
+                $exclusionHeaders, $this->originalFileName, FileClearanceService::SUFFIX_EXCLUDED_IBANS
+            );
+
+            [$exBicHandle, $exBicPath, $exBicFileName] = $service->openCsvWriter(
+                $exclusionHeaders, $this->originalFileName, FileClearanceService::SUFFIX_EXCLUDED_BICS
+            );
+
+            [$exNameHandle, $exNamePath, $exNameFileName] = $service->openCsvWriter(
+                $exclusionHeaders, $this->originalFileName, FileClearanceService::SUFFIX_INVALID_NAMES
+            );
+
+            $excludedDetails    = [];
+            $vopResolved        = 0;
+            $vopFailed          = 0;
+            $clearedCount       = 0;
+            $excludedCount      = 0;
+            $excludedIbanCount  = 0;
+            $excludedBicCount   = 0;
+            $invalidNameCount   = 0;
+            $processed          = 0;
 
             try {
                 // 3. Stream rows
@@ -130,6 +156,23 @@ class ProcessFileClearanceJob implements ShouldQueue, ShouldBeUnique
                         if (count($excludedDetails) < self::MAX_EXCLUDED_STORED) {
                             $excludedDetails[] = $result['excluded'];
                         }
+
+                        $reasonStr = implode('; ', $result['excluded']['reasons'] ?? []);
+                        $categories = $result['exclusion_categories'] ?? [];
+
+                        // Write to category-specific exclusion files
+                        if (in_array(FileClearanceService::CATEGORY_IBAN_BLACKLISTED, $categories)) {
+                            $service->writeExclusionCsvRow($exIbanHandle, $exclusionHeaders, $row, $reasonStr);
+                            $excludedIbanCount++;
+                        }
+                        if (in_array(FileClearanceService::CATEGORY_BIC_BLACKLISTED, $categories)) {
+                            $service->writeExclusionCsvRow($exBicHandle, $exclusionHeaders, $row, $reasonStr);
+                            $excludedBicCount++;
+                        }
+                        if (in_array(FileClearanceService::CATEGORY_INVALID_NAME, $categories)) {
+                            $service->writeExclusionCsvRow($exNameHandle, $exclusionHeaders, $row, $reasonStr);
+                            $invalidNameCount++;
+                        }
                     }
 
                     if ($result['vop_resolved']) $vopResolved++;
@@ -139,21 +182,28 @@ class ProcessFileClearanceJob implements ShouldQueue, ShouldBeUnique
 
                     if ($processed % self::PROGRESS_INTERVAL === 0) {
                         $this->updateProgress([
-                            'status'        => 'processing',
-                            'total_rows'    => $this->totalRows,
-                            'processed'     => $processed,
-                            'cleared_rows'  => $clearedCount,
-                            'excluded_rows' => $excludedCount,
-                            'vop_resolved'  => $vopResolved,
-                            'vop_failed'    => $vopFailed,
+                            'status'              => 'processing',
+                            'total_rows'          => $this->totalRows,
+                            'processed'           => $processed,
+                            'cleared_rows'        => $clearedCount,
+                            'excluded_rows'       => $excludedCount,
+                            'excluded_iban_rows'  => $excludedIbanCount,
+                            'excluded_bic_rows'   => $excludedBicCount,
+                            'invalid_name_rows'   => $invalidNameCount,
+                            'vop_resolved'        => $vopResolved,
+                            'vop_failed'          => $vopFailed,
                         ]);
                     }
                 }
             } finally {
-                $csvPath = $service->closeCsvWriter($csvHandle, $csvPath, $csvFileName);
+                // Close all CSV writers — exclusion files skip upload if empty
+                $csvPath     = $service->closeCsvWriter($csvHandle, $csvPath, $csvFileName);
+                $exIbanPath  = $service->closeCsvWriter($exIbanHandle, $exIbanPath, $exIbanFileName, skipIfEmpty: true);
+                $exBicPath   = $service->closeCsvWriter($exBicHandle, $exBicPath, $exBicFileName, skipIfEmpty: true);
+                $exNamePath  = $service->closeCsvWriter($exNameHandle, $exNamePath, $exNameFileName, skipIfEmpty: true);
             }
 
-            // Wait for S3 consistency
+            // Wait for S3 consistency on the main cleared file
             $maxWait = 60;
             for ($i = 0; $i < $maxWait; $i++) {
                 if (Storage::disk('s3')->exists($csvPath)) break;
@@ -166,28 +216,43 @@ class ProcessFileClearanceJob implements ShouldQueue, ShouldBeUnique
 
             // 5. Final cache update
             $this->updateProgress([
-                'status'           => 'completed',
-                'total_rows'       => $this->totalRows,
-                'processed'        => $processed,
-                'cleared_rows'     => $clearedCount,
-                'excluded_rows'    => $excludedCount,
-                'vop_resolved'     => $vopResolved,
-                'vop_failed'       => $vopFailed,
-                'headers'          => $outputHeaders,
-                'excluded_details' => $excludedDetails,
-                's3_path_result'   => $csvPath,
-                'file_name'        => basename($csvPath),
-                'completed_at'     => now()->toISOString(),
+                'status'                   => 'completed',
+                'total_rows'               => $this->totalRows,
+                'processed'                => $processed,
+                'cleared_rows'             => $clearedCount,
+                'excluded_rows'            => $excludedCount,
+                'excluded_iban_rows'       => $excludedIbanCount,
+                'excluded_bic_rows'        => $excludedBicCount,
+                'invalid_name_rows'        => $invalidNameCount,
+                'vop_resolved'             => $vopResolved,
+                'vop_failed'               => $vopFailed,
+                'headers'                  => $outputHeaders,
+                'excluded_details'         => $excludedDetails,
+                's3_path_result'           => $csvPath,
+                's3_path_excluded_ibans'   => $exIbanPath,
+                's3_path_excluded_bics'    => $exBicPath,
+                's3_path_invalid_names'    => $exNamePath,
+                'file_name'                => basename($csvPath),
+                'file_name_excluded_ibans' => $exIbanPath ? basename($exIbanPath) : null,
+                'file_name_excluded_bics'  => $exBicPath ? basename($exBicPath) : null,
+                'file_name_invalid_names'  => $exNamePath ? basename($exNamePath) : null,
+                'completed_at'             => now()->toISOString(),
             ]);
 
             Log::info('ProcessFileClearanceJob: completed', [
-                'token'        => $this->token,
-                'total'        => $this->totalRows,
-                'cleared'      => $clearedCount,
-                'excluded'     => $excludedCount,
-                'vop_resolved' => $vopResolved,
-                'vop_failed'   => $vopFailed,
-                'csv'          => $csvPath,
+                'token'              => $this->token,
+                'total'              => $this->totalRows,
+                'cleared'            => $clearedCount,
+                'excluded'           => $excludedCount,
+                'excluded_iban'      => $excludedIbanCount,
+                'excluded_bic'       => $excludedBicCount,
+                'invalid_name'       => $invalidNameCount,
+                'vop_resolved'       => $vopResolved,
+                'vop_failed'         => $vopFailed,
+                'csv'                => $csvPath,
+                'csv_excluded_ibans' => $exIbanPath,
+                'csv_excluded_bics'  => $exBicPath,
+                'csv_invalid_names'  => $exNamePath,
             ]);
         } finally {
             $lock->release();
