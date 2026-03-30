@@ -34,6 +34,8 @@ use Illuminate\Support\Str;
 use League\Csv\Reader;
 use PhpOffice\PhpSpreadsheet\IOFactory;
 use Symfony\Component\HttpFoundation\StreamedResponse;
+use OpenSpout\Reader\XLSX\Reader as XlsxReader;
+use OpenSpout\Reader\XLSX\Options as XlsxOptions;
 
 class FileClearanceService
 {
@@ -235,20 +237,28 @@ class FileClearanceService
         $path      = $file->getPathname();
 
         if (in_array($extension, ['csv', 'txt'])) {
-            $csv = Reader::createFromPath($path, 'r');
-            $csv->setDelimiter($this->detectDelimiter($path));
-            $csv->setHeaderOffset(0);
-            return iterator_count($csv->getRecords());
+            $count = 0;
+            $fh = fopen($path, 'r');
+            while (fgets($fh) !== false) $count++;
+            fclose($fh);
+            return max(0, $count - 1);
         }
 
         if (in_array($extension, ['xlsx', 'xls'])) {
-            $reader = IOFactory::createReaderForFile($path);
-            $reader->setReadDataOnly(true);
-            $spreadsheet = $reader->load($path);
-            $count = max(0, $spreadsheet->getActiveSheet()->getHighestRow() - 1);
-            $spreadsheet->disconnectWorksheets();
-            unset($spreadsheet);
-            return $count;
+            $options = new \OpenSpout\Reader\XLSX\Options();
+            $reader  = new \OpenSpout\Reader\XLSX\Reader($options);
+            $reader->open($path);
+
+            $count = 0;
+            foreach ($reader->getSheetIterator() as $sheet) {
+                foreach ($sheet->getRowIterator() as $row) {
+                    $count++;
+                }
+                break; // first sheet only
+            }
+
+            $reader->close();
+            return max(0, $count - 1); // subtract header row
         }
 
         return 0;
@@ -345,6 +355,7 @@ class FileClearanceService
         IbanApiService   $ibanApiService,
         IbanValidator    $ibanValidator,
         BlacklistService $blacklistService,
+        ?string $preResolvedBic = null,
     ): array {
         $ibanHeader      = $headerMeta['iban_header'];
         $bicHeader       = $headerMeta['bic_header'];
@@ -403,16 +414,19 @@ class FileClearanceService
             ];
         }
 
-        // Always resolve BIC via VOP - VOP is the source of truth
-        $resolvedBic = $ibanApiService->getBic($iban);
-
-        if (!empty($resolvedBic)) {
-            $bic         = $resolvedBic;
+        // Use pre-resolved BIC from batch call, or fall back to single call
+        if ($preResolvedBic !== null) {
+            $bic         = $preResolvedBic;
             $vopResolved = true;
         } else {
-            $vopFailed = true;
-            // Fall back to file BIC if VOP fails (used for output + blacklist check)
-            $bic = $bicHeader !== null ? trim($row[$bicHeader] ?? '') : '';
+            $resolvedBic = $ibanApiService->getBic($iban);
+            if (!empty($resolvedBic)) {
+                $bic         = $resolvedBic;
+                $vopResolved = true;
+            } else {
+                $vopFailed = true;
+                $bic = $bicHeader !== null ? trim($row[$bicHeader] ?? '') : '';
+            }
         }
 
         // Collect all reasons + categorise for separate files
@@ -632,29 +646,25 @@ class FileClearanceService
 
     private function streamExcelRows(string $filePath, array $headers): \Generator
     {
-        $reader = IOFactory::createReaderForFile($filePath);
-        $reader->setReadDataOnly(true);
-        $spreadsheet = $reader->load($filePath);
-        $worksheet   = $spreadsheet->getActiveSheet();
+        $options = new XlsxOptions();
+        $reader  = new XlsxReader($options);
+        $reader->open($filePath);
 
-        $rowIndex = 0;
-        foreach ($worksheet->getRowIterator(2) as $excelRow) {
-            $cells = [];
-            foreach ($excelRow->getCellIterator() as $cell) {
-                $cells[] = $cell->getValue();
+        foreach ($reader->getSheetIterator() as $sheet) {
+            $rowIndex = 0;
+            foreach ($sheet->getRowIterator() as $excelRow) {
+                if ($rowIndex === 0) { $rowIndex++; continue; }
+                $cells = $excelRow->toArray();
+                $row   = [];
+                foreach ($headers as $i => $header) {
+                    $row[$header] = $cells[$i] ?? '';
+                }
+                yield [$rowIndex - 1, $row];
+                $rowIndex++;
             }
-
-            $row = [];
-            foreach ($headers as $i => $header) {
-                $row[$header] = $cells[$i] ?? '';
-            }
-
-            yield [$rowIndex, $row];
-            $rowIndex++;
+            break;
         }
-
-        $spreadsheet->disconnectWorksheets();
-        unset($spreadsheet);
+        $reader->close();
     }
 
     private function buildColumnMapping(array $headers): array

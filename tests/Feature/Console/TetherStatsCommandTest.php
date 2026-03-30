@@ -10,6 +10,7 @@ use App\Models\BillingAttempt;
 use App\Models\Debtor;
 use App\Models\EmpAccount;
 use App\Models\Upload;
+use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -49,7 +50,7 @@ class TetherStatsCommandTest extends TestCase
             'emp_account_id' => $account->id,
             'status'         => BillingAttempt::STATUS_APPROVED,
             'amount'         => 100.00,
-            'created_at'     => now()->setMonth(3)->setYear(2026),
+            'created_at'     => Carbon::create(2026, 3, 15),
         ]);
 
         $this->artisan('tether:stats', ['--month' => 3, '--year' => 2026])
@@ -70,7 +71,7 @@ class TetherStatsCommandTest extends TestCase
             'emp_account_id' => $account->id,
             'status'         => BillingAttempt::STATUS_APPROVED,
             'amount'         => 50.00,
-            'created_at'     => now()->setMonth(3)->setYear(2026),
+            'created_at'     => Carbon::create(2026, 3, 15),
         ]);
 
         BillingAttempt::factory()->count(2)->create([
@@ -79,7 +80,7 @@ class TetherStatsCommandTest extends TestCase
             'emp_account_id' => $account->id,
             'status'         => BillingAttempt::STATUS_CHARGEBACKED,
             'amount'         => 50.00,
-            'created_at'     => now()->setMonth(3)->setYear(2026),
+            'created_at'     => Carbon::create(2026, 3, 15),
         ]);
 
         $this->artisan('tether:stats', ['--month' => 3, '--year' => 2026])
@@ -100,7 +101,7 @@ class TetherStatsCommandTest extends TestCase
             'emp_account_id' => $account->id,
             'status'         => BillingAttempt::STATUS_APPROVED,
             'amount'         => 100.00,
-            'created_at'     => now()->setMonth(3)->setYear(2026),
+            'created_at'     => Carbon::create(2026, 3, 15),
         ]);
 
         BillingAttempt::factory()->count(5)->create([
@@ -109,7 +110,7 @@ class TetherStatsCommandTest extends TestCase
             'emp_account_id' => $account->id,
             'status'         => BillingAttempt::STATUS_CHARGEBACKED,
             'amount'         => 100.00,
-            'created_at'     => now()->setMonth(3)->setYear(2026),
+            'created_at'     => Carbon::create(2026, 3, 15),
         ]);
 
         $this->artisan('tether:stats', ['--month' => 3, '--year' => 2026, '--cb-threshold' => 2])
@@ -135,7 +136,7 @@ class TetherStatsCommandTest extends TestCase
             'emp_account_id' => $account1->id,
             'status'         => BillingAttempt::STATUS_APPROVED,
             'amount'         => 200.00,
-            'created_at'     => now()->setMonth(3)->setYear(2026),
+            'created_at'     => Carbon::create(2026, 3, 15),
         ]);
 
         BillingAttempt::factory()->create([
@@ -144,7 +145,7 @@ class TetherStatsCommandTest extends TestCase
             'emp_account_id' => $account2->id,
             'status'         => BillingAttempt::STATUS_APPROVED,
             'amount'         => 300.00,
-            'created_at'     => now()->setMonth(3)->setYear(2026),
+            'created_at'     => Carbon::create(2026, 3, 15),
         ]);
 
         $this->artisan('tether:stats', ['--month' => 3, '--year' => 2026, '--account' => 'optivest'])
@@ -164,7 +165,7 @@ class TetherStatsCommandTest extends TestCase
             'emp_account_id' => $account->id,
             'status'         => BillingAttempt::STATUS_APPROVED,
             'amount'         => 100.00,
-            'created_at'     => now()->setMonth(2)->setYear(2026),
+            'created_at'     => Carbon::create(2026, 2, 15),
         ]);
 
         $this->artisan('tether:stats', ['--month' => 3, '--year' => 2026])
