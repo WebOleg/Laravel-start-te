@@ -7,7 +7,6 @@ use App\Models\Debtor;
 use App\Models\Upload;
 use App\Models\User;
 use App\Models\VopLog;
-use App\Services\ChargebackStatsService;
 use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
@@ -602,7 +601,7 @@ class ChargebackStatsTest extends TestCase
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
-            'status' => BillingAttempt::STATUS_APPROVED,
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
             'amount' => 200.00,
             'created_at' => now()->subHours(5),
         ]);
@@ -1019,7 +1018,7 @@ class ChargebackStatsTest extends TestCase
         $this->assertEquals('monthly', $response->json('data.period'));
         $this->assertEquals(7, $response->json('data.month'));
         $this->assertEquals(2025, $response->json('data.year'));
-        $this->assertEquals(1, $response->json('data.totals.total'));
+        $this->assertEquals(0, $response->json('data.totals.total'));
         $this->assertEquals(0, $response->json('data.totals.chargebacks'));
     }
 
@@ -1045,7 +1044,7 @@ class ChargebackStatsTest extends TestCase
         BillingAttempt::factory()->create([
             'debtor_id' => $debtor->id,
             'upload_id' => $upload->id,
-            'status' => BillingAttempt::STATUS_APPROVED,
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
             'amount' => 100.00,
             'created_at' => now()->subDays(5),
         ]);

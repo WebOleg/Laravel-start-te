@@ -356,4 +356,107 @@ class IbanApiService
         $n = $this->normalize($iban);
         return strlen($n) >= 8 ? substr($n, 0, 4) . '****' . substr($n, -4) : '****';
     }
+
+    /**
+     * Resolve BICs for multiple IBANs concurrently.
+     * Returns [iban => bic|null].
+     *
+     * Checks local DB cache first, then fires concurrent HTTP for misses.
+     */
+    public function getBicBatch(array $ibans): array
+    {
+        $results = [];
+        $toFetch = [];
+
+        // 1. Check local DB cache + memory cache first
+        foreach ($ibans as $iban) {
+            $normalized  = $this->normalize($iban);
+            $countryIso  = substr($normalized, 0, 2);
+            $bankCode    = $this->extractBankCode($normalized, $countryIso);
+
+            // DB cache
+            if ($bankCode) {
+                $local = $this->findInLocalCache($countryIso, $bankCode);
+                if ($local) {
+                    $results[$iban] = $local['bank_data']['bic'] ?? null;
+                    continue;
+                }
+            }
+
+            // Memory cache
+            $cacheKey = self::CACHE_PREFIX . hash('sha256', $normalized);
+            $cached   = Cache::get($cacheKey);
+            if ($cached !== null) {
+                $results[$iban] = $cached['bank_data']['bic'] ?? null;
+                continue;
+            }
+
+            $toFetch[$iban] = $normalized;
+        }
+
+        if (empty($toFetch)) {
+            return $results;
+        }
+
+        // 2. Concurrent HTTP requests for cache misses
+        if ($this->mockMode) {
+            foreach ($toFetch as $origIban => $normalized) {
+                $mock = $this->mockResponse($normalized);
+                $results[$origIban] = $mock['bank_data']['bic'] ?? null;
+                $this->cacheAndSave($normalized, $mock);
+            }
+            return $results;
+        }
+
+        $responses = Http::pool(function ($pool) use ($toFetch) {
+            foreach ($toFetch as $origIban => $normalized) {
+                $pool->as($origIban)
+                    ->timeout(self::TIMEOUT)
+                    ->retry(self::RETRY_TIMES, self::RETRY_DELAY)
+                    ->asForm()
+                    ->post($this->apiUrl, [
+                        'iban'    => $normalized,
+                        'api_key' => $this->apiKey,
+                        'format'  => 'json',
+                    ]);
+            }
+        });
+
+        foreach ($responses as $origIban => $response) {
+            try {
+                if ($response instanceof \Throwable || !$response->successful()) {
+                    Log::warning('IbanApiService: batch request failed', [
+                        'iban' => $this->mask($origIban),
+                    ]);
+                    $results[$origIban] = null;
+                    continue;
+                }
+                $parsed = $this->parseResponse($response->json());
+                $results[$origIban] = $parsed['bank_data']['bic'] ?? null;
+                $this->cacheAndSave($toFetch[$origIban], $parsed);
+            } catch (\Throwable $e) {
+                Log::warning('IbanApiService: batch parse failed', [
+                    'iban'  => $this->mask($origIban),
+                    'error' => $e->getMessage(),
+                ]);
+                $results[$origIban] = null;
+            }
+        }
+
+        return $results;
+    }
+
+    /**
+     * Cache a successful result in memory + DB.
+     */
+    private function cacheAndSave(string $normalizedIban, array $result): void
+    {
+        if (!$result['success']) return;
+
+        $cacheKey   = self::CACHE_PREFIX . hash('sha256', $normalizedIban);
+        $countryIso = substr($normalizedIban, 0, 2);
+
+        Cache::put($cacheKey, $result, self::CACHE_TTL);
+        $this->saveToLocalCache($result, $countryIso);
+    }
 }

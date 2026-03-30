@@ -12,9 +12,37 @@ use App\Models\Debtor;
 
 class BlacklistService
 {
+    private ?array $ibanHashes = null;
+    private ?array $emails = null;
+    private ?array $names = null;
+    private ?array $bics = null;
+    private ?array $bicPrefixes = null;
+
     public function __construct(
         private IbanValidator $ibanValidator
     ) {}
+
+    /**
+     * Load all blacklist data into memory.
+     */
+    public function preload(): void
+    {
+        $all = Blacklist::select('iban_hash', 'first_name', 'last_name', 'email', 'bic')->get();
+
+        $this->ibanHashes = $all->pluck('iban_hash')->filter()->flip()->toArray();
+        $this->emails     = $all->pluck('email')->filter()
+                                ->mapWithKeys(fn($e) => [strtolower($e) => true])->toArray();
+        $this->names      = $all->filter(fn($r) => $r->first_name && $r->last_name)
+                                ->mapWithKeys(fn($r) => [strtolower($r->first_name).'|'.strtolower($r->last_name) => true])
+                                ->toArray();
+        $this->bics       = $all->pluck('bic')->filter()
+                                ->mapWithKeys(fn($b) => [strtolower($b) => true])->toArray();
+
+        // BicBlacklist table (exact + prefix entries)
+        $bicBl = BicBlacklist::all();
+        $this->bicPrefixes = $bicBl->pluck('bic')->filter()
+                                   ->map(fn($b) => strtoupper($b))->values()->toArray();
+    }
 
     /**
      * Check if IBAN is blacklisted.
@@ -22,6 +50,9 @@ class BlacklistService
     public function isBlacklisted(string $iban): bool
     {
         $hash = $this->ibanValidator->hash($iban);
+        if ($this->ibanHashes !== null) {
+            return isset($this->ibanHashes[$hash]);
+        }
         return Blacklist::where('iban_hash', $hash)->exists();
     }
 
@@ -30,10 +61,10 @@ class BlacklistService
      */
     public function isNameBlacklisted(string $firstName, string $lastName): bool
     {
-        if (empty($firstName) && empty($lastName)) {
-            return false;
+        if (empty($firstName) && empty($lastName)) return false;
+        if ($this->names !== null) {
+            return isset($this->names[strtolower($firstName).'|'.strtolower($lastName)]);
         }
-        
         return Blacklist::whereRaw('LOWER(first_name) = ?', [strtolower($firstName)])
             ->whereRaw('LOWER(last_name) = ?', [strtolower($lastName)])
             ->exists();
@@ -44,10 +75,10 @@ class BlacklistService
      */
     public function isEmailBlacklisted(string $email): bool
     {
-        if (empty($email)) {
-            return false;
+        if (empty($email)) return false;
+        if ($this->emails !== null) {
+            return isset($this->emails[strtolower($email)]);
         }
-        
         return Blacklist::whereRaw('LOWER(email) = ?', [strtolower($email)])->exists();
     }
 
@@ -57,14 +88,20 @@ class BlacklistService
      */
     public function isBicBlacklisted(string $bic): bool
     {
-        if (empty($bic)) {
+        if (empty($bic)) return false;
+
+        if ($this->bics !== null) {
+            $upper = strtoupper($bic);
+            // Exact match from legacy blacklists table
+            if (isset($this->bics[strtolower($bic)])) return true;
+            // Exact + prefix match from bic_blacklists table
+            foreach ($this->bicPrefixes as $prefix) {
+                if (str_starts_with($upper, $prefix)) return true;
+            }
             return false;
         }
 
-        if (BicBlacklist::isBlacklisted($bic)) {
-            return true;
-        }
-
+        if (BicBlacklist::isBlacklisted($bic)) return true;
         return Blacklist::whereRaw('LOWER(bic) = ?', [strtolower($bic)])->exists();
     }
 
