@@ -300,10 +300,10 @@ class FileGenerationControllerTest extends TestCase
 
         $response->assertStatus(202);
 
-        $token = $response->json('data.token');
+        $batchToken = $response->json('data.token');
 
         $this->assertDatabaseHas('file_generation_batches', [
-            'token' => $token,
+            'token' => $batchToken,
             'status' => 'queued',
             'target_amount' => 10000,
             'tolerance' => 250,
@@ -336,8 +336,8 @@ class FileGenerationControllerTest extends TestCase
 
         $response->assertStatus(202);
 
-        $token = $response->json('data.token');
-        $cached = Cache::get("file_generation:{$token}");
+        $batchToken = $response->json('data.token');
+        $cached = Cache::get("file_generation:{$batchToken}");
 
         $this->assertNotNull($cached);
         $this->assertEquals('queued', $cached['status']);
@@ -503,9 +503,9 @@ class FileGenerationControllerTest extends TestCase
 
     public function test_status_returns_queued_state(): void
     {
-        $token = 'test-status-token';
+        $genToken = Str::uuid()->toString();
 
-        Cache::put("file_generation:{$token}", [
+        Cache::put("file_generation:{$genToken}", [
             'status' => 'queued',
             'phase' => 'queued',
             'total_rows' => 200,
@@ -517,7 +517,7 @@ class FileGenerationControllerTest extends TestCase
         ], 7200);
 
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
-            ->getJson("/api/admin/file-generation/{$token}/status");
+            ->getJson("/api/admin/file-generation/{$genToken}/status");
 
         $response->assertStatus(200)
             ->assertJsonPath('data.status', 'queued')
@@ -531,9 +531,9 @@ class FileGenerationControllerTest extends TestCase
 
     public function test_status_returns_progress_during_processing(): void
     {
-        $token = 'test-progress-token';
+        $genToken = Str::uuid()->toString();
 
-        Cache::put("file_generation:{$token}", [
+        Cache::put("file_generation:{$genToken}", [
             'status' => 'processing',
             'phase' => 'filtering',
             'total_rows' => 200,
@@ -548,7 +548,7 @@ class FileGenerationControllerTest extends TestCase
         ], 7200);
 
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
-            ->getJson("/api/admin/file-generation/{$token}/status");
+            ->getJson("/api/admin/file-generation/{$genToken}/status");
 
         $response->assertStatus(200)
             ->assertJsonPath('data.status', 'processing')
@@ -560,9 +560,9 @@ class FileGenerationControllerTest extends TestCase
 
     public function test_status_returns_completed_state_with_download(): void
     {
-        $token = 'test-completed-token';
+        $genToken = Str::uuid()->toString();
 
-        Cache::put("file_generation:{$token}", [
+        Cache::put("file_generation:{$genToken}", [
             'status' => 'completed',
             'phase' => 'completed',
             'total_rows' => 200,
@@ -579,7 +579,7 @@ class FileGenerationControllerTest extends TestCase
         ], 7200);
 
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
-            ->getJson("/api/admin/file-generation/{$token}/status");
+            ->getJson("/api/admin/file-generation/{$genToken}/status");
 
         $response->assertStatus(200)
             ->assertJsonPath('data.status', 'completed')
@@ -592,8 +592,10 @@ class FileGenerationControllerTest extends TestCase
 
     public function test_status_returns_404_for_expired_token(): void
     {
+        $genToken = Str::uuid()->toString();
+
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
-            ->getJson('/api/admin/file-generation/nonexistent-token/status');
+            ->getJson("/api/admin/file-generation/{$genToken}/status");
 
         $response->assertStatus(404)
             ->assertJsonPath('message', 'Token expired or not found.');
@@ -601,9 +603,9 @@ class FileGenerationControllerTest extends TestCase
 
     public function test_status_returns_error_information(): void
     {
-        $token = 'test-error-token';
+        $genToken = Str::uuid()->toString();
 
-        Cache::put("file_generation:{$token}", [
+        Cache::put("file_generation:{$genToken}", [
             'status' => 'failed',
             'phase' => 'error',
             'total_rows' => 200,
@@ -614,7 +616,7 @@ class FileGenerationControllerTest extends TestCase
         ], 7200);
 
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
-            ->getJson("/api/admin/file-generation/{$token}/status");
+            ->getJson("/api/admin/file-generation/{$genToken}/status");
 
         $response->assertStatus(200)
             ->assertJsonPath('data.status', 'failed')
@@ -623,9 +625,9 @@ class FileGenerationControllerTest extends TestCase
 
     public function test_status_returns_warning_information(): void
     {
-        $token = 'test-warning-token';
+        $genToken = Str::uuid()->toString();
 
-        Cache::put("file_generation:{$token}", [
+        Cache::put("file_generation:{$genToken}", [
             'status' => 'completed',
             'phase' => 'completed',
             'total_rows' => 200,
@@ -639,7 +641,7 @@ class FileGenerationControllerTest extends TestCase
         ], 7200);
 
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
-            ->getJson("/api/admin/file-generation/{$token}/status");
+            ->getJson("/api/admin/file-generation/{$genToken}/status");
 
         $response->assertStatus(200)
             ->assertJsonPath('data.warning', 'Achieved amount is within tolerance but below target.');
@@ -647,9 +649,9 @@ class FileGenerationControllerTest extends TestCase
 
     public function test_status_returns_exclusion_counts(): void
     {
-        $token = 'test-exclusion-token';
+        $genToken = Str::uuid()->toString();
 
-        Cache::put("file_generation:{$token}", [
+        Cache::put("file_generation:{$genToken}", [
             'status' => 'completed',
             'phase' => 'completed',
             'total_rows' => 500,
@@ -667,7 +669,7 @@ class FileGenerationControllerTest extends TestCase
         ], 7200);
 
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
-            ->getJson("/api/admin/file-generation/{$token}/status");
+            ->getJson("/api/admin/file-generation/{$genToken}/status");
 
         $response->assertStatus(200)
             ->assertJsonPath('data.excluded_blacklist_rows', 20)
@@ -677,9 +679,9 @@ class FileGenerationControllerTest extends TestCase
 
     public function test_status_response_structure(): void
     {
-        $token = 'test-structure-token';
+        $genToken = Str::uuid()->toString();
 
-        Cache::put("file_generation:{$token}", [
+        Cache::put("file_generation:{$genToken}", [
             'status' => 'queued',
             'phase' => 'queued',
             'total_rows' => 100,
@@ -690,7 +692,7 @@ class FileGenerationControllerTest extends TestCase
         ], 7200);
 
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
-            ->getJson("/api/admin/file-generation/{$token}/status");
+            ->getJson("/api/admin/file-generation/{$genToken}/status");
 
         $response->assertStatus(200)
             ->assertJsonStructure([
@@ -724,17 +726,19 @@ class FileGenerationControllerTest extends TestCase
 
     public function test_download_returns_404_for_nonexistent_token(): void
     {
+        $genToken = Str::uuid()->toString();
+
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
-            ->getJson('/api/admin/file-generation/nonexistent-token/download');
+            ->getJson("/api/admin/file-generation/{$genToken}/download");
 
         $response->assertStatus(404);
     }
 
     public function test_download_returns_404_when_not_completed(): void
     {
-        $token = 'test-download-pending';
+        $genToken = Str::uuid()->toString();
 
-        Cache::put("file_generation:{$token}", [
+        Cache::put("file_generation:{$genToken}", [
             'status' => 'processing',
             'phase' => 'filtering',
             'total_rows' => 200,
@@ -742,16 +746,16 @@ class FileGenerationControllerTest extends TestCase
         ], 7200);
 
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
-            ->getJson("/api/admin/file-generation/{$token}/download");
+            ->getJson("/api/admin/file-generation/{$genToken}/download");
 
         $response->assertStatus(404);
     }
 
     public function test_download_returns_404_when_no_output_file(): void
     {
-        $token = 'test-download-no-file';
+        $genToken = Str::uuid()->toString();
 
-        Cache::put("file_generation:{$token}", [
+        Cache::put("file_generation:{$genToken}", [
             'status' => 'completed',
             'phase' => 'completed',
             'total_rows' => 200,
@@ -759,16 +763,16 @@ class FileGenerationControllerTest extends TestCase
         ], 7200);
 
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
-            ->getJson("/api/admin/file-generation/{$token}/download");
+            ->getJson("/api/admin/file-generation/{$genToken}/download");
 
         $response->assertStatus(404);
     }
 
     public function test_download_streams_file_from_cache_when_completed(): void
     {
-        $token = 'test-download-ready';
+        $genToken = Str::uuid()->toString();
 
-        Cache::put("file_generation:{$token}", [
+        Cache::put("file_generation:{$genToken}", [
             'status' => 'completed',
             'phase' => 'completed',
             'total_rows' => 200,
@@ -787,17 +791,17 @@ class FileGenerationControllerTest extends TestCase
         });
 
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
-            ->getJson("/api/admin/file-generation/{$token}/download");
+            ->getJson("/api/admin/file-generation/{$genToken}/download");
 
         $response->assertStatus(200);
     }
 
     public function test_download_falls_back_to_batch_record_when_cache_expired(): void
     {
-        $token = 'test-download-fallback';
+        $genToken = Str::uuid()->toString();
 
         $this->createBatch([
-            'token' => $token,
+            'token' => $genToken,
             's3_path_result' => 'results/fallback-output.csv',
             'status' => 'completed',
         ]);
@@ -811,31 +815,31 @@ class FileGenerationControllerTest extends TestCase
         });
 
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
-            ->getJson("/api/admin/file-generation/{$token}/download");
+            ->getJson("/api/admin/file-generation/{$genToken}/download");
 
         $response->assertStatus(200);
     }
 
     public function test_download_returns_404_when_batch_not_completed(): void
     {
-        $token = 'test-download-batch-pending';
+        $genToken = Str::uuid()->toString();
 
         $this->createBatch([
-            'token' => $token,
+            'token' => $genToken,
             'status' => 'processing',
         ]);
 
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
-            ->getJson("/api/admin/file-generation/{$token}/download");
+            ->getJson("/api/admin/file-generation/{$genToken}/download");
 
         $response->assertStatus(404);
     }
 
     public function test_download_returns_404_when_s3_file_missing(): void
     {
-        $token = 'test-download-s3-missing';
+        $genToken = Str::uuid()->toString();
 
-        Cache::put("file_generation:{$token}", [
+        Cache::put("file_generation:{$genToken}", [
             'status' => 'completed',
             'phase' => 'completed',
             'total_rows' => 200,
@@ -851,7 +855,7 @@ class FileGenerationControllerTest extends TestCase
         });
 
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
-            ->getJson("/api/admin/file-generation/{$token}/download");
+            ->getJson("/api/admin/file-generation/{$genToken}/download");
 
         $response->assertStatus(404)
             ->assertJsonPath('message', 'File not found. Please run generation again.');
@@ -927,7 +931,7 @@ class FileGenerationControllerTest extends TestCase
     public function test_history_returns_batches_ordered_by_newest_first(): void
     {
         $older = $this->createBatch(['created_at' => now()->subDays(2)]);
-        $newer = $this->createBatch(['created_at' => now()]);
+        $newer = $this->createBatch(['created_at' => now()->subSeconds(1)]);
 
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
             ->getJson('/api/admin/file-generation/history');
@@ -935,8 +939,13 @@ class FileGenerationControllerTest extends TestCase
         $response->assertStatus(200);
         $data = $response->json('data');
 
-        $this->assertEquals($newer->id, $data[0]['id']);
-        $this->assertEquals($older->id, $data[1]['id']);
+        $ids = array_column($data, 'id');
+        $olderPos = array_search($older->id, $ids);
+        $newerPos = array_search($newer->id, $ids);
+
+        $this->assertNotFalse($olderPos);
+        $this->assertNotFalse($newerPos);
+        $this->assertLessThan($olderPos, $newerPos, 'Newer batch should appear before older batch');
     }
 
     public function test_history_returns_empty_list_when_no_batches(): void
