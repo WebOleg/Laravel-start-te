@@ -7,7 +7,6 @@
 namespace App\Console\Commands;
 
 use App\Models\BillingAttempt;
-use App\Models\Chargeback;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -23,9 +22,9 @@ class BackfillChargebacksCommand extends Command
 
     public function handle(): int
     {
-        $dryRun  = $this->option('dry-run');
-        $limit   = $this->option('limit') ? (int) $this->option('limit') : null;
-        $chunk   = (int) $this->option('chunk');
+        $dryRun = $this->option('dry-run');
+        $limit  = $this->option('limit') ? (int) $this->option('limit') : null;
+        $chunk  = (int) $this->option('chunk');
 
         $existingIds = DB::table('chargebacks')
             ->whereNotNull('billing_attempt_id')
@@ -34,6 +33,7 @@ class BackfillChargebacksCommand extends Command
 
         $query = BillingAttempt::where('status', BillingAttempt::STATUS_CHARGEBACKED)
             ->whereNotNull('unique_id')
+            ->whereNotNull('debtor_id')
             ->orderBy('id');
 
         if ($limit) {
