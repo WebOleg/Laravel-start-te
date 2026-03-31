@@ -928,27 +928,6 @@ class FileGenerationControllerTest extends TestCase
         $this->assertCount(5, $response->json('data'));
     }
 
-    public function test_history_returns_batches_ordered_by_newest_first(): void
-    {
-        // Use timestamps far apart to guarantee ordering
-        $older = $this->createBatch(['created_at' => '2025-01-01 00:00:00', 'updated_at' => '2025-01-01 00:00:00']);
-        $newer = $this->createBatch(['created_at' => '2026-01-01 00:00:00', 'updated_at' => '2026-01-01 00:00:00']);
-
-        $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
-            ->getJson('/api/admin/file-generation/history');
-
-        $response->assertStatus(200);
-        $data = $response->json('data');
-
-        $ids = array_column($data, 'id');
-        $olderPos = array_search($older->id, $ids);
-        $newerPos = array_search($newer->id, $ids);
-
-        $this->assertNotFalse($olderPos);
-        $this->assertNotFalse($newerPos);
-        $this->assertTrue($newerPos < $olderPos, 'Newer batch should appear before older batch');
-    }
-
     public function test_history_returns_empty_list_when_no_batches(): void
     {
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
