@@ -13,6 +13,7 @@ use App\Jobs\FetchChargebackReasonJob;
 use App\Models\BillingAttempt;
 use App\Models\Debtor;
 use App\Models\Upload;
+use App\Services\ChargebackService;
 use App\Services\Emp\EmpBillingService;
 use App\Services\BlacklistService;
 use Illuminate\Support\Collection;
@@ -27,7 +28,8 @@ class ReconciliationService
 
     public function __construct(
         private EmpBillingService $billingService,
-        private BlacklistService $blacklistService
+        private BlacklistService $blacklistService,
+        private ChargebackService $chargebackService
     ) {}
 
     /**
@@ -218,10 +220,24 @@ class ReconciliationService
     }
 
     /**
-     * Handle chargeback - auto-blacklist
+     * Handle chargeback - dual-write to chargebacks table and auto-blacklist.
+     * Note: reason_code is not available from Reconcile API — it will be backfilled
+     * later by FetchChargebackReasonJob which calls EMP Chargeback API.
      */
     private function handleChargeback(BillingAttempt $attempt, array $result): void
     {
+        // Dual-write to chargebacks table — reason_code will be null here,
+        // FetchChargebackReasonJob will backfill it once EMP Chargeback API has it.
+        $this->chargebackService->createFromApiSync($attempt, [
+            'type'                           => '1st chargeback',
+            'reason_code'                    => $attempt->chargeback_reason_code,
+            'reason_description'             => $attempt->chargeback_reason_description,
+            'chargeback_amount'              => $attempt->amount,
+            'chargeback_currency'            => $attempt->currency,
+            'import_date'                    => now()->toDateString(),
+            'original_transan_unique_id' => $attempt->unique_id,
+        ]);
+
         if (!$attempt->debtor) {
             return;
         }
