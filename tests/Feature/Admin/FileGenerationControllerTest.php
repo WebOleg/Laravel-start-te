@@ -930,8 +930,9 @@ class FileGenerationControllerTest extends TestCase
 
     public function test_history_returns_batches_ordered_by_newest_first(): void
     {
-        $older = $this->createBatch(['created_at' => now()->subDays(2)]);
-        $newer = $this->createBatch(['created_at' => now()->subSeconds(1)]);
+        // Use timestamps far apart to guarantee ordering
+        $older = $this->createBatch(['created_at' => '2025-01-01 00:00:00', 'updated_at' => '2025-01-01 00:00:00']);
+        $newer = $this->createBatch(['created_at' => '2026-01-01 00:00:00', 'updated_at' => '2026-01-01 00:00:00']);
 
         $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
             ->getJson('/api/admin/file-generation/history');
@@ -945,7 +946,7 @@ class FileGenerationControllerTest extends TestCase
 
         $this->assertNotFalse($olderPos);
         $this->assertNotFalse($newerPos);
-        $this->assertLessThan($olderPos, $newerPos, 'Newer batch should appear before older batch');
+        $this->assertTrue($newerPos < $olderPos, 'Newer batch should appear before older batch');
     }
 
     public function test_history_returns_empty_list_when_no_batches(): void
