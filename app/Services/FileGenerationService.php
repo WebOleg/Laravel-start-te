@@ -214,9 +214,12 @@ class FileGenerationService
     /**
      * Select records and assign amounts using the specified pricing strategy.
      *
+     * When an exact match within tolerance is not possible the algorithm
+     * always prefers to *exceed* the target rather than fall short.
+     *
      * @param  array   $eligibleRows    Array of ['row_index' => int, 'row' => array, 'iban' => string]
      * @param  float   $targetAmount    e.g. 13000.00
-     * @param  float   $tolerance       e.g. 500.00
+     * @param  float   $tolerance       e.g. 200.00
      * @param  array   $amounts         Price ladder to use
      * @param  array   $weights         Corresponding weights for weighted random selection
      * @return array{selected: array[], achieved_amount: float}
@@ -230,23 +233,19 @@ class FileGenerationService
     ): array {
         $selected     = [];
         $runningTotal = 0.0;
-        $lowerBound   = $targetAmount - $tolerance;
         $upperBound   = $targetAmount + $tolerance;
 
         shuffle($eligibleRows);
 
         foreach ($eligibleRows as $candidate) {
-            if ($runningTotal >= $lowerBound && $runningTotal <= $upperBound) {
+            // Already at or above the target — stop.
+            if ($runningTotal >= $targetAmount) {
                 break;
             }
 
             $remaining = $upperBound - $runningTotal;
 
-            if ($remaining <= 0) {
-                break;
-            }
-
-            // Filter amounts that fit
+            // Filter amounts that fit within the upper bound
             $fitting        = [];
             $fittingWeights = [];
             foreach ($amounts as $i => $amount) {
@@ -259,14 +258,10 @@ class FileGenerationService
             if (!empty($fitting)) {
                 $chosenAmount = $this->weightedRandom($fitting, $fittingWeights);
             } else {
-                if ($runningTotal >= $lowerBound) {
-                    break;
-                }
-                // Force smallest available amount
+                // No amount fits within the upper bound, but we're still
+                // below the target — force the smallest amount to push us
+                // over the target rather than leaving a shortfall.
                 $chosenAmount = min($amounts);
-                if ($runningTotal + $chosenAmount > $upperBound + $tolerance) {
-                    break;
-                }
             }
 
             $selected[] = [

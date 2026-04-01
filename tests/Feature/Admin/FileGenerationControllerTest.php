@@ -368,7 +368,7 @@ class FileGenerationControllerTest extends TestCase
             ]);
 
         $response->assertStatus(202)
-            ->assertJsonPath('data.tolerance', 500);
+            ->assertJsonPath('data.tolerance', 200);
     }
 
     public function test_store_uses_default_strategy_when_not_provided(): void

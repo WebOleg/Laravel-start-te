@@ -46,7 +46,7 @@ class FileGenerationController extends Controller
 
         $file          = $request->file('file');
         $targetAmount  = (float) $request->input('target_amount');
-        $tolerance     = (float) $request->input('tolerance', 500);
+        $tolerance     = (float) $request->input('tolerance', 200);
         $strategy      = $request->input('pricing_strategy', FileGenerationService::DEFAULT_STRATEGY);
         $customAmounts = $request->input('custom_amounts');
 

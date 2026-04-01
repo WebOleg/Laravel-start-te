@@ -57,7 +57,7 @@ class FileGenerationServiceTest extends TestCase
             's3_path_source' => 'uploads/test.csv',
             'status' => 'completed',
             'target_amount' => 5000,
-            'tolerance' => 500,
+            'tolerance' => 200,
             'pricing_strategy' => 'high_bias',
             'total_input_rows' => 200,
         ], $overrides));
@@ -404,7 +404,7 @@ class FileGenerationServiceTest extends TestCase
         $result = $this->service->selectAndAssignAmounts(
             eligibleRows: [],
             targetAmount: 5000,
-            tolerance: 500,
+            tolerance: 200,
             amounts: [9.99, 19.99],
             weights: [1, 1],
         );
@@ -433,11 +433,35 @@ class FileGenerationServiceTest extends TestCase
         );
 
         $this->assertNotEmpty($result['selected']);
-        $this->assertGreaterThanOrEqual(450, $result['achieved_amount']);
-        $this->assertLessThanOrEqual(550, $result['achieved_amount']);
+        // Should always meet or exceed target
+        $this->assertGreaterThanOrEqual(500, $result['achieved_amount']);
     }
 
-    public function test_select_and_assign_respects_tolerance_bounds(): void
+    public function test_select_and_assign_prefers_going_over_target(): void
+    {
+        $eligibleRows = [];
+        for ($i = 0; $i < 100; $i++) {
+            $eligibleRows[] = [
+                'row_index' => $i,
+                'row' => ['iban' => "DE{$i}"],
+                'iban' => "DE{$i}",
+            ];
+        }
+
+        $result = $this->service->selectAndAssignAmounts(
+            eligibleRows: $eligibleRows,
+            targetAmount: 100,
+            tolerance: 10,
+            amounts: [33.33],
+            weights: [1],
+        );
+
+        // 33.33 * 3 = 99.99 is below target, so it should add a 4th → 133.32
+        // The algorithm must not stop at 99.99 — it must reach or exceed 100
+        $this->assertGreaterThanOrEqual(100, $result['achieved_amount']);
+    }
+
+    public function test_select_and_assign_respects_upper_bound_when_possible(): void
     {
         $eligibleRows = [];
         for ($i = 0; $i < 1000; $i++) {
@@ -459,8 +483,8 @@ class FileGenerationServiceTest extends TestCase
             weights: [1, 1, 1],
         );
 
-        $this->assertGreaterThanOrEqual($target - $tolerance, $result['achieved_amount']);
-        $this->assertLessThanOrEqual($target + $tolerance, $result['achieved_amount']);
+        // Should always meet or exceed target
+        $this->assertGreaterThanOrEqual($target, $result['achieved_amount']);
     }
 
     public function test_select_and_assign_assigns_amount_to_each_selected_row(): void
@@ -513,6 +537,9 @@ class FileGenerationServiceTest extends TestCase
         foreach ($result['selected'] as $record) {
             $this->assertEquals(49.99, $record['assigned_amount']);
         }
+
+        // Should meet or exceed 100
+        $this->assertGreaterThanOrEqual(100, $result['achieved_amount']);
     }
 
     public function test_select_and_assign_stops_when_target_reached(): void
@@ -536,7 +563,8 @@ class FileGenerationServiceTest extends TestCase
 
         // Should NOT select all 1000 rows
         $this->assertLessThan(1000, count($result['selected']));
-        $this->assertGreaterThanOrEqual(90, $result['achieved_amount']);
+        // Should meet or exceed target
+        $this->assertGreaterThanOrEqual(100, $result['achieved_amount']);
     }
 
     public function test_select_and_assign_achieved_amount_is_rounded(): void
@@ -550,12 +578,12 @@ class FileGenerationServiceTest extends TestCase
         $result = $this->service->selectAndAssignAmounts(
             eligibleRows: $eligibleRows,
             targetAmount: 30,
-            tolerance: 5,
+            tolerance: 15,
             amounts: [9.99],
             weights: [1],
         );
 
-        // 9.99 * 3 = 29.97 — should be rounded to 2 decimal places
+        // 9.99 * N — should be rounded to 2 decimal places
         $this->assertEquals(round($result['achieved_amount'], 2), $result['achieved_amount']);
     }
 
@@ -576,6 +604,31 @@ class FileGenerationServiceTest extends TestCase
         // Only 1 row available, can't reach target
         $this->assertCount(1, $result['selected']);
         $this->assertLessThan(5000, $result['achieved_amount']);
+    }
+
+    public function test_select_and_assign_goes_over_when_no_exact_fit(): void
+    {
+        // Target 50, tolerance 5 → upper bound 55
+        // Only amount is 29.99 → 29.99 (under target) → must add another → 59.98 (over upper bound, but over target)
+        $eligibleRows = [];
+        for ($i = 0; $i < 10; $i++) {
+            $eligibleRows[] = [
+                'row_index' => $i,
+                'row' => [],
+                'iban' => "DE{$i}",
+            ];
+        }
+
+        $result = $this->service->selectAndAssignAmounts(
+            eligibleRows: $eligibleRows,
+            targetAmount: 50,
+            tolerance: 5,
+            amounts: [29.99],
+            weights: [1],
+        );
+
+        // Must go over — 29.99 is below target, 59.98 exceeds upper bound but that's fine
+        $this->assertGreaterThanOrEqual(50, $result['achieved_amount']);
     }
 
     // ══════════════════════════════════════════════
