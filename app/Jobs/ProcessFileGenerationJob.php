@@ -115,6 +115,7 @@ class ProcessFileGenerationJob implements ShouldQueue, ShouldBeUnique
             $excludedBillingCount   = 0;
             $excludedPrevUsedCount  = 0;
             $excludedOtherCount     = 0;
+            $seenIbans = [];
 
             foreach ($clearanceService->streamRows($tempPath, $this->headers) as [$rowIndex, $row]) {
                 $processed++;
@@ -127,6 +128,14 @@ class ProcessFileGenerationJob implements ShouldQueue, ShouldBeUnique
                 }
 
                 $iban = $ibanValidator->normalize($rawIban);
+
+                if (isset($seenIbans[$iban])) {
+                    $excludedOtherCount++;
+                    $this->maybeUpdateFilterProgress($processed);
+                    continue;
+                }
+
+                $seenIbans[$iban] = true;
 
                 $check = $generationService->checkEligibility($iban, $previouslyUsed, $recentlyBilled);
 

@@ -306,9 +306,15 @@ class FileGenerationService
     public function persistSelectedRecords(FileGenerationBatch $batch, array $selected): void
     {
         $records = [];
+        $seen = [];
         $now = now();
 
         foreach ($selected as $item) {
+            if (isset($seen[$item['iban']])) {
+                continue;
+            }
+            $seen[$item['iban']] = true;
+
             $records[] = [
                 'batch_id'         => $batch->id,
                 'iban'             => $item['iban'],
