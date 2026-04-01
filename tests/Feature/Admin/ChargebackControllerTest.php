@@ -9,9 +9,11 @@ use App\Models\VopLog;
 use App\Models\Upload;
 use App\Models\EmpAccount;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Str;
 
 class ChargebackControllerTest extends TestCase
 {
@@ -24,6 +26,30 @@ class ChargebackControllerTest extends TestCase
         parent::setUp();
         Cache::flush();
         $this->user = User::factory()->create();
+    }
+
+    private function createChargebackedAttempt(array $attrs = []): BillingAttempt
+    {
+        $attempt = BillingAttempt::factory()->create(array_merge([
+            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+        ], $attrs));
+
+        DB::table('chargebacks')->insert([
+            'billing_attempt_id'             => $attempt->id,
+            'debtor_id'                      => $attempt->debtor_id,
+            'original_transaction_unique_id' => $attempt->unique_id ?? Str::uuid(),
+            'type'                           => '1st chargeback',
+            'reason_code'                    => $attempt->chargeback_reason_code,
+            'reason_description'             => $attempt->chargeback_reason_description,
+            'chargeback_amount'              => $attempt->amount,
+            'chargeback_currency'            => $attempt->currency ?? 'EUR',
+            'import_date'                    => now()->toDateString(),
+            'source'                         => 'api_sync',
+            'created_at'                     => now(),
+            'updated_at'                     => now(),
+        ]);
+
+        return $attempt;
     }
 
     public function test_chargebacks_index_requires_authentication(): void
@@ -43,22 +69,23 @@ class ChargebackControllerTest extends TestCase
         Sanctum::actingAs($this->user);
 
         $debtor = Debtor::factory()->create();
-        
+
         VopLog::factory()->create([
             'debtor_id' => $debtor->id,
             'bank_name' => 'Test Bank',
-            'country' => 'DE',
+            'country'   => 'DE',
         ]);
 
-        BillingAttempt::factory()->count(3)->create([
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'debtor_id' => $debtor->id,
-            'chargeback_reason_code' => 'AC01',
-            'chargeback_reason_description' => 'Account closed',
-        ]);
+        for ($i = 0; $i < 3; $i++) {
+            $this->createChargebackedAttempt([
+                'debtor_id'                      => $debtor->id,
+                'chargeback_reason_code'         => 'AC01',
+                'chargeback_reason_description'  => 'Account closed',
+            ]);
+        }
 
         BillingAttempt::factory()->count(2)->create([
-            'status' => BillingAttempt::STATUS_APPROVED,
+            'status'    => BillingAttempt::STATUS_APPROVED,
             'debtor_id' => $debtor->id,
         ]);
 
@@ -97,23 +124,25 @@ class ChargebackControllerTest extends TestCase
 
         $debtor = Debtor::factory()->create();
 
-        $oldest = BillingAttempt::factory()->create([
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'debtor_id' => $debtor->id,
+        $oldest = $this->createChargebackedAttempt([
+            'debtor_id'  => $debtor->id,
             'created_at' => now()->subDays(2),
         ]);
 
-        $newest = BillingAttempt::factory()->create([
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'debtor_id' => $debtor->id,
+        $newest = $this->createChargebackedAttempt([
+            'debtor_id'  => $debtor->id,
             'created_at' => now(),
         ]);
+
+        // Update import_date so ordering works
+        DB::table('chargebacks')->where('billing_attempt_id', $oldest->id)->update(['created_at' => now()->subDays(2), 'updated_at' => now()->subDays(2)]);
+        DB::table('chargebacks')->where('billing_attempt_id', $newest->id)->update(['created_at' => now(), 'updated_at' => now()]);
 
         $response = $this->getJson('/api/admin/chargebacks');
 
         $response->assertStatus(200);
         $data = $response->json('data');
-        
+
         $this->assertEquals($newest->id, $data[0]['id']);
         $this->assertEquals($oldest->id, $data[1]['id']);
     }
@@ -123,23 +152,9 @@ class ChargebackControllerTest extends TestCase
         Sanctum::actingAs($this->user);
         $debtor = Debtor::factory()->create();
 
-        BillingAttempt::factory()->create([
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'debtor_id' => $debtor->id,
-            'chargeback_reason_code' => 'AC01',
-        ]);
-
-        BillingAttempt::factory()->create([
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'debtor_id' => $debtor->id,
-            'chargeback_reason_code' => 'MD01',
-        ]);
-
-        BillingAttempt::factory()->create([
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'debtor_id' => $debtor->id,
-            'chargeback_reason_code' => 'AC01',
-        ]);
+        $this->createChargebackedAttempt(['debtor_id' => $debtor->id, 'chargeback_reason_code' => 'AC01']);
+        $this->createChargebackedAttempt(['debtor_id' => $debtor->id, 'chargeback_reason_code' => 'MD01']);
+        $this->createChargebackedAttempt(['debtor_id' => $debtor->id, 'chargeback_reason_code' => 'AC01']);
 
         $response = $this->getJson('/api/admin/chargebacks?code=AC01');
 
@@ -156,10 +171,9 @@ class ChargebackControllerTest extends TestCase
         Sanctum::actingAs($this->user);
         $debtor = Debtor::factory()->create();
 
-        BillingAttempt::factory()->count(15)->create([
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'debtor_id' => $debtor->id,
-        ]);
+        for ($i = 0; $i < 15; $i++) {
+            $this->createChargebackedAttempt(['debtor_id' => $debtor->id]);
+        }
 
         $response = $this->getJson('/api/admin/chargebacks?per_page=5');
 
@@ -174,10 +188,9 @@ class ChargebackControllerTest extends TestCase
         Sanctum::actingAs($this->user);
         $debtor = Debtor::factory()->create();
 
-        BillingAttempt::factory()->count(60)->create([
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'debtor_id' => $debtor->id,
-        ]);
+        for ($i = 0; $i < 60; $i++) {
+            $this->createChargebackedAttempt(['debtor_id' => $debtor->id]);
+        }
 
         $response = $this->getJson('/api/admin/chargebacks');
 
@@ -208,15 +221,12 @@ class ChargebackControllerTest extends TestCase
             'iban' => 'DE89370400440532013000',
         ]);
 
-        BillingAttempt::factory()->create([
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'debtor_id' => $debtor->id,
-        ]);
+        $this->createChargebackedAttempt(['debtor_id' => $debtor->id]);
 
         $response = $this->getJson('/api/admin/chargebacks');
 
         $response->assertStatus(200);
-        
+
         $returnedIban = $response->json('data.0.debtor.iban');
         $this->assertEquals('DE89370400440532013000', $returnedIban);
     }
@@ -226,17 +236,14 @@ class ChargebackControllerTest extends TestCase
         Sanctum::actingAs($this->user);
 
         $debtor = Debtor::factory()->create();
-        
+
         VopLog::factory()->create([
             'debtor_id' => $debtor->id,
             'bank_name' => 'Deutsche Bank',
-            'country' => 'DE',
+            'country'   => 'DE',
         ]);
 
-        BillingAttempt::factory()->create([
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'debtor_id' => $debtor->id,
-        ]);
+        $this->createChargebackedAttempt(['debtor_id' => $debtor->id]);
 
         $response = $this->getJson('/api/admin/chargebacks');
 
@@ -250,23 +257,9 @@ class ChargebackControllerTest extends TestCase
         Sanctum::actingAs($this->user);
         $debtor = Debtor::factory()->create();
 
-        BillingAttempt::factory()->create([
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'debtor_id' => $debtor->id,
-            'chargeback_reason_code' => 'AC01',
-        ]);
-
-        BillingAttempt::factory()->create([
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'debtor_id' => $debtor->id,
-            'chargeback_reason_code' => 'MD01',
-        ]);
-
-        BillingAttempt::factory()->create([
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'debtor_id' => $debtor->id,
-            'chargeback_reason_code' => 'AC01',
-        ]);
+        $this->createChargebackedAttempt(['debtor_id' => $debtor->id, 'chargeback_reason_code' => 'AC01']);
+        $this->createChargebackedAttempt(['debtor_id' => $debtor->id, 'chargeback_reason_code' => 'MD01']);
+        $this->createChargebackedAttempt(['debtor_id' => $debtor->id, 'chargeback_reason_code' => 'AC01']);
 
         $response = $this->getJson('/api/admin/chargebacks/codes');
 
@@ -284,29 +277,15 @@ class ChargebackControllerTest extends TestCase
         Sanctum::actingAs($this->user);
         $debtor = Debtor::factory()->create();
 
-        BillingAttempt::factory()->create([
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'debtor_id' => $debtor->id,
-            'chargeback_reason_code' => 'MD01',
-        ]);
-
-        BillingAttempt::factory()->create([
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'debtor_id' => $debtor->id,
-            'chargeback_reason_code' => 'AC01',
-        ]);
-
-        BillingAttempt::factory()->create([
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'debtor_id' => $debtor->id,
-            'chargeback_reason_code' => 'AG01',
-        ]);
+        $this->createChargebackedAttempt(['debtor_id' => $debtor->id, 'chargeback_reason_code' => 'MD01']);
+        $this->createChargebackedAttempt(['debtor_id' => $debtor->id, 'chargeback_reason_code' => 'AC01']);
+        $this->createChargebackedAttempt(['debtor_id' => $debtor->id, 'chargeback_reason_code' => 'AG01']);
 
         $response = $this->getJson('/api/admin/chargebacks/codes');
 
         $response->assertStatus(200);
         $codes = $response->json('data');
-        
+
         $this->assertEquals(['AC01', 'AG01', 'MD01'], $codes);
     }
 
@@ -315,21 +294,17 @@ class ChargebackControllerTest extends TestCase
         Sanctum::actingAs($this->user);
         $debtor = Debtor::factory()->create();
 
-        BillingAttempt::factory()->create([
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'debtor_id' => $debtor->id,
-            'chargeback_reason_code' => 'AC01',
-        ]);
+        $this->createChargebackedAttempt(['debtor_id' => $debtor->id, 'chargeback_reason_code' => 'AC01']);
 
         BillingAttempt::factory()->create([
-            'status' => BillingAttempt::STATUS_DECLINED,
-            'debtor_id' => $debtor->id,
+            'status'                 => BillingAttempt::STATUS_DECLINED,
+            'debtor_id'              => $debtor->id,
             'chargeback_reason_code' => 'AM04',
         ]);
 
         BillingAttempt::factory()->create([
-            'status' => BillingAttempt::STATUS_ERROR,
-            'debtor_id' => $debtor->id,
+            'status'                 => BillingAttempt::STATUS_ERROR,
+            'debtor_id'              => $debtor->id,
             'chargeback_reason_code' => 'SY01',
         ]);
 
@@ -344,17 +319,8 @@ class ChargebackControllerTest extends TestCase
         Sanctum::actingAs($this->user);
         $debtor = Debtor::factory()->create();
 
-        BillingAttempt::factory()->create([
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'debtor_id' => $debtor->id,
-            'chargeback_reason_code' => 'AC01',
-        ]);
-
-        BillingAttempt::factory()->create([
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'debtor_id' => $debtor->id,
-            'chargeback_reason_code' => null,
-        ]);
+        $this->createChargebackedAttempt(['debtor_id' => $debtor->id, 'chargeback_reason_code' => 'AC01']);
+        $this->createChargebackedAttempt(['debtor_id' => $debtor->id, 'chargeback_reason_code' => null]);
 
         $response = $this->getJson('/api/admin/chargebacks/codes');
 
@@ -377,20 +343,12 @@ class ChargebackControllerTest extends TestCase
         Sanctum::actingAs($this->user);
         $debtor = Debtor::factory()->create();
 
-        BillingAttempt::factory()->create([
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'debtor_id' => $debtor->id,
-            'chargeback_reason_code' => 'AC01',
-        ]);
+        $this->createChargebackedAttempt(['debtor_id' => $debtor->id, 'chargeback_reason_code' => 'AC01']);
 
         $response1 = $this->getJson('/api/admin/chargebacks/codes');
         $response1->assertStatus(200)->assertJson(['data' => ['AC01']]);
 
-        BillingAttempt::factory()->create([
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'debtor_id' => $debtor->id,
-            'chargeback_reason_code' => 'MD01',
-        ]);
+        $this->createChargebackedAttempt(['debtor_id' => $debtor->id, 'chargeback_reason_code' => 'MD01']);
 
         $response2 = $this->getJson('/api/admin/chargebacks/codes');
         $response2->assertStatus(200)->assertJson(['data' => ['AC01']]);
@@ -398,7 +356,7 @@ class ChargebackControllerTest extends TestCase
 
     public function test_upload_reasons_requires_authentication(): void
     {
-        $upload = Upload::factory()->create();
+        $upload   = Upload::factory()->create();
         $response = $this->getJson("/api/admin/chargebacks/upload/{$upload->id}");
         $response->assertStatus(401);
     }
@@ -437,17 +395,18 @@ class ChargebackControllerTest extends TestCase
         BillingAttempt::factory()->count(7)->create([
             'upload_id' => $upload->id,
             'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_APPROVED,
-            'amount' => 100,
+            'status'    => BillingAttempt::STATUS_APPROVED,
+            'amount'    => 100,
         ]);
 
-        BillingAttempt::factory()->count(3)->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'amount' => 100,
-            'chargeback_reason_code' => 'AC01',
-        ]);
+        for ($i = 0; $i < 3; $i++) {
+            $this->createChargebackedAttempt([
+                'upload_id'              => $upload->id,
+                'debtor_id'              => $debtor->id,
+                'amount'                 => 100,
+                'chargeback_reason_code' => 'AC01',
+            ]);
+        }
 
         $response = $this->getJson("/api/admin/chargebacks/upload/{$upload->id}");
 
@@ -465,23 +424,25 @@ class ChargebackControllerTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
 
-        BillingAttempt::factory()->count(5)->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'amount' => 100,
-            'chargeback_reason_code' => 'AC01',
-            'chargeback_reason_description' => 'Account Closed',
-        ]);
+        for ($i = 0; $i < 5; $i++) {
+            $this->createChargebackedAttempt([
+                'upload_id'                     => $upload->id,
+                'debtor_id'                     => $debtor->id,
+                'amount'                        => 100,
+                'chargeback_reason_code'        => 'AC01',
+                'chargeback_reason_description' => 'Account Closed',
+            ]);
+        }
 
-        BillingAttempt::factory()->count(3)->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'amount' => 50,
-            'chargeback_reason_code' => 'MD01',
-            'chargeback_reason_description' => 'Missing Data',
-        ]);
+        for ($i = 0; $i < 3; $i++) {
+            $this->createChargebackedAttempt([
+                'upload_id'                     => $upload->id,
+                'debtor_id'                     => $debtor->id,
+                'amount'                        => 50,
+                'chargeback_reason_code'        => 'MD01',
+                'chargeback_reason_description' => 'Missing Data',
+            ]);
+        }
 
         $response = $this->getJson("/api/admin/chargebacks/upload/{$upload->id}");
 
@@ -489,12 +450,12 @@ class ChargebackControllerTest extends TestCase
             ->assertJsonCount(2, 'reasons');
 
         $reasons = $response->json('reasons');
-        
+
         $this->assertEquals('AC01', $reasons[0]['code']);
         $this->assertEquals('Account Closed', $reasons[0]['reason']);
         $this->assertEquals(5, $reasons[0]['cb_count']);
         $this->assertEquals(500, $reasons[0]['cb_amount']);
-        
+
         $this->assertEquals('MD01', $reasons[1]['code']);
         $this->assertEquals(3, $reasons[1]['cb_count']);
         $this->assertEquals(150, $reasons[1]['cb_amount']);
@@ -509,15 +470,16 @@ class ChargebackControllerTest extends TestCase
         BillingAttempt::factory()->count(6)->create([
             'upload_id' => $upload->id,
             'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_APPROVED,
+            'status'    => BillingAttempt::STATUS_APPROVED,
         ]);
 
-        BillingAttempt::factory()->count(4)->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargeback_reason_code' => 'AC01',
-        ]);
+        for ($i = 0; $i < 4; $i++) {
+            $this->createChargebackedAttempt([
+                'upload_id'              => $upload->id,
+                'debtor_id'              => $debtor->id,
+                'chargeback_reason_code' => 'AC01',
+            ]);
+        }
 
         $response = $this->getJson("/api/admin/chargebacks/upload/{$upload->id}");
 
@@ -531,26 +493,28 @@ class ChargebackControllerTest extends TestCase
     public function test_upload_reasons_filters_by_emp_account_id(): void
     {
         Sanctum::actingAs($this->user);
-        $upload = Upload::factory()->create();
-        $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
+        $upload      = Upload::factory()->create();
+        $debtor      = Debtor::factory()->create(['upload_id' => $upload->id]);
         $empAccount1 = EmpAccount::factory()->create();
         $empAccount2 = EmpAccount::factory()->create();
 
-        BillingAttempt::factory()->count(5)->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'emp_account_id' => $empAccount1->id,
-            'chargeback_reason_code' => 'AC01',
-        ]);
+        for ($i = 0; $i < 5; $i++) {
+            $this->createChargebackedAttempt([
+                'upload_id'              => $upload->id,
+                'debtor_id'              => $debtor->id,
+                'emp_account_id'         => $empAccount1->id,
+                'chargeback_reason_code' => 'AC01',
+            ]);
+        }
 
-        BillingAttempt::factory()->count(3)->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'emp_account_id' => $empAccount2->id,
-            'chargeback_reason_code' => 'AC01',
-        ]);
+        for ($i = 0; $i < 3; $i++) {
+            $this->createChargebackedAttempt([
+                'upload_id'              => $upload->id,
+                'debtor_id'              => $debtor->id,
+                'emp_account_id'         => $empAccount2->id,
+                'chargeback_reason_code' => 'AC01',
+            ]);
+        }
 
         $response = $this->getJson("/api/admin/chargebacks/upload/{$upload->id}?emp_account_id={$empAccount1->id}");
 
@@ -565,24 +529,26 @@ class ChargebackControllerTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
 
-        BillingAttempt::factory()->count(3)->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargebacked_at' => now()->subDays(10),
-            'chargeback_reason_code' => 'AC01',
-        ]);
+        for ($i = 0; $i < 3; $i++) {
+            $this->createChargebackedAttempt([
+                'upload_id'              => $upload->id,
+                'debtor_id'              => $debtor->id,
+                'chargebacked_at'        => now()->subDays(10),
+                'chargeback_reason_code' => 'AC01',
+            ]);
+        }
 
-        BillingAttempt::factory()->count(5)->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargebacked_at' => now(),
-            'chargeback_reason_code' => 'AC01',
-        ]);
+        for ($i = 0; $i < 5; $i++) {
+            $this->createChargebackedAttempt([
+                'upload_id'              => $upload->id,
+                'debtor_id'              => $debtor->id,
+                'chargebacked_at'        => now(),
+                'chargeback_reason_code' => 'AC01',
+            ]);
+        }
 
         $startDate = now()->subDays(5)->toDateString();
-        $endDate = now()->toDateString();
+        $endDate   = now()->toDateString();
 
         $response = $this->getJson("/api/admin/chargebacks/upload/{$upload->id}?start_date={$startDate}&end_date={$endDate}");
 
@@ -613,7 +579,7 @@ class ChargebackControllerTest extends TestCase
 
     public function test_upload_reason_records_requires_authentication(): void
     {
-        $upload = Upload::factory()->create();
+        $upload   = Upload::factory()->create();
         $response = $this->getJson("/api/admin/chargebacks/upload/{$upload->id}/AC01/records");
         $response->assertStatus(401);
     }
@@ -624,19 +590,21 @@ class ChargebackControllerTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
 
-        $chargebacksAC01 = BillingAttempt::factory()->count(3)->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargeback_reason_code' => 'AC01',
-        ]);
+        for ($i = 0; $i < 3; $i++) {
+            $this->createChargebackedAttempt([
+                'upload_id'              => $upload->id,
+                'debtor_id'              => $debtor->id,
+                'chargeback_reason_code' => 'AC01',
+            ]);
+        }
 
-        BillingAttempt::factory()->count(2)->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargeback_reason_code' => 'MD01',
-        ]);
+        for ($i = 0; $i < 2; $i++) {
+            $this->createChargebackedAttempt([
+                'upload_id'              => $upload->id,
+                'debtor_id'              => $debtor->id,
+                'chargeback_reason_code' => 'MD01',
+            ]);
+        }
 
         $response = $this->getJson("/api/admin/chargebacks/upload/{$upload->id}/AC01/records");
 
@@ -677,12 +645,13 @@ class ChargebackControllerTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
 
-        BillingAttempt::factory()->count(250)->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargeback_reason_code' => 'AC01',
-        ]);
+        for ($i = 0; $i < 250; $i++) {
+            $this->createChargebackedAttempt([
+                'upload_id'              => $upload->id,
+                'debtor_id'              => $debtor->id,
+                'chargeback_reason_code' => 'AC01',
+            ]);
+        }
 
         $response = $this->getJson("/api/admin/chargebacks/upload/{$upload->id}/AC01/records?per_page=50");
 
@@ -698,12 +667,13 @@ class ChargebackControllerTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
 
-        BillingAttempt::factory()->count(150)->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargeback_reason_code' => 'AC01',
-        ]);
+        for ($i = 0; $i < 150; $i++) {
+            $this->createChargebackedAttempt([
+                'upload_id'              => $upload->id,
+                'debtor_id'              => $debtor->id,
+                'chargeback_reason_code' => 'AC01',
+            ]);
+        }
 
         $response = $this->getJson("/api/admin/chargebacks/upload/{$upload->id}/AC01/records");
 
@@ -718,12 +688,13 @@ class ChargebackControllerTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
 
-        BillingAttempt::factory()->count(200)->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargeback_reason_code' => 'AC01',
-        ]);
+        for ($i = 0; $i < 200; $i++) {
+            $this->createChargebackedAttempt([
+                'upload_id'              => $upload->id,
+                'debtor_id'              => $debtor->id,
+                'chargeback_reason_code' => 'AC01',
+            ]);
+        }
 
         $response = $this->getJson("/api/admin/chargebacks/upload/{$upload->id}/AC01/records?per_page=200");
 
@@ -748,17 +719,18 @@ class ChargebackControllerTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
 
-        BillingAttempt::factory()->count(3)->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargeback_reason_code' => 'AC01',
-        ]);
+        for ($i = 0; $i < 3; $i++) {
+            $this->createChargebackedAttempt([
+                'upload_id'              => $upload->id,
+                'debtor_id'              => $debtor->id,
+                'chargeback_reason_code' => 'AC01',
+            ]);
+        }
 
         BillingAttempt::factory()->count(2)->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_DECLINED,
+            'upload_id'              => $upload->id,
+            'debtor_id'              => $debtor->id,
+            'status'                 => BillingAttempt::STATUS_DECLINED,
             'chargeback_reason_code' => 'AC01',
         ]);
 
@@ -773,17 +745,16 @@ class ChargebackControllerTest extends TestCase
         Sanctum::actingAs($this->user);
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create([
-            'upload_id' => $upload->id,
+            'upload_id'  => $upload->id,
             'first_name' => 'John',
-            'last_name' => 'Doe',
-            'email' => 'john@example.com',
-            'iban' => 'DE89370400440532013000',
+            'last_name'  => 'Doe',
+            'email'      => 'john@example.com',
+            'iban'       => 'DE89370400440532013000',
         ]);
 
-        BillingAttempt::factory()->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+        $this->createChargebackedAttempt([
+            'upload_id'              => $upload->id,
+            'debtor_id'              => $debtor->id,
             'chargeback_reason_code' => 'AC01',
         ]);
 
@@ -805,13 +776,12 @@ class ChargebackControllerTest extends TestCase
         VopLog::factory()->create([
             'debtor_id' => $debtor->id,
             'bank_name' => 'Deutsche Bank',
-            'country' => 'DE',
+            'country'   => 'DE',
         ]);
 
-        BillingAttempt::factory()->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+        $this->createChargebackedAttempt([
+            'upload_id'              => $upload->id,
+            'debtor_id'              => $debtor->id,
             'chargeback_reason_code' => 'AC01',
         ]);
 
@@ -848,27 +818,27 @@ class ChargebackControllerTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
 
-        $oldest = BillingAttempt::factory()->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+        $oldest = $this->createChargebackedAttempt([
+            'upload_id'              => $upload->id,
+            'debtor_id'              => $debtor->id,
             'chargeback_reason_code' => 'AC01',
-            'chargebacked_at' => now()->subDays(5),
+            'chargebacked_at'        => now()->subDays(5),
         ]);
+        DB::table('chargebacks')->where('billing_attempt_id', $oldest->id)->update(['import_date' => now()->subDays(5)->toDateString()]);
 
-        $newest = BillingAttempt::factory()->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+        $newest = $this->createChargebackedAttempt([
+            'upload_id'              => $upload->id,
+            'debtor_id'              => $debtor->id,
             'chargeback_reason_code' => 'AC01',
-            'chargebacked_at' => now(),
+            'chargebacked_at'        => now(),
         ]);
+        DB::table('chargebacks')->where('billing_attempt_id', $newest->id)->update(['import_date' => now()->toDateString()]);
 
         $response = $this->getJson("/api/admin/chargebacks/upload/{$upload->id}/AC01/records");
 
         $response->assertStatus(200);
         $data = $response->json('data');
-        
+
         $this->assertEquals($newest->id, $data[0]['id']);
         $this->assertEquals($oldest->id, $data[1]['id']);
     }
@@ -879,20 +849,22 @@ class ChargebackControllerTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
 
-        BillingAttempt::factory()->count(2)->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargeback_reason_code' => null,
-            'chargeback_reason_description' => null,
-        ]);
+        for ($i = 0; $i < 2; $i++) {
+            $this->createChargebackedAttempt([
+                'upload_id'                     => $upload->id,
+                'debtor_id'                     => $debtor->id,
+                'chargeback_reason_code'        => null,
+                'chargeback_reason_description' => null,
+            ]);
+        }
 
-        BillingAttempt::factory()->count(3)->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargeback_reason_code' => 'AC01',
-        ]);
+        for ($i = 0; $i < 3; $i++) {
+            $this->createChargebackedAttempt([
+                'upload_id'              => $upload->id,
+                'debtor_id'              => $debtor->id,
+                'chargeback_reason_code' => 'AC01',
+            ]);
+        }
 
         $response = $this->getJson("/api/admin/chargebacks/upload/{$upload->id}");
 
@@ -907,13 +879,14 @@ class ChargebackControllerTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
 
-        BillingAttempt::factory()->count(5)->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'amount' => 999999.99,
-            'chargeback_reason_code' => 'AC01',
-        ]);
+        for ($i = 0; $i < 5; $i++) {
+            $this->createChargebackedAttempt([
+                'upload_id'              => $upload->id,
+                'debtor_id'              => $debtor->id,
+                'amount'                 => 999999.99,
+                'chargeback_reason_code' => 'AC01',
+            ]);
+        }
 
         $response = $this->getJson("/api/admin/chargebacks/upload/{$upload->id}");
 
@@ -927,12 +900,13 @@ class ChargebackControllerTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
 
-        BillingAttempt::factory()->count(10)->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargeback_reason_code' => 'AC01',
-        ]);
+        for ($i = 0; $i < 10; $i++) {
+            $this->createChargebackedAttempt([
+                'upload_id'              => $upload->id,
+                'debtor_id'              => $debtor->id,
+                'chargeback_reason_code' => 'AC01',
+            ]);
+        }
 
         $response = $this->getJson("/api/admin/chargebacks/upload/{$upload->id}");
 
@@ -950,10 +924,9 @@ class ChargebackControllerTest extends TestCase
         $codes = ['AC01', 'MD01', 'AM04', 'SY01', 'AG01', 'MS02', 'AM02', 'CB21'];
 
         foreach ($codes as $code) {
-            BillingAttempt::factory()->create([
-                'upload_id' => $upload->id,
-                'debtor_id' => $debtor->id,
-                'status' => BillingAttempt::STATUS_CHARGEBACKED,
+            $this->createChargebackedAttempt([
+                'upload_id'              => $upload->id,
+                'debtor_id'              => $debtor->id,
                 'chargeback_reason_code' => $code,
             ]);
         }
@@ -972,16 +945,15 @@ class ChargebackControllerTest extends TestCase
     public function test_upload_reasons_with_zero_count_emp_account_filter(): void
     {
         Sanctum::actingAs($this->user);
-        $upload = Upload::factory()->create();
-        $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
+        $upload      = Upload::factory()->create();
+        $debtor      = Debtor::factory()->create(['upload_id' => $upload->id]);
         $empAccount1 = EmpAccount::factory()->create();
         $empAccount2 = EmpAccount::factory()->create();
 
-        BillingAttempt::factory()->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'emp_account_id' => $empAccount1->id,
+        $this->createChargebackedAttempt([
+            'upload_id'              => $upload->id,
+            'debtor_id'              => $debtor->id,
+            'emp_account_id'         => $empAccount1->id,
             'chargeback_reason_code' => 'AC01',
         ]);
 
@@ -998,32 +970,33 @@ class ChargebackControllerTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
 
-        BillingAttempt::factory()->count(1)->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargebacked_at' => now()->subDays(20),
+        $this->createChargebackedAttempt([
+            'upload_id'              => $upload->id,
+            'debtor_id'              => $debtor->id,
+            'chargebacked_at'        => now()->subDays(20),
             'chargeback_reason_code' => 'AC01',
         ]);
 
-        BillingAttempt::factory()->count(5)->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargebacked_at' => now()->subDays(8),
-            'chargeback_reason_code' => 'AC01',
-        ]);
+        for ($i = 0; $i < 5; $i++) {
+            $this->createChargebackedAttempt([
+                'upload_id'              => $upload->id,
+                'debtor_id'              => $debtor->id,
+                'chargebacked_at'        => now()->subDays(8),
+                'chargeback_reason_code' => 'AC01',
+            ]);
+        }
 
-        BillingAttempt::factory()->count(3)->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargebacked_at' => now(),
-            'chargeback_reason_code' => 'AC01',
-        ]);
+        for ($i = 0; $i < 3; $i++) {
+            $this->createChargebackedAttempt([
+                'upload_id'              => $upload->id,
+                'debtor_id'              => $debtor->id,
+                'chargebacked_at'        => now(),
+                'chargeback_reason_code' => 'AC01',
+            ]);
+        }
 
         $startDate = now()->subDays(15)->toDateString();
-        $endDate = now()->subDays(1)->toDateString();
+        $endDate   = now()->subDays(1)->toDateString();
 
         $response = $this->getJson("/api/admin/chargebacks/upload/{$upload->id}?start_date={$startDate}&end_date={$endDate}");
 
@@ -1035,24 +1008,23 @@ class ChargebackControllerTest extends TestCase
     public function test_upload_reasons_with_same_date_start_and_end(): void
     {
         Sanctum::actingAs($this->user);
-        $upload = Upload::factory()->create();
-        $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
-
+        $upload     = Upload::factory()->create();
+        $debtor     = Debtor::factory()->create(['upload_id' => $upload->id]);
         $targetDate = now()->subDays(5);
 
-        BillingAttempt::factory()->count(3)->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargebacked_at' => $targetDate->copy()->startOfDay(),
-            'chargeback_reason_code' => 'AC01',
-        ]);
+        for ($i = 0; $i < 3; $i++) {
+            $this->createChargebackedAttempt([
+                'upload_id'              => $upload->id,
+                'debtor_id'              => $debtor->id,
+                'chargebacked_at'        => $targetDate->copy()->startOfDay(),
+                'chargeback_reason_code' => 'AC01',
+            ]);
+        }
 
-        BillingAttempt::factory()->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargebacked_at' => $targetDate->copy()->addDays(1)->startOfDay(),
+        $this->createChargebackedAttempt([
+            'upload_id'              => $upload->id,
+            'debtor_id'              => $debtor->id,
+            'chargebacked_at'        => $targetDate->copy()->addDays(1)->startOfDay(),
             'chargeback_reason_code' => 'AC01',
         ]);
 
@@ -1071,29 +1043,30 @@ class ChargebackControllerTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
 
-        BillingAttempt::factory()->count(5)->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargeback_reason_code' => 'AC01',
-        ]);
+        for ($i = 0; $i < 5; $i++) {
+            $this->createChargebackedAttempt([
+                'upload_id'              => $upload->id,
+                'debtor_id'              => $debtor->id,
+                'chargeback_reason_code' => 'AC01',
+            ]);
+        }
 
         BillingAttempt::factory()->count(3)->create([
             'upload_id' => $upload->id,
             'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_APPROVED,
+            'status'    => BillingAttempt::STATUS_APPROVED,
         ]);
 
         BillingAttempt::factory()->count(2)->create([
             'upload_id' => $upload->id,
             'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_DECLINED,
+            'status'    => BillingAttempt::STATUS_DECLINED,
         ]);
 
         BillingAttempt::factory()->count(1)->create([
             'upload_id' => $upload->id,
             'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_ERROR,
+            'status'    => BillingAttempt::STATUS_ERROR,
         ]);
 
         $response = $this->getJson("/api/admin/chargebacks/upload/{$upload->id}");
@@ -1109,12 +1082,13 @@ class ChargebackControllerTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
 
-        BillingAttempt::factory()->count(5)->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargeback_reason_code' => 'AC01',
-        ]);
+        for ($i = 0; $i < 5; $i++) {
+            $this->createChargebackedAttempt([
+                'upload_id'              => $upload->id,
+                'debtor_id'              => $debtor->id,
+                'chargeback_reason_code' => 'AC01',
+            ]);
+        }
 
         $response = $this->getJson("/api/admin/chargebacks/upload/{$upload->id}");
 
@@ -1129,19 +1103,21 @@ class ChargebackControllerTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
 
-        BillingAttempt::factory()->count(3)->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargeback_reason_code' => null,
-        ]);
+        for ($i = 0; $i < 3; $i++) {
+            $this->createChargebackedAttempt([
+                'upload_id'              => $upload->id,
+                'debtor_id'              => $debtor->id,
+                'chargeback_reason_code' => null,
+            ]);
+        }
 
-        BillingAttempt::factory()->count(2)->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargeback_reason_code' => 'AC01',
-        ]);
+        for ($i = 0; $i < 2; $i++) {
+            $this->createChargebackedAttempt([
+                'upload_id'              => $upload->id,
+                'debtor_id'              => $debtor->id,
+                'chargeback_reason_code' => 'AC01',
+            ]);
+        }
 
         $response = $this->getJson("/api/admin/chargebacks/upload/{$upload->id}/null/records");
 
@@ -1152,16 +1128,17 @@ class ChargebackControllerTest extends TestCase
     public function test_upload_reason_records_with_special_characters_in_code(): void
     {
         Sanctum::actingAs($this->user);
-        $upload = Upload::factory()->create();
-        $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
-
+        $upload      = Upload::factory()->create();
+        $debtor      = Debtor::factory()->create(['upload_id' => $upload->id]);
         $specialCode = 'AC-01';
-        BillingAttempt::factory()->count(2)->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargeback_reason_code' => $specialCode,
-        ]);
+
+        for ($i = 0; $i < 2; $i++) {
+            $this->createChargebackedAttempt([
+                'upload_id'              => $upload->id,
+                'debtor_id'              => $debtor->id,
+                'chargeback_reason_code' => $specialCode,
+            ]);
+        }
 
         $response = $this->getJson("/api/admin/chargebacks/upload/{$upload->id}/{$specialCode}/records");
 
@@ -1175,12 +1152,13 @@ class ChargebackControllerTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
 
-        BillingAttempt::factory()->count(5000)->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargeback_reason_code' => 'AC01',
-        ]);
+        for ($i = 0; $i < 5000; $i++) {
+            $this->createChargebackedAttempt([
+                'upload_id'              => $upload->id,
+                'debtor_id'              => $debtor->id,
+                'chargeback_reason_code' => 'AC01',
+            ]);
+        }
 
         $response = $this->getJson("/api/admin/chargebacks/upload/{$upload->id}/AC01/records?per_page=100");
 
@@ -1196,28 +1174,25 @@ class ChargebackControllerTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
 
-        $records = BillingAttempt::factory()->count(250)->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargeback_reason_code' => 'AC01',
-        ]);
+        for ($i = 0; $i < 250; $i++) {
+            $this->createChargebackedAttempt([
+                'upload_id'              => $upload->id,
+                'debtor_id'              => $debtor->id,
+                'chargeback_reason_code' => 'AC01',
+            ]);
+        }
 
-        $response1 = $this->getJson("/api/admin/chargebacks/upload/{$upload->id}/AC01/records?per_page=50&page=1");
-        $page1Data = $response1->json('data');
-
-        $response2 = $this->getJson("/api/admin/chargebacks/upload/{$upload->id}/AC01/records?per_page=50&page=2");
-        $page2Data = $response2->json('data');
-
-        $response3 = $this->getJson("/api/admin/chargebacks/upload/{$upload->id}/AC01/records?per_page=50&page=3");
-        $page3Data = $response3->json('data');
+        $response1   = $this->getJson("/api/admin/chargebacks/upload/{$upload->id}/AC01/records?per_page=50&page=1");
+        $page1Data   = $response1->json('data');
+        $response2   = $this->getJson("/api/admin/chargebacks/upload/{$upload->id}/AC01/records?per_page=50&page=2");
+        $page2Data   = $response2->json('data');
+        $response3   = $this->getJson("/api/admin/chargebacks/upload/{$upload->id}/AC01/records?per_page=50&page=3");
+        $page3Data   = $response3->json('data');
 
         $this->assertNotEquals($page1Data[0]['id'], $page2Data[0]['id']);
         $this->assertNotEquals($page2Data[0]['id'], $page3Data[0]['id']);
 
-        $response1->assertJsonPath('meta.current_page', 1)
-            ->assertJsonPath('meta.last_page', 5);
-
+        $response1->assertJsonPath('meta.current_page', 1)->assertJsonPath('meta.last_page', 5);
         $response2->assertJsonPath('meta.current_page', 2);
         $response3->assertJsonPath('meta.current_page', 3);
     }
@@ -1225,17 +1200,17 @@ class ChargebackControllerTest extends TestCase
     public function test_upload_reason_records_with_multiple_debtors_same_code(): void
     {
         Sanctum::actingAs($this->user);
-        $upload = Upload::factory()->create();
-
+        $upload  = Upload::factory()->create();
         $debtors = Debtor::factory()->count(5)->create(['upload_id' => $upload->id]);
 
         foreach ($debtors as $debtor) {
-            BillingAttempt::factory()->count(3)->create([
-                'upload_id' => $upload->id,
-                'debtor_id' => $debtor->id,
-                'status' => BillingAttempt::STATUS_CHARGEBACKED,
-                'chargeback_reason_code' => 'AC01',
-            ]);
+            for ($i = 0; $i < 3; $i++) {
+                $this->createChargebackedAttempt([
+                    'upload_id'              => $upload->id,
+                    'debtor_id'              => $debtor->id,
+                    'chargeback_reason_code' => 'AC01',
+                ]);
+            }
         }
 
         $response = $this->getJson("/api/admin/chargebacks/upload/{$upload->id}/AC01/records");
@@ -1244,7 +1219,7 @@ class ChargebackControllerTest extends TestCase
             ->assertJsonCount(15, 'data');
 
         $returnedIds = array_column($response->json('data'), 'debtor');
-        $debtorIds = $debtors->pluck('id')->toArray();
+        $debtorIds   = $debtors->pluck('id')->toArray();
 
         foreach ($debtorIds as $debtorId) {
             $found = false;
@@ -1264,13 +1239,14 @@ class ChargebackControllerTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
 
-        BillingAttempt::factory()->count(5)->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargeback_reason_code' => 'AC01',
-            'chargebacked_at' => now()->subYears(2),
-        ]);
+        for ($i = 0; $i < 5; $i++) {
+            $this->createChargebackedAttempt([
+                'upload_id'              => $upload->id,
+                'debtor_id'              => $debtor->id,
+                'chargeback_reason_code' => 'AC01',
+                'chargebacked_at'        => now()->subYears(2),
+            ]);
+        }
 
         $response = $this->getJson("/api/admin/chargebacks/upload/{$upload->id}/AC01/records");
 
@@ -1284,13 +1260,12 @@ class ChargebackControllerTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create([
             'upload_id' => $upload->id,
-            'iban' => 'DE89370400440532013000',
+            'iban'      => 'DE89370400440532013000',
         ]);
 
-        BillingAttempt::factory()->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
+        $this->createChargebackedAttempt([
+            'upload_id'              => $upload->id,
+            'debtor_id'              => $debtor->id,
             'chargeback_reason_code' => 'AC01',
         ]);
 
@@ -1306,23 +1281,15 @@ class ChargebackControllerTest extends TestCase
         Sanctum::actingAs($this->user);
         $upload1 = Upload::factory()->create();
         $upload2 = Upload::factory()->create();
-
         $debtor1 = Debtor::factory()->create(['upload_id' => $upload1->id]);
         $debtor2 = Debtor::factory()->create(['upload_id' => $upload2->id]);
 
-        BillingAttempt::factory()->count(5)->create([
-            'upload_id' => $upload1->id,
-            'debtor_id' => $debtor1->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargeback_reason_code' => 'AC01',
-        ]);
-
-        BillingAttempt::factory()->count(3)->create([
-            'upload_id' => $upload2->id,
-            'debtor_id' => $debtor2->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargeback_reason_code' => 'AC01',
-        ]);
+        for ($i = 0; $i < 5; $i++) {
+            $this->createChargebackedAttempt(['upload_id' => $upload1->id, 'debtor_id' => $debtor1->id, 'chargeback_reason_code' => 'AC01']);
+        }
+        for ($i = 0; $i < 3; $i++) {
+            $this->createChargebackedAttempt(['upload_id' => $upload2->id, 'debtor_id' => $debtor2->id, 'chargeback_reason_code' => 'AC01']);
+        }
 
         $response1 = $this->getJson("/api/admin/chargebacks/upload/{$upload1->id}/AC01/records");
         $response2 = $this->getJson("/api/admin/chargebacks/upload/{$upload2->id}/AC01/records");
@@ -1345,15 +1312,16 @@ class ChargebackControllerTest extends TestCase
         VopLog::factory()->create([
             'debtor_id' => $debtor->id,
             'bank_name' => 'Test Bank',
-            'country' => 'DE',
+            'country'   => 'DE',
         ]);
 
-        BillingAttempt::factory()->count(10)->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargeback_reason_code' => 'AC01',
-        ]);
+        for ($i = 0; $i < 10; $i++) {
+            $this->createChargebackedAttempt([
+                'upload_id'              => $upload->id,
+                'debtor_id'              => $debtor->id,
+                'chargeback_reason_code' => 'AC01',
+            ]);
+        }
 
         $response = $this->getJson("/api/admin/chargebacks/upload/{$upload->id}/AC01/records");
 
@@ -1369,37 +1337,18 @@ class ChargebackControllerTest extends TestCase
                         'bank_name',
                         'bank_country',
                         'processed_at',
-                        'debtor' => [
-                            'id',
-                            'first_name',
-                            'last_name',
-                            'email',
-                            'iban',
-                        ],
+                        'debtor' => ['id', 'first_name', 'last_name', 'email', 'iban'],
                         'emp_account',
                     ],
                 ],
-                'links' => [
-                    'first',
-                    'last',
-                    'prev',
-                    'next',
-                ],
-                'meta' => [
-                    'current_page',
-                    'from',
-                    'last_page',
-                    'per_page',
-                    'to',
-                    'total',
-                ],
+                'links' => ['first', 'last', 'prev', 'next'],
+                'meta'  => ['current_page', 'from', 'last_page', 'per_page', 'to', 'total'],
             ]);
 
         foreach ($response->json('data') as $record) {
             $this->assertIsInt($record['id']);
             $this->assertIsInt($record['debtor']['id']);
             $this->assertIsNumeric($record['amount']);
-            $this->assertIsString($record['processed_at']);
         }
     }
 
@@ -1409,8 +1358,7 @@ class ChargebackControllerTest extends TestCase
         $upload = Upload::factory()->create();
 
         $response = $this->getJson("/api/admin/chargebacks/upload/{$upload->id}/AC01/records?per_page=0");
-        $response->assertStatus(422)
-            ->assertJsonValidationErrors('per_page');
+        $response->assertStatus(422)->assertJsonValidationErrors('per_page');
     }
 
     public function test_upload_reason_records_with_negative_per_page_validation(): void
@@ -1419,8 +1367,7 @@ class ChargebackControllerTest extends TestCase
         $upload = Upload::factory()->create();
 
         $response = $this->getJson("/api/admin/chargebacks/upload/{$upload->id}/AC01/records?per_page=-1");
-        $response->assertStatus(422)
-            ->assertJsonValidationErrors('per_page');
+        $response->assertStatus(422)->assertJsonValidationErrors('per_page');
     }
 
     public function test_upload_reason_records_with_non_numeric_per_page_validation(): void
@@ -1429,8 +1376,7 @@ class ChargebackControllerTest extends TestCase
         $upload = Upload::factory()->create();
 
         $response = $this->getJson("/api/admin/chargebacks/upload/{$upload->id}/AC01/records?per_page=abc");
-        $response->assertStatus(422)
-            ->assertJsonValidationErrors('per_page');
+        $response->assertStatus(422)->assertJsonValidationErrors('per_page');
     }
 
     public function test_upload_reason_records_ignores_extra_query_parameters(): void
@@ -1439,12 +1385,13 @@ class ChargebackControllerTest extends TestCase
         $upload = Upload::factory()->create();
         $debtor = Debtor::factory()->create(['upload_id' => $upload->id]);
 
-        BillingAttempt::factory()->count(3)->create([
-            'upload_id' => $upload->id,
-            'debtor_id' => $debtor->id,
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'chargeback_reason_code' => 'AC01',
-        ]);
+        for ($i = 0; $i < 3; $i++) {
+            $this->createChargebackedAttempt([
+                'upload_id'              => $upload->id,
+                'debtor_id'              => $debtor->id,
+                'chargeback_reason_code' => 'AC01',
+            ]);
+        }
 
         $response = $this->getJson("/api/admin/chargebacks/upload/{$upload->id}/AC01/records?per_page=50&random_param=value&another=test");
 
@@ -1457,17 +1404,18 @@ class ChargebackControllerTest extends TestCase
         Sanctum::actingAs($this->user);
         $debtor = Debtor::factory()->create();
 
-        BillingAttempt::factory()->count(3)->create([
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'debtor_id' => $debtor->id,
-            'chargeback_reason_code' => 'AC01',
-            'amount' => 100,
-        ]);
+        for ($i = 0; $i < 3; $i++) {
+            $this->createChargebackedAttempt([
+                'debtor_id'              => $debtor->id,
+                'chargeback_reason_code' => 'AC01',
+                'amount'                 => 100,
+            ]);
+        }
 
         BillingAttempt::factory()->count(7)->create([
-            'status' => BillingAttempt::STATUS_APPROVED,
+            'status'    => BillingAttempt::STATUS_APPROVED,
             'debtor_id' => $debtor->id,
-            'amount' => 100,
+            'amount'    => 100,
         ]);
 
         $response = $this->getJson('/api/admin/chargebacks');
@@ -1501,17 +1449,12 @@ class ChargebackControllerTest extends TestCase
         Sanctum::actingAs($this->user);
         $debtor = Debtor::factory()->create();
 
-        BillingAttempt::factory()->count(5)->create([
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'debtor_id' => $debtor->id,
-            'chargeback_reason_code' => 'MD01',
-        ]);
-
-        BillingAttempt::factory()->count(2)->create([
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'debtor_id' => $debtor->id,
-            'chargeback_reason_code' => 'AC01',
-        ]);
+        for ($i = 0; $i < 5; $i++) {
+            $this->createChargebackedAttempt(['debtor_id' => $debtor->id, 'chargeback_reason_code' => 'MD01']);
+        }
+        for ($i = 0; $i < 2; $i++) {
+            $this->createChargebackedAttempt(['debtor_id' => $debtor->id, 'chargeback_reason_code' => 'AC01']);
+        }
 
         $response = $this->getJson('/api/admin/chargebacks');
 
@@ -1538,19 +1481,12 @@ class ChargebackControllerTest extends TestCase
         Sanctum::actingAs($this->user);
         $debtor = Debtor::factory()->create();
 
-        BillingAttempt::factory()->count(4)->create([
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'debtor_id' => $debtor->id,
-            'chargeback_reason_code' => 'AC01',
-            'amount' => 50,
-        ]);
-
-        BillingAttempt::factory()->count(6)->create([
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'debtor_id' => $debtor->id,
-            'chargeback_reason_code' => 'MD01',
-            'amount' => 100,
-        ]);
+        for ($i = 0; $i < 4; $i++) {
+            $this->createChargebackedAttempt(['debtor_id' => $debtor->id, 'chargeback_reason_code' => 'AC01', 'amount' => 50]);
+        }
+        for ($i = 0; $i < 6; $i++) {
+            $this->createChargebackedAttempt(['debtor_id' => $debtor->id, 'chargeback_reason_code' => 'MD01', 'amount' => 100]);
+        }
 
         $response = $this->getJson('/api/admin/chargebacks?code=AC01');
 
@@ -1565,22 +1501,15 @@ class ChargebackControllerTest extends TestCase
     {
         Sanctum::actingAs($this->user);
         $debtor = Debtor::factory()->create();
-        $emp1 = EmpAccount::factory()->create();
-        $emp2 = EmpAccount::factory()->create();
+        $emp1   = EmpAccount::factory()->create();
+        $emp2   = EmpAccount::factory()->create();
 
-        BillingAttempt::factory()->count(3)->create([
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'debtor_id' => $debtor->id,
-            'emp_account_id' => $emp1->id,
-            'amount' => 100,
-        ]);
-
-        BillingAttempt::factory()->count(5)->create([
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'debtor_id' => $debtor->id,
-            'emp_account_id' => $emp2->id,
-            'amount' => 100,
-        ]);
+        for ($i = 0; $i < 3; $i++) {
+            $this->createChargebackedAttempt(['debtor_id' => $debtor->id, 'emp_account_id' => $emp1->id, 'amount' => 100]);
+        }
+        for ($i = 0; $i < 5; $i++) {
+            $this->createChargebackedAttempt(['debtor_id' => $debtor->id, 'emp_account_id' => $emp2->id, 'amount' => 100]);
+        }
 
         $response = $this->getJson("/api/admin/chargebacks?emp_account_id={$emp1->id}");
 
@@ -1625,19 +1554,20 @@ class ChargebackControllerTest extends TestCase
         Sanctum::actingAs($this->user);
         $debtor = Debtor::factory()->create();
 
-        BillingAttempt::factory()->count(3)->create([
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'debtor_id' => $debtor->id,
-            'emp_created_at' => now()->subDays(3),
-            'chargeback_reason_code' => 'AC01',
-        ]);
-
-        BillingAttempt::factory()->count(2)->create([
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'debtor_id' => $debtor->id,
-            'emp_created_at' => now()->subDays(30),
-            'chargeback_reason_code' => 'AC01',
-        ]);
+        for ($i = 0; $i < 3; $i++) {
+            $this->createChargebackedAttempt([
+                'debtor_id'              => $debtor->id,
+                'emp_created_at'         => now()->subDays(3),
+                'chargeback_reason_code' => 'AC01',
+            ]);
+        }
+        for ($i = 0; $i < 2; $i++) {
+            $this->createChargebackedAttempt([
+                'debtor_id'              => $debtor->id,
+                'emp_created_at'         => now()->subDays(30),
+                'chargeback_reason_code' => 'AC01',
+            ]);
+        }
 
         $response = $this->getJson('/api/admin/chargebacks?period=7d&date_mode=transaction');
 
@@ -1651,19 +1581,22 @@ class ChargebackControllerTest extends TestCase
         Sanctum::actingAs($this->user);
         $debtor = Debtor::factory()->create();
 
-        BillingAttempt::factory()->count(2)->create([
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'debtor_id' => $debtor->id,
-            'chargebacked_at' => now()->subDays(3),
-            'chargeback_reason_code' => 'AC01',
-        ]);
-
-        BillingAttempt::factory()->count(4)->create([
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'debtor_id' => $debtor->id,
-            'chargebacked_at' => now()->subDays(30),
-            'chargeback_reason_code' => 'AC01',
-        ]);
+        for ($i = 0; $i < 2; $i++) {
+            $attempt = $this->createChargebackedAttempt([
+                'debtor_id'              => $debtor->id,
+                'chargebacked_at'        => now()->subDays(3),
+                'chargeback_reason_code' => 'AC01',
+            ]);
+            DB::table('chargebacks')->where('billing_attempt_id', $attempt->id)->update(['import_date' => now()->subDays(3)->toDateString()]);
+        }
+        for ($i = 0; $i < 4; $i++) {
+            $attempt = $this->createChargebackedAttempt([
+                'debtor_id'              => $debtor->id,
+                'chargebacked_at'        => now()->subDays(30),
+                'chargeback_reason_code' => 'AC01',
+            ]);
+            DB::table('chargebacks')->where('billing_attempt_id', $attempt->id)->update(['import_date' => now()->subDays(30)->toDateString()]);
+        }
 
         $response = $this->getJson('/api/admin/chargebacks?period=7d&date_mode=chargeback');
 
@@ -1677,11 +1610,12 @@ class ChargebackControllerTest extends TestCase
         Sanctum::actingAs($this->user);
         $debtor = Debtor::factory()->create();
 
-        BillingAttempt::factory()->count(5)->create([
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'debtor_id' => $debtor->id,
-            'chargebacked_at' => now()->subYears(2),
-        ]);
+        for ($i = 0; $i < 5; $i++) {
+            $this->createChargebackedAttempt([
+                'debtor_id'       => $debtor->id,
+                'chargebacked_at' => now()->subYears(2),
+            ]);
+        }
 
         $response = $this->getJson('/api/admin/chargebacks?period=all');
 
@@ -1697,15 +1631,12 @@ class ChargebackControllerTest extends TestCase
         $debtor1 = Debtor::factory()->create();
         $debtor2 = Debtor::factory()->create();
 
-        BillingAttempt::factory()->count(3)->create([
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'debtor_id' => $debtor1->id,
-        ]);
-
-        BillingAttempt::factory()->count(2)->create([
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'debtor_id' => $debtor2->id,
-        ]);
+        for ($i = 0; $i < 3; $i++) {
+            $this->createChargebackedAttempt(['debtor_id' => $debtor1->id]);
+        }
+        for ($i = 0; $i < 2; $i++) {
+            $this->createChargebackedAttempt(['debtor_id' => $debtor2->id]);
+        }
 
         $response = $this->getJson('/api/admin/chargebacks');
 
@@ -1717,20 +1648,15 @@ class ChargebackControllerTest extends TestCase
     {
         Sanctum::actingAs($this->user);
         $debtor = Debtor::factory()->create();
-        $emp1 = EmpAccount::factory()->create();
-        $emp2 = EmpAccount::factory()->create();
+        $emp1   = EmpAccount::factory()->create();
+        $emp2   = EmpAccount::factory()->create();
 
-        BillingAttempt::factory()->count(2)->create([
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'debtor_id' => $debtor->id,
-            'emp_account_id' => $emp1->id,
-        ]);
-
-        BillingAttempt::factory()->count(3)->create([
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'debtor_id' => $debtor->id,
-            'emp_account_id' => $emp2->id,
-        ]);
+        for ($i = 0; $i < 2; $i++) {
+            $this->createChargebackedAttempt(['debtor_id' => $debtor->id, 'emp_account_id' => $emp1->id]);
+        }
+        for ($i = 0; $i < 3; $i++) {
+            $this->createChargebackedAttempt(['debtor_id' => $debtor->id, 'emp_account_id' => $emp2->id]);
+        }
 
         $response = $this->getJson('/api/admin/chargebacks');
 
@@ -1743,10 +1669,9 @@ class ChargebackControllerTest extends TestCase
         Sanctum::actingAs($this->user);
         $debtor = Debtor::factory()->create();
 
-        BillingAttempt::factory()->count(5)->create([
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'debtor_id' => $debtor->id,
-        ]);
+        for ($i = 0; $i < 5; $i++) {
+            $this->createChargebackedAttempt(['debtor_id' => $debtor->id]);
+        }
 
         $response = $this->getJson('/api/admin/chargebacks');
 
@@ -1759,19 +1684,17 @@ class ChargebackControllerTest extends TestCase
         Sanctum::actingAs($this->user);
         $debtor = Debtor::factory()->create();
 
-        BillingAttempt::factory()->count(2)->create([
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'debtor_id' => $debtor->id,
-        ]);
+        for ($i = 0; $i < 2; $i++) {
+            $this->createChargebackedAttempt(['debtor_id' => $debtor->id]);
+        }
 
         $response1 = $this->getJson('/api/admin/chargebacks');
         $response1->assertStatus(200);
         $count1 = $response1->json('stats.total_chargebacks_count');
 
-        BillingAttempt::factory()->count(5)->create([
-            'status' => BillingAttempt::STATUS_CHARGEBACKED,
-            'debtor_id' => $debtor->id,
-        ]);
+        for ($i = 0; $i < 5; $i++) {
+            $this->createChargebackedAttempt(['debtor_id' => $debtor->id]);
+        }
 
         $response2 = $this->getJson('/api/admin/chargebacks');
         $response2->assertStatus(200);

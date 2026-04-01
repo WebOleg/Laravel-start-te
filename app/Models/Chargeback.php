@@ -10,6 +10,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasOneThrough;
 
 class Chargeback extends Model
 {
@@ -17,7 +18,7 @@ class Chargeback extends Model
 
     public const SOURCE_WEBHOOK = 'webhook';
     public const SOURCE_API_SYNC = 'api_sync';
-
+    public const SOURCE_BACKFILL = 'backfill';
     public const TYPE_FIRST_CHARGEBACK = '1st chargeback';
 
     protected $fillable = [
@@ -50,6 +51,18 @@ class Chargeback extends Model
     public function debtor(): BelongsTo
     {
         return $this->belongsTo(Debtor::class);
+    }
+
+    public function empAccount(): HasOneThrough
+    {
+        return $this->hasOneThrough(
+            EmpAccount::class,
+            BillingAttempt::class,
+            'id',
+            'id',
+            'billing_attempt_id',
+            'emp_account_id'
+        );
     }
 
     public function isFirstChargeback(): bool

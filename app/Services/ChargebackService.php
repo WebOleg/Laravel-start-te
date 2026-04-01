@@ -2,7 +2,9 @@
 
 /**
  * Service for creating and managing chargeback records.
- * Handles both billing_attempts queries and Chargeback table operations.
+ * getChargebacks, getUniqueChargebacksErrorCodes, getUploadChargebackRecordsByCode
+ * read from chargebacks table (Phase 3).
+ * Analytics methods stay on billing_attempts permanently (per architectural decision).
  */
 
 namespace App\Services;
@@ -23,46 +25,46 @@ class ChargebackService
 
     public function getChargebacks(Request $request)
     {
-        $chargebacks = BillingAttempt::with([
+        $chargebacks = Chargeback::with([
             'debtor:id,first_name,last_name,email,iban',
             'debtor.latestVopLog:vop_logs.id,vop_logs.debtor_id,vop_logs.bank_name,vop_logs.country',
-            'empAccount:id,name,slug'
-        ])
-        ->where('status', BillingAttempt::STATUS_CHARGEBACKED);
+            'billingAttempt:id,emp_account_id,transaction_id,processed_at,emp_created_at,chargebacked_at,emp_account_id',
+            'billingAttempt.empAccount:id,name,slug',
+        ]);
 
-        if ($request->filled('code'))
-        {
-            $chargebacks->where('chargeback_reason_code', $request->input('code'));
+        if ($request->filled('code')) {
+            $chargebacks->where('reason_code', $request->input('code'));
         }
 
-        if ($request->filled('tether_instance_id'))
-        {
-            $chargebacks->where('tether_instance_id', $request->input('tether_instance_id'));
-        }
-        elseif ($request->filled('emp_account_id'))
-        {
-            $chargebacks->where('emp_account_id', $request->input('emp_account_id'));
+        if ($request->filled('tether_instance_id')) {
+            $chargebacks->whereHas('billingAttempt', fn($q) =>
+                $q->where('tether_instance_id', $request->input('tether_instance_id'))
+            );
+        } elseif ($request->filled('emp_account_id')) {
+            $chargebacks->whereHas('billingAttempt', fn($q) =>
+                $q->where('emp_account_id', $request->input('emp_account_id'))
+            );
         }
 
-        if ($request->has('period'))
-        {
+        if ($request->has('period')) {
             $period = $request->input('period');
             $dateMode = $request->input('date_mode', 'transaction');
             $startDate = $this->getStartDateFromPeriod($period);
-            
+
             if ($period !== 'all') {
                 if ($dateMode === 'chargeback') {
-                    $chargebacks->where('chargebacked_at', '>=', $startDate);
+                    $chargebacks->where('import_date', '>=', $startDate);
                 } else {
-                    $chargebacks->whereRaw('COALESCE(billing_attempts.emp_created_at, billing_attempts.created_at) >= ?', [$startDate]);
+                    $chargebacks->whereHas('billingAttempt', fn($q) =>
+                        $q->whereRaw('COALESCE(emp_created_at, created_at) >= ?', [$startDate])
+                    );
                 }
             }
         }
 
         $perPage = min((int) $request->input('per_page', 50), 100);
-        $chargebacks = $chargebacks->latest()->paginate($perPage);
 
-        return $chargebacks;
+        return $chargebacks->latest()->paginate($perPage);
     }
 
     public function getUniqueChargebacksErrorCodes()
@@ -71,10 +73,9 @@ class ChargebackService
         $ttl = config('tether.cache.ttl_long', 300);
 
         return Cache::remember($cacheKey, $ttl, function () {
-            return BillingAttempt::where('status', BillingAttempt::STATUS_CHARGEBACKED)
-                ->distinct()
-                ->orderBy('chargeback_reason_code', 'asc')
-                ->pluck('chargeback_reason_code')
+            return Chargeback::distinct()
+                ->orderBy('reason_code', 'asc')
+                ->pluck('reason_code')
                 ->filter()
                 ->values()
                 ->all();
@@ -242,23 +243,21 @@ class ChargebackService
 
     public function getUploadChargebackRecordsByCode(Upload $upload, string $code, int $perPage = 100)
     {
-        $query = BillingAttempt::with([
+        $chargebacks = Chargeback::with([
             'debtor:id,first_name,last_name,email,iban',
             'debtor.latestVopLog:vop_logs.id,vop_logs.debtor_id,vop_logs.bank_name,vop_logs.country',
-            'empAccount:id,name,slug'
+            'billingAttempt:id,emp_account_id,transaction_id,processed_at,emp_created_at,chargebacked_at',
+            'billingAttempt.empAccount:id,name,slug',
         ])
-        ->where('upload_id', $upload->id)
-        ->where('status', BillingAttempt::STATUS_CHARGEBACKED);
+        ->whereHas('billingAttempt', fn($q) => $q->where('upload_id', $upload->id));
 
         if ($code === null || $code === 'null') {
-            $query->whereNull('chargeback_reason_code');
+            $chargebacks->whereNull('reason_code');
         } else {
-            $query->where('chargeback_reason_code', $code);
+            $chargebacks->where('reason_code', $code);
         }
 
-        return $query
-            ->latest('chargebacked_at')
-            ->paginate($perPage);
+        return $chargebacks->latest('import_date')->paginate($perPage);
     }
 
     private function createChargeback(BillingAttempt $billingAttempt, string $source, array $data): ?Chargeback
@@ -524,11 +523,11 @@ class ChargebackService
         $version = Cache::get('chargeback_stats_version', 1);
 
         return 'chargeback_stats:v' . $version . ':' . md5(json_encode([
-            'period'         => $period,
-            'date_mode'      => $dateMode,
-            'emp_account_id' => $empAccountId,
+            'period'             => $period,
+            'date_mode'          => $dateMode,
+            'emp_account_id'     => $empAccountId,
             'tether_instance_id' => $tetherInstanceId,
-            'code'           => $code,
+            'code'               => $code,
         ]));
     }
 
