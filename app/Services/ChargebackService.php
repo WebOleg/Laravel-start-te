@@ -64,7 +64,7 @@ class ChargebackService
 
         $perPage = min((int) $request->input('per_page', 50), 100);
 
-        return $chargebacks->latest()->paginate($perPage);
+        return $chargebacks->orderBy('id', 'desc')->paginate($perPage);
     }
 
     public function getUniqueChargebacksErrorCodes()
@@ -257,7 +257,7 @@ class ChargebackService
             $chargebacks->where('reason_code', $code);
         }
 
-        return $chargebacks->latest('import_date')->paginate($perPage);
+        return $chargebacks->orderBy('id', 'desc')->paginate($perPage);
     }
 
     private function createChargeback(BillingAttempt $billingAttempt, string $source, array $data): ?Chargeback
