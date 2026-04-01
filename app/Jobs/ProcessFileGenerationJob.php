@@ -27,6 +27,9 @@ class ProcessFileGenerationJob implements ShouldQueue, ShouldBeUnique
 
     private array $progressState = [];
 
+    /**
+     * @param array $fileConfigs  Per-file configs: [{amount: float, tolerance: float}, ...]
+     */
     public function __construct(
         private string $token,
         private int    $batchId,
@@ -35,13 +38,17 @@ class ProcessFileGenerationJob implements ShouldQueue, ShouldBeUnique
         private array  $headerMeta,
         private string $originalFileName,
         private int    $totalRows,
-        private float  $targetAmount,
-        private float  $tolerance,
         private string $pricingStrategy,
         private array  $pricingAmounts,
         private array  $pricingWeights,
+        private array  $fileConfigs = [],
     ) {
         $this->onQueue('generation');
+
+        // Ensure at least one config
+        if (empty($this->fileConfigs)) {
+            $this->fileConfigs = [['amount' => 0, 'tolerance' => 200]];
+        }
     }
 
     public function uniqueId(): string
@@ -59,21 +66,19 @@ class ProcessFileGenerationJob implements ShouldQueue, ShouldBeUnique
         $lock = Cache::lock("file_generation_lock:{$this->token}", $this->timeout);
 
         if (!$lock->get()) {
-            Log::warning('ProcessFileGenerationJob: another instance already running', [
-                'token' => $this->token,
-            ]);
+            Log::warning('ProcessFileGenerationJob: already running', ['token' => $this->token]);
             return;
         }
 
+        $fileCount = count($this->fileConfigs);
+
         try {
             Log::info('ProcessFileGenerationJob: started', [
-                'token'            => $this->token,
-                'batch_id'         => $this->batchId,
-                'total_rows'       => $this->totalRows,
-                'target_amount'    => $this->targetAmount,
-                'tolerance'        => $this->tolerance,
-                'pricing_strategy' => $this->pricingStrategy,
-                'pricing_amounts'  => $this->pricingAmounts,
+                'token'        => $this->token,
+                'batch_id'     => $this->batchId,
+                'total_rows'   => $this->totalRows,
+                'file_configs' => $this->fileConfigs,
+                'pricing'      => $this->pricingStrategy,
             ]);
 
             $this->progressState = Cache::get("file_generation:{$this->token}", []);
@@ -93,9 +98,9 @@ class ProcessFileGenerationJob implements ShouldQueue, ShouldBeUnique
             $recentlyBilled = $generationService->loadRecentlyBilledIbans();
 
             Log::info('ProcessFileGenerationJob: filters loaded', [
-                'token'            => $this->token,
-                'previously_used'  => count($previouslyUsed),
-                'recently_billed'  => count($recentlyBilled),
+                'token'           => $this->token,
+                'previously_used' => count($previouslyUsed),
+                'recently_billed' => count($recentlyBilled),
             ]);
 
             // ── 3. Stream rows → filter → collect eligible ──
@@ -104,12 +109,12 @@ class ProcessFileGenerationJob implements ShouldQueue, ShouldBeUnique
             $ibanHeader = $this->headerMeta['iban_header'];
             $bicHeader  = $this->headerMeta['bic_header'];
 
-            $eligibleRows            = [];
-            $processed               = 0;
-            $excludedBlacklistCount  = 0;
-            $excludedBillingCount    = 0;
-            $excludedPrevUsedCount   = 0;
-            $excludedOtherCount      = 0;
+            $eligibleRows           = [];
+            $processed              = 0;
+            $excludedBlacklistCount = 0;
+            $excludedBillingCount   = 0;
+            $excludedPrevUsedCount  = 0;
+            $excludedOtherCount     = 0;
 
             foreach ($clearanceService->streamRows($tempPath, $this->headers) as [$rowIndex, $row]) {
                 $processed++;
@@ -123,11 +128,7 @@ class ProcessFileGenerationJob implements ShouldQueue, ShouldBeUnique
 
                 $iban = $ibanValidator->normalize($rawIban);
 
-                $check = $generationService->checkEligibility(
-                    $iban,
-                    $previouslyUsed,
-                    $recentlyBilled,
-                );
+                $check = $generationService->checkEligibility($iban, $previouslyUsed, $recentlyBilled);
 
                 if (!$check['eligible']) {
                     match ($check['reason']) {
@@ -191,80 +192,203 @@ class ProcessFileGenerationJob implements ShouldQueue, ShouldBeUnique
                 'excluded_blacklist_rows' => $excludedBlacklistCount,
             ]);
 
-            // ── 6. Select records + assign amounts using pricing strategy ──
+            // ══════════════════════════════════════════════════════════
+            // 6. Select records + assign amounts — per file config
+            //
+            // Each file has its own target amount and tolerance.
+            // After each selection round, consumed rows are removed
+            // from the pool so no row appears in multiple files.
+            // ══════════════════════════════════════════════════════════
             $this->updateProgress(['phase' => 'selecting']);
-
-            $selectionResult = $generationService->selectAndAssignAmounts(
-                $eligibleAfterBic,
-                $this->targetAmount,
-                $this->tolerance,
-                $this->pricingAmounts,
-                $this->pricingWeights,
-            );
-
-            $selected       = $selectionResult['selected'];
-            $achievedAmount = $selectionResult['achieved_amount'];
-
-            Log::info('ProcessFileGenerationJob: selection complete', [
-                'token'            => $this->token,
-                'selected_count'   => count($selected),
-                'achieved_amount'  => $achievedAmount,
-                'target_amount'    => $this->targetAmount,
-                'pricing_strategy' => $this->pricingStrategy,
-            ]);
-
-            if (empty($selected)) {
-                $this->finalizeBatch($batch, $clearanceService, $tempPath, [
-                    'status'          => 'completed',
-                    'selected_rows'   => 0,
-                    'achieved_amount' => 0,
-                    'warning'         => 'No eligible records found to reach the target amount.',
-                ], $excludedBlacklistCount, $excludedBillingCount, $excludedPrevUsedCount);
-                return;
-            }
-
-            // ── 7. Write output CSV ──
-            $this->updateProgress(['phase' => 'writing']);
 
             $bicInjected   = ($bicHeader === null);
             $outputHeaders = $generationService->buildOutputHeaders($this->headers, $bicInjected);
 
-            [$csvHandle, $csvPath, $csvFileName] = $clearanceService->openCsvWriter(
-                $outputHeaders, $this->originalFileName, 'generated'
-            );
+            $remainingPool      = $eligibleAfterBic;
+            $allSelected        = [];
+            $resultFiles        = [];
+            $totalAchieved      = 0.0;
+            $totalSelectedCount = 0;
+            $warning            = null;
 
-            foreach ($selected as $item) {
-                $generationService->writeOutputRow(
-                    $csvHandle,
-                    $outputHeaders,
-                    $item['row'],
-                    $item['assigned_amount'],
-                    $bicInjected,
-                    $item['resolved_bic'] ?? '',
+            foreach ($this->fileConfigs as $fileIndex => $config) {
+                $fileNum       = $fileIndex + 1;
+                $fileAmount    = (float) ($config['amount'] ?? 0);
+                $fileTolerance = (float) ($config['tolerance'] ?? 200);
+
+                if (empty($remainingPool)) {
+                    $warning = "Eligible rows exhausted after file " . ($fileNum - 1) . " of {$fileCount}. "
+                        . "Not enough records to fill all requested files.";
+                    Log::warning('ProcessFileGenerationJob: pool exhausted', [
+                        'token'           => $this->token,
+                        'files_completed' => $fileNum - 1,
+                        'files_requested' => $fileCount,
+                    ]);
+                    break;
+                }
+
+                $selectionResult = $generationService->selectAndAssignAmounts(
+                    $remainingPool,
+                    $fileAmount,
+                    $fileTolerance,
+                    $this->pricingAmounts,
+                    $this->pricingWeights,
+                );
+
+                $selected       = $selectionResult['selected'];
+                $achievedAmount = $selectionResult['achieved_amount'];
+
+                if (empty($selected)) {
+                    $warning = "Could not select any records for file {$fileNum} of {$fileCount} "
+                        . "(target {$fileAmount}, tolerance ±{$fileTolerance}). "
+                        . "Remaining eligible pool too small.";
+                    Log::warning('ProcessFileGenerationJob: selection empty', [
+                        'token'          => $this->token,
+                        'file_num'       => $fileNum,
+                        'target'         => $fileAmount,
+                        'remaining_pool' => count($remainingPool),
+                    ]);
+                    break;
+                }
+
+                Log::info('ProcessFileGenerationJob: file selection complete', [
+                    'token'           => $this->token,
+                    'file_num'        => $fileNum,
+                    'target'          => $fileAmount,
+                    'tolerance'       => $fileTolerance,
+                    'selected_count'  => count($selected),
+                    'achieved_amount' => $achievedAmount,
+                    'remaining_pool'  => count($remainingPool) - count($selected),
+                ]);
+
+                // ── Write this file's CSV ──
+                $suffix = $fileCount > 1
+                    ? 'generated_' . $fileNum . '_of_' . $fileCount
+                    : 'generated';
+
+                [$csvHandle, $csvPath, $csvFileName] = $clearanceService->openCsvWriter(
+                    $outputHeaders, $this->originalFileName, $suffix
+                );
+
+                foreach ($selected as $item) {
+                    $generationService->writeOutputRow(
+                        $csvHandle, $outputHeaders, $item['row'],
+                        $item['assigned_amount'], $bicInjected, $item['resolved_bic'] ?? '',
+                    );
+                }
+
+                $s3ResultPath = $clearanceService->closeCsvWriter($csvHandle, $csvPath, $csvFileName);
+
+                $resultFiles[] = [
+                    's3_path'        => $s3ResultPath,
+                    'file_name'      => $csvFileName,
+                    'row_count'      => count($selected),
+                    'amount'         => round($achievedAmount, 2),
+                    'target_amount'  => $fileAmount,
+                    'tolerance'      => $fileTolerance,
+                ];
+
+                // ── Remove selected rows from the pool ──
+                $usedRowIndices = [];
+                foreach ($selected as $item) {
+                    $usedRowIndices[$item['row_index']] = true;
+                    $allSelected[] = $item;
+                }
+
+                $remainingPool = array_values(array_filter(
+                    $remainingPool,
+                    fn($item) => !isset($usedRowIndices[$item['row_index']])
+                ));
+
+                $totalAchieved      += $achievedAmount;
+                $totalSelectedCount += count($selected);
+
+                $this->updateProgress([
+                    'phase'           => "writing_file_{$fileNum}_of_{$fileCount}",
+                    'selected_rows'   => $totalSelectedCount,
+                    'achieved_amount' => round($totalAchieved, 2),
+                ]);
+            }
+
+            // ── No files at all ──
+            if (empty($allSelected)) {
+                $this->finalizeBatch($batch, $clearanceService, $tempPath, [
+                    'status'          => 'completed',
+                    'selected_rows'   => 0,
+                    'achieved_amount' => 0,
+                    'warning'         => $warning ?? 'No eligible records found to reach any target amount.',
+                ], $excludedBlacklistCount, $excludedBillingCount, $excludedPrevUsedCount);
+                return;
+            }
+
+            Log::info('ProcessFileGenerationJob: all files written', [
+                'token'           => $this->token,
+                'files_generated' => count($resultFiles),
+                'files_requested' => $fileCount,
+                'total_selected'  => $totalSelectedCount,
+                'total_achieved'  => round($totalAchieved, 2),
+            ]);
+
+            // ── 7. Write leftover CSV ──
+            $this->updateProgress(['phase' => 'writing_leftover']);
+
+            $leftoverRows     = $remainingPool;
+            $s3LeftoverPath   = null;
+            $leftoverFileName = null;
+
+            if (!empty($leftoverRows)) {
+                $leftoverHeaders = $this->headers;
+                if ($bicInjected && !in_array('bic', $leftoverHeaders)) {
+                    $leftoverHeaders[] = 'bic';
+                }
+
+                [$leftoverHandle, $leftoverTempPath, $leftoverFileName] = $clearanceService->openCsvWriter(
+                    $leftoverHeaders, $this->originalFileName, 'leftover'
+                );
+
+                foreach ($leftoverRows as $item) {
+                    $row = $item['row'];
+                    if ($bicInjected) {
+                        $row['bic'] = $item['resolved_bic'] ?? '';
+                    }
+                    $clearanceService->writeCsvRow($leftoverHandle, $leftoverHeaders, $row, $bicInjected);
+                }
+
+                $s3LeftoverPath = $clearanceService->closeCsvWriter(
+                    $leftoverHandle, $leftoverTempPath, $leftoverFileName, skipIfEmpty: true
                 );
             }
 
-            $s3ResultPath = $clearanceService->closeCsvWriter($csvHandle, $csvPath, $csvFileName);
+            Log::info('ProcessFileGenerationJob: leftover written', [
+                'token'         => $this->token,
+                'leftover_rows' => count($leftoverRows),
+                's3_leftover'   => $s3LeftoverPath,
+            ]);
 
             // ── 8. Persist to DB ──
             $this->updateProgress(['phase' => 'persisting']);
-            $generationService->persistSelectedRecords($batch, $selected);
+            $generationService->persistSelectedRecords($batch, $allSelected);
 
             // ── 9. Finalize ──
             $this->finalizeBatch($batch, $clearanceService, $tempPath, [
-                'status'           => 'completed',
-                'selected_rows'    => count($selected),
-                'achieved_amount'  => $achievedAmount,
-                's3_path_result'   => $s3ResultPath,
-                'file_name'        => $csvFileName,
+                'status'              => 'completed',
+                'selected_rows'       => $totalSelectedCount,
+                'achieved_amount'     => round($totalAchieved, 2),
+                's3_path_result'      => $resultFiles[0]['s3_path'] ?? null,
+                'file_name'           => $resultFiles[0]['file_name'] ?? null,
+                's3_result_files'     => $resultFiles,
+                's3_path_leftover'    => $s3LeftoverPath,
+                'leftover_file_name'  => $leftoverFileName,
+                'leftover_rows'       => count($leftoverRows),
+                'warning'             => $warning,
             ], $excludedBlacklistCount, $excludedBillingCount, $excludedPrevUsedCount);
 
             Log::info('ProcessFileGenerationJob: completed', [
-                'token'            => $this->token,
-                'selected'         => count($selected),
-                'achieved_amount'  => $achievedAmount,
-                'pricing_strategy' => $this->pricingStrategy,
-                's3_result'        => $s3ResultPath,
+                'token'          => $this->token,
+                'total_selected' => $totalSelectedCount,
+                'total_achieved' => round($totalAchieved, 2),
+                'output_files'   => count($resultFiles),
+                'leftover_rows'  => count($leftoverRows),
             ]);
         } finally {
             $lock->release();
@@ -274,24 +398,16 @@ class ProcessFileGenerationJob implements ShouldQueue, ShouldBeUnique
     public function failed(\Throwable $exception): void
     {
         Log::error('ProcessFileGenerationJob: failed', [
-            'token' => $this->token,
-            'error' => $exception->getMessage(),
+            'token' => $this->token, 'error' => $exception->getMessage(),
         ]);
 
         $batch = FileGenerationBatch::where('token', $this->token)->first();
-        $batch?->update([
-            'status' => 'failed',
-            'error'  => $exception->getMessage(),
-        ]);
+        $batch?->update(['status' => 'failed', 'error' => $exception->getMessage()]);
 
         if (empty($this->progressState)) {
             $this->progressState = Cache::get("file_generation:{$this->token}", []);
         }
-
-        $this->updateProgress([
-            'status' => 'failed',
-            'error'  => $exception->getMessage(),
-        ]);
+        $this->updateProgress(['status' => 'failed', 'error' => $exception->getMessage()]);
     }
 
     private function finalizeBatch(
@@ -303,9 +419,7 @@ class ProcessFileGenerationJob implements ShouldQueue, ShouldBeUnique
         int                  $excludedBillingCount,
         int                  $excludedPrevUsedCount,
     ): void {
-        if (file_exists($tempPath)) {
-            @unlink($tempPath);
-        }
+        if (file_exists($tempPath)) @unlink($tempPath);
         $clearanceService->deleteFromS3($this->s3Path);
 
         $batch->update([
@@ -316,6 +430,10 @@ class ProcessFileGenerationJob implements ShouldQueue, ShouldBeUnique
             'excluded_blacklist_rows'       => $excludedBlacklistCount,
             'excluded_billing_rows'         => $excludedBillingCount,
             'excluded_previously_used_rows' => $excludedPrevUsedCount,
+            'file_count'                    => count($this->fileConfigs),
+            's3_result_files'               => $data['s3_result_files'] ?? null,
+            's3_path_leftover'              => $data['s3_path_leftover'] ?? null,
+            'leftover_rows'                 => $data['leftover_rows'] ?? 0,
             'completed_at'                  => now(),
         ]);
 
@@ -339,8 +457,7 @@ class ProcessFileGenerationJob implements ShouldQueue, ShouldBeUnique
             $this->updateProgress([
                 'processed' => $processed,
                 'progress'  => $this->totalRows > 0
-                    ? round(($processed / $this->totalRows) * 100, 1)
-                    : 0,
+                    ? round(($processed / $this->totalRows) * 100, 1) : 0,
             ]);
         }
     }
