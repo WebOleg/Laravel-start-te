@@ -38,6 +38,7 @@ return [
         'redis:clearance' => 300,
         'redis:default' => 120,
         'redis:low' => 300,
+        'redis:generation' => 300,
     ],
     'trim' => [
         'recent' => 60,
@@ -125,7 +126,7 @@ return [
         ],
         'supervisor-clearance' => [
             'connection' => 'redis',
-            'queue' => ['clearance'],
+            'queue' => ['clearance', 'generation'],
             'balance' => 'simple',
             'maxProcesses' => 2,
             'maxTime' => 0,

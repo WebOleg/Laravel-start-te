@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Admin\DescriptorController;
+use App\Http\Controllers\Admin\FileGenerationController;
 use App\Http\Controllers\Admin\WebhookRelayController;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\AuthController;
@@ -156,6 +157,11 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('file-clearance/{token}/download-excluded-ibans', [AdminFileClearanceController::class, 'downloadExcludedIbans']);
         Route::get('file-clearance/{token}/download-excluded-bics', [AdminFileClearanceController::class, 'downloadExcludedBics']);
         Route::get('file-clearance/{token}/download-invalid-names', [AdminFileClearanceController::class, 'downloadInvalidNames']);
+
+        Route::post('file-generation',                          [FileGenerationController::class, 'store']);
+        Route::get('file-generation/history',                   [FileGenerationController::class, 'history']);
+        Route::get('file-generation/{token}/status',            [FileGenerationController::class, 'status']);
+        Route::get('file-generation/{token}/download',          [FileGenerationController::class, 'download']);
     });
 });
 
