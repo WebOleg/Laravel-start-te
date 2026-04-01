@@ -12,7 +12,7 @@ class WebhookRelayFactory extends Factory
     public function definition(): array
     {
         return [
-            'domain' => 'https://' . $this->faker->domainName(),
+            'domain' => 'https://' . $this->faker->unique()->domainName(),
             'target' => 'https://' . $this->faker->domainName(),
         ];
     }
