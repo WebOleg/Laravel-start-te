@@ -26,13 +26,21 @@ class FileGenerationBatch extends Model
         'excluded_previously_used_rows',
         'error',
         'completed_at',
+        'file_count',
+        'file_configs',
+        's3_result_files',
+        's3_path_leftover',
+        'leftover_rows',
+        'pricing_strategy',
     ];
 
     protected $casts = [
-        'target_amount'   => 'decimal:2',
-        'tolerance'       => 'decimal:2',
-        'achieved_amount' => 'decimal:2',
-        'completed_at'    => 'datetime',
+        'target_amount'    => 'decimal:2',
+        'tolerance'        => 'decimal:2',
+        'achieved_amount'  => 'decimal:2',
+        'completed_at'     => 'datetime',
+        'file_configs'     => 'array',
+        's3_result_files'  => 'array',
     ];
 
     public function admin(): BelongsTo
@@ -55,11 +63,6 @@ class FileGenerationBatch extends Model
         return $this->status === 'failed';
     }
 
-    /**
-     * Get all IBANs that have ever been used in ANY completed batch.
-     *
-     * @return \Illuminate\Support\Collection<string>
-     */
     public static function allUsedIbans(): \Illuminate\Support\Collection
     {
         return FileGenerationRecord::query()
